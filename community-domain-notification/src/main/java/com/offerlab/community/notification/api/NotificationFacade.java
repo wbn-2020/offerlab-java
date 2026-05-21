@@ -22,6 +22,8 @@ public interface NotificationFacade {
 
     void notifyLike(Long receiverUid, Long senderUid, Integer targetType, Long targetId);
 
+    void notifyCommentLike(Long receiverUid, Long senderUid, Long postId, Long commentId);
+
     void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId);
 
     void notifyFollower(Long receiverUid, Long senderUid);

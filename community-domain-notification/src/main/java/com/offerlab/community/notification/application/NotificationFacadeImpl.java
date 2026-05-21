@@ -118,6 +118,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     @Override
     @Transactional
+    public void notifyCommentLike(Long receiverUid, Long senderUid, Long postId, Long commentId) {
+        create(receiverUid, senderUid, TYPE_LIKE, TARGET_COMMENT, commentId,
+                Map.of("action", "like", "targetType", TARGET_COMMENT, "targetId", commentId,
+                        "postId", postId, "commentId", commentId));
+    }
+
+    @Override
+    @Transactional
     public void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
                 Map.of("action", "comment", "postId", postId, "commentId", commentId));

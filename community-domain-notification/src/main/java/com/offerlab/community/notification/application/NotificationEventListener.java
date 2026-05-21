@@ -49,8 +49,8 @@ public class NotificationEventListener {
     @Async
     @EventListener
     public void onCommentLiked(CommentLikedEvent event) {
-        runQuietly(() -> notificationFacade.notifyLike(
-                event.getCommentAuthorId(), event.getUid(), TARGET_COMMENT, event.getCommentId()), "comment like");
+        runQuietly(() -> notificationFacade.notifyCommentLike(
+                event.getCommentAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()), "comment like");
     }
 
     @Async

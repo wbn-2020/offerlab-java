@@ -1,5 +1,6 @@
 package com.offerlab.community.search.application;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
@@ -73,6 +74,54 @@ public class PostSearchIndexer {
             log.debug("post indexed to elasticsearch: postId={}", postId);
         }
         return ok;
+    }
+
+    public Map<String, Object> status() {
+        boolean enabled = elasticsearch.enabled();
+        boolean available = elasticsearch.available();
+        boolean exists = available && elasticsearch.indexExists(elasticsearch.postIndex());
+        if (!exists) {
+            indexReady.set(false);
+        }
+        return Map.of(
+                "enabled", enabled,
+                "available", available,
+                "indexName", elasticsearch.postIndex(),
+                "indexExists", exists,
+                "indexReady", indexReady.get() && exists
+        );
+    }
+
+    public Map<String, Object> rebuildAll() {
+        if (!ensurePostIndex()) {
+            return Map.of(
+                    "accepted", false,
+                    "indexed", 0,
+                    "failed", 0,
+                    "message", "Elasticsearch is unavailable or index creation failed"
+            );
+        }
+        List<PostPO> posts = postMapper.selectList(new LambdaQueryWrapper<PostPO>()
+                .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
+                .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
+                .eq(PostPO::getIsDeleted, 0)
+                .orderByAsc(PostPO::getId));
+        int indexed = 0;
+        int failed = 0;
+        for (PostPO post : posts) {
+            if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()), toDocument(post))) {
+                indexed++;
+            } else {
+                failed++;
+            }
+        }
+        return Map.of(
+                "accepted", true,
+                "indexed", indexed,
+                "failed", failed,
+                "total", posts.size(),
+                "indexName", elasticsearch.postIndex()
+        );
     }
 
     private Map<String, Object> toDocument(PostPO post) {
