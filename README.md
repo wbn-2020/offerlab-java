@@ -12,7 +12,7 @@ OfferLab 是一个面向求职者的面经与技术内容社区。后端采用 J
 - Feed：关注流、推荐流、最新流、热门流，Kafka `post.published` fanout 写入关注收件箱。
 - 通知：关注、点赞、评论、收藏、mention 通知，支持列表、未读数、单条已读、全部已读。
 - 搜索：ES 搜索、建议词、热词、MySQL fallback、索引状态、异步索引重建任务。
-- 运维：`/api/v1/ops/status` 查看 ES 与 Outbox 状态，最小 admin 白名单保护。
+- 运维：`/api/v1/ops/status` 查看 ES 与 Outbox 状态，支持数据库 Admin 角色、白名单和本地开发模式。
 - 趋势看板：基于真实公开帖子、扩展字段和标签统计发布趋势、热门公司、高频标签、岗位分布。
 
 ## 模块结构
@@ -119,11 +119,16 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 | POST | `/api/v1/search/admin/rebuild` | 异步重建索引 | 是，admin |
 | GET | `/api/v1/search/admin/tasks/{taskId}` | 查询重建任务 | 是，admin |
 | GET | `/api/v1/ops/status` | 运维状态 | 是，admin |
+| GET | `/api/v1/ops/outbox` | Outbox 最近消息 | 是，admin |
+| POST | `/api/v1/ops/outbox/{id}/retry` | 单条失败消息重试 | 是，admin |
+| GET | `/api/v1/ops/admins` | Admin 角色列表 | 是，admin |
+| POST | `/api/v1/ops/admins` | 添加或启用 Admin | 是，admin |
+| POST | `/api/v1/ops/admins/{uid}/status` | 启用/禁用 Admin | 是，admin |
 | GET | `/api/v1/dashboard/trend` | 趋势看板 | 否 |
 
 ## Admin 权限
 
-运维接口使用最小 admin 白名单：
+运维接口优先使用数据库 Admin 角色表 `t_user_admin`，可通过 `/api/v1/ops/admins` 维护。也支持 UID 白名单：
 
 ```bash
 OFFERLAB_ADMIN_UIDS=10001,10002
@@ -137,7 +142,7 @@ offerlab:
     uid-whitelist: 10001,10002
 ```
 
-白名单为空时，本地开发环境允许已登录用户访问运维接口，避免开发时锁死。生产环境应显式配置白名单。
+白名单为空且 `t_user_admin` 没有任何 Admin 记录时，本地开发环境允许已登录用户访问运维接口，避免开发时锁死。一旦表中已配置过 Admin 记录，则按 RBAC 校验，不再自动回退到本地宽松模式。生产环境应显式配置数据库 Admin 或白名单。
 
 ## 验证记录
 
@@ -153,11 +158,16 @@ offerlab:
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke-offerlab.ps1
 ```
 
+如果本地已启用 RBAC，可指定管理员账号执行运维 smoke：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke-offerlab.ps1 -AdminEmail admin@example.com
+```
+
 默认输出报告到 `C:\codeware\offerlab-smoke-report.json`。
 
 ## 后续可选增强
 
 - Outbox 批量运维操作。
-- 更完整的 Admin 角色管理页面。
 - Settings 隐私设置补后端模型与接口。
 - Docker Compose 补 Elasticsearch 服务与生产化 profile。

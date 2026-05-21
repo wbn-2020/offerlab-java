@@ -1,6 +1,8 @@
 param(
   [string]$BaseUrl = "http://127.0.0.1:8080",
-  [string]$ReportPath = "C:\codeware\offerlab-smoke-report.json"
+  [string]$ReportPath = "C:\codeware\offerlab-smoke-report.json",
+  [string]$AdminEmail = "",
+  [string]$AdminPassword = "password123"
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +60,15 @@ $actorLogin = Invoke-Json "POST" "/api/v1/auth/login" @{ email = $actorEmail; pa
 Assert-Ok "login actor" $actorLogin
 $actorToken = $actorLogin.data.token
 
+$adminToken = $authorToken
+$adminAccount = $authorEmail
+if ($AdminEmail) {
+  $adminLogin = Invoke-Json "POST" "/api/v1/auth/login" @{ email = $AdminEmail; password = $AdminPassword }
+  Assert-Ok "login admin" $adminLogin
+  $adminToken = $adminLogin.data.token
+  $adminAccount = $AdminEmail
+}
+
 $follow = Invoke-Json "POST" "/api/v1/users/$($authorRegister.data.uid)/follow" $null $actorToken
 Assert-Ok "actor follows author" $follow
 
@@ -100,10 +111,10 @@ Assert-Ok "search post" $search
 $trend = Invoke-Json "GET" "/api/v1/dashboard/trend?range=7d"
 Assert-Ok "trend dashboard" $trend
 
-$ops = Invoke-Json "GET" "/api/v1/ops/status" $null $authorToken
+$ops = Invoke-Json "GET" "/api/v1/ops/status" $null $adminToken
 Assert-Ok "ops status" $ops
 
-$outbox = Invoke-Json "GET" "/api/v1/ops/outbox?limit=10" $null $authorToken
+$outbox = Invoke-Json "GET" "/api/v1/ops/outbox?limit=10" $null $adminToken
 Assert-Ok "outbox list" $outbox
 
 $report = [ordered]@{
@@ -112,6 +123,7 @@ $report = [ordered]@{
   timestamp = (Get-Date).ToString("s")
   authorUid = $authorRegister.data.uid
   actorUid = $actorRegister.data.uid
+  adminAccount = $adminAccount
   postId = $postId
   commentId = $commentId
   notificationTotal = $notifications.data.total

@@ -59,11 +59,14 @@ public class AdminPermissionService {
         if (!adminUids.isEmpty()) {
             return "WHITELIST";
         }
+        if (adminTableExists() && countAdminRows() > 0) {
+            return "RBAC_EMPTY";
+        }
         return "LOCAL_OPEN";
     }
 
     public boolean isLocalOpenMode() {
-        return adminUids.isEmpty() && (!adminTableExists() || countEnabledAdmins() == 0);
+        return adminUids.isEmpty() && (!adminTableExists() || countAdminRows() == 0);
     }
 
     public boolean whitelistEnabled() {
@@ -85,6 +88,14 @@ public class AdminPermissionService {
     private int countEnabledAdmins() {
         try {
             return adminRoleMapper.countEnabledAdmins();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int countAdminRows() {
+        try {
+            return adminRoleMapper.countAdminRows();
         } catch (Exception e) {
             return 0;
         }

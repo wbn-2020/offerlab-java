@@ -6,12 +6,14 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.mq.outbox.OutboxMessage;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import com.offerlab.community.infra.security.AdminPermissionService;
+import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 @RestController
 @RequestMapping("/api/v1/ops")
@@ -27,6 +30,7 @@ public class OpsController {
 
     private final PostSearchIndexer indexer;
     private final OutboxMessageMapper outboxMessageMapper;
+    private final AdminRoleMapper adminRoleMapper;
     private final AdminPermissionService adminPermissionService;
 
     @GetMapping("/status")
@@ -78,6 +82,40 @@ public class OpsController {
         return Result.ok(Map.of("id", id, "retried", updated > 0));
     }
 
+    @GetMapping("/admins")
+    public Result<List<Map<String, Object>>> listAdmins(@RequestParam(defaultValue = "50") int limit) {
+        adminPermissionService.requireAdmin(UserContext.require());
+        return Result.ok(adminRoleMapper.listAdmins(clamp(limit)));
+    }
+
+    @PostMapping("/admins")
+    public Result<Map<String, Object>> addAdmin(@RequestBody AdminRequest request) {
+        Long operatorUid = UserContext.require();
+        adminPermissionService.requireAdmin(operatorUid);
+        Long targetUid = requireTargetUid(request);
+        int updated = adminRoleMapper.upsertAdmin(targetUid, cleanRemark(request.remark()), operatorUid);
+        return Result.ok(Map.of("uid", targetUid, "enabled", true, "updated", updated > 0));
+    }
+
+    @PostMapping("/admins/{uid}/status")
+    public Result<Map<String, Object>> updateAdminStatus(@PathVariable Long uid,
+                                                        @RequestBody AdminStatusRequest request) {
+        Long operatorUid = UserContext.require();
+        adminPermissionService.requireAdmin(operatorUid);
+        if (uid == null || uid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int enabled = Boolean.TRUE.equals(request.enabled()) ? 1 : 0;
+        if (enabled == 0 && Objects.equals(uid, operatorUid) && adminRoleMapper.countEnabledAdmins() <= 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        int updated = adminRoleMapper.updateAdminStatus(uid, enabled, cleanRemark(request.remark()), operatorUid);
+        if (updated == 0) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return Result.ok(Map.of("uid", uid, "enabled", enabled == 1, "updated", true));
+    }
+
     private Map<String, Long> outboxCounts() {
         Map<String, Long> counts = new LinkedHashMap<>();
         counts.put("pending", 0L);
@@ -112,5 +150,29 @@ public class OpsController {
             return 20;
         }
         return Math.min(limit, 100);
+    }
+
+    private static Long requireTargetUid(AdminRequest request) {
+        if (request == null || request.uid() == null || request.uid() <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return request.uid();
+    }
+
+    private static String cleanRemark(String remark) {
+        if (remark == null) {
+            return "";
+        }
+        String value = remark.trim();
+        if (value.length() > 200) {
+            return value.substring(0, 200);
+        }
+        return value;
+    }
+
+    public record AdminRequest(Long uid, String remark) {
+    }
+
+    public record AdminStatusRequest(Boolean enabled, String remark) {
     }
 }
