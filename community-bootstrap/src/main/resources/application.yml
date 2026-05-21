@@ -1,0 +1,83 @@
+spring:
+  application:
+    name: offerlab-community
+  profiles:
+    active: dev
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/offerlab?useSSL=false&serverTimezone=UTC&characterEncoding=utf8mb4&allowPublicKeyRetrieval=true
+    username: offerlab
+    password: offerlab123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    producer:
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+    consumer:
+      group-id: offerlab-community
+      auto-offset-reset: latest
+      enable-auto-commit: false
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.offerlab.community
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-not-delete-value: 0
+      logic-delete-value: 1
+      id-type: input
+      insert-strategy: not_null
+      update-strategy: not_null
+      select-strategy: not_null
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+
+offerlab:
+  jwt:
+    secret: ${JWT_SECRET:offerlab-dev-secret-key-please-change-in-prod-1234567890abcdef}
+    ttl-hours: 168
+  feed:
+    bigv-threshold: 1000
+    inbox-capacity: 1000
+    inbox-ttl-seconds: 604800
+
+logging:
+  level:
+    root: INFO
+    com.offerlab.community: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}] %logger{36} - %msg%n"

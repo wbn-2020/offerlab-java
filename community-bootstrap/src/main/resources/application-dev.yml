@@ -1,0 +1,10 @@
+# dev profile：覆盖默认值时填这里
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+logging:
+  level:
+    com.offerlab.community: DEBUG

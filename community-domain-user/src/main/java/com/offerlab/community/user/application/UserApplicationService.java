@@ -1,0 +1,129 @@
+package com.offerlab.community.user.application;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.user.api.dto.UserIntentDTO;
+import com.offerlab.community.user.api.event.UserFollowedEvent;
+import com.offerlab.community.user.domain.model.User;
+import com.offerlab.community.user.domain.repository.FollowRepository;
+import com.offerlab.community.user.domain.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.time.Instant;
+
+/**
+ * 用户应用服务：编排领域逻辑，事务边界
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class UserApplicationService {
+
+    private final UserRepository userRepo;
+    private final FollowRepository followRepo;
+    private final SnowflakeIdGenerator idGen;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
+    private final EventPublisher eventPublisher;
+    private final ObjectMapper objectMapper;
+
+    @Transactional
+    public Long register(String email, String password, String nickname) {
+        if (!StringUtils.hasText(email) || !StringUtils.hasText(password) || !StringUtils.hasText(nickname)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (password.length() < 6 || password.length() > 64) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        userRepo.findByEmail(email).ifPresent(u -> {
+            throw new BizException(ErrorCode.USER_ALREADY_EXISTS);
+        });
+
+        long uid = idGen.nextId();
+        User user = User.builder()
+                .id(uid)
+                .email(email)
+                .passwordHash(passwordEncoder.encode(password))
+                .nickname(nickname)
+                .accountStatus(User.STATUS_NORMAL)
+                .build();
+        userRepo.register(user);
+        log.info("user registered: uid={} email={}", uid, email);
+        return uid;
+    }
+
+    public String login(String email, String password, String ip) {
+        User user = userRepo.findByEmail(email)
+                .orElseThrow(() -> new BizException(ErrorCode.USER_NOT_FOUND));
+        if (!user.isActive()) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
+        if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+            throw new BizException(ErrorCode.PASSWORD_ERROR);
+        }
+        userRepo.updateLastLogin(user.getId(), ip);
+        return jwtService.issue(user.getId());
+    }
+
+    public void logout(String token) {
+        jwtService.invalidate(token);
+    }
+
+    @Transactional
+    public void follow(Long fromUid, Long toUid) {
+        if (fromUid.equals(toUid)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        userRepo.findById(toUid).orElseThrow(() -> new BizException(ErrorCode.USER_NOT_FOUND));
+        boolean ok = followRepo.follow(fromUid, toUid);
+        if (!ok) {
+            throw new BizException(ErrorCode.FOLLOW_ALREADY_EXISTS);
+        }
+        eventPublisher.publish(UserFollowedEvent.builder()
+                .followerId(fromUid)
+                .followeeId(toUid)
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
+    }
+
+    @Transactional
+    public void unfollow(Long fromUid, Long toUid) {
+        boolean ok = followRepo.unfollow(fromUid, toUid);
+        if (!ok) {
+            throw new BizException(ErrorCode.FOLLOW_NOT_EXISTS);
+        }
+    }
+
+    public User getUser(Long uid) {
+        return userRepo.findById(uid).orElseThrow(() -> new BizException(ErrorCode.USER_NOT_FOUND));
+    }
+
+    @Transactional
+    public void updateProfile(Long uid, String nickname, String avatarUrl, String bio) {
+        User u = getUser(uid);
+        if (StringUtils.hasText(nickname)) u.setNickname(nickname);
+        if (avatarUrl != null) u.setAvatarUrl(avatarUrl);
+        if (bio != null) u.setBio(bio);
+        userRepo.updateProfile(u);
+    }
+
+    @Transactional
+    public void updateIntent(Long uid, UserIntentDTO intent) {
+        User u = getUser(uid);
+        try {
+            u.setIntentJson(objectMapper.writeValueAsString(intent));
+        } catch (Exception e) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        userRepo.updateProfile(u);
+    }
+}
