@@ -28,8 +28,10 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     private static final int TYPE_LIKE = 1;
     private static final int TYPE_COMMENT = 2;
+    private static final int TYPE_FAVORITE = 3;
     private static final int TYPE_FOLLOWER = 4;
     private static final int TYPE_SYSTEM = 5;
+    private static final int TYPE_MENTION = 6;
 
     private static final int TARGET_POST = 1;
     private static final int TARGET_COMMENT = 2;
@@ -77,7 +79,9 @@ public class NotificationFacadeImpl implements NotificationFacade {
         result.put("total", getUnreadCount(uid));
         result.put("like", countByType(uid, TYPE_LIKE));
         result.put("comment", countByType(uid, TYPE_COMMENT));
+        result.put("favorite", countByType(uid, TYPE_FAVORITE));
         result.put("follower", countByType(uid, TYPE_FOLLOWER));
+        result.put("mention", countByType(uid, TYPE_MENTION));
         result.put("system", countByType(uid, TYPE_SYSTEM));
         return result;
     }
@@ -129,8 +133,18 @@ public class NotificationFacadeImpl implements NotificationFacade {
     @Override
     @Transactional
     public void notifyFavorite(Long receiverUid, Long senderUid, Long postId) {
-        create(receiverUid, senderUid, TYPE_SYSTEM, TARGET_POST, postId,
+        create(receiverUid, senderUid, TYPE_FAVORITE, TARGET_POST, postId,
                 Map.of("action", "favorite", "postId", postId));
+    }
+
+    @Override
+    @Transactional
+    public void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId) {
+        Map<String, Object> content = commentId == null
+                ? Map.of("action", "mention", "postId", postId)
+                : Map.of("action", "mention", "postId", postId, "commentId", commentId);
+        create(receiverUid, senderUid, TYPE_MENTION, commentId == null ? TARGET_POST : TARGET_COMMENT,
+                commentId == null ? postId : commentId, content);
     }
 
     private void create(Long receiverUid, Long senderUid, Integer notifType,
@@ -201,8 +215,10 @@ public class NotificationFacadeImpl implements NotificationFacade {
         return switch (type.toLowerCase()) {
             case "like" -> TYPE_LIKE;
             case "comment" -> TYPE_COMMENT;
+            case "favorite" -> TYPE_FAVORITE;
             case "follower", "follow" -> TYPE_FOLLOWER;
-            case "system", "favorite" -> TYPE_SYSTEM;
+            case "mention" -> TYPE_MENTION;
+            case "system" -> TYPE_SYSTEM;
             default -> null;
         };
     }
@@ -212,7 +228,9 @@ public class NotificationFacadeImpl implements NotificationFacade {
         return switch (type) {
             case TYPE_LIKE -> "like";
             case TYPE_COMMENT -> "comment";
+            case TYPE_FAVORITE -> "favorite";
             case TYPE_FOLLOWER -> "follower";
+            case TYPE_MENTION -> "mention";
             default -> "system";
         };
     }

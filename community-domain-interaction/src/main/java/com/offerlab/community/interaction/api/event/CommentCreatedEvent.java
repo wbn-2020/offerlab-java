@@ -16,5 +16,6 @@ public class CommentCreatedEvent {
     private Long commentId;
     private Long parentId;
     private Long replyToUid;
+    private String content;
     private Long timestamp;
 }

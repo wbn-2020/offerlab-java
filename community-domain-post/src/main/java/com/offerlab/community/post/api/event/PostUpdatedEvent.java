@@ -12,5 +12,7 @@ import lombok.NoArgsConstructor;
 public class PostUpdatedEvent {
     private Long postId;
     private Long authorId;
+    private String title;
+    private String content;
     private Long timestamp;
 }

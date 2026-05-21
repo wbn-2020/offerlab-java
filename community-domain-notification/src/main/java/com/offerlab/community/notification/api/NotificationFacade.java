@@ -27,4 +27,6 @@ public interface NotificationFacade {
     void notifyFollower(Long receiverUid, Long senderUid);
 
     void notifyFavorite(Long receiverUid, Long senderUid, Long postId);
+
+    void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId);
 }

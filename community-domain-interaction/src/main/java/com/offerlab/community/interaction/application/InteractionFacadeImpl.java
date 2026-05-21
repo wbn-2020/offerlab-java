@@ -253,6 +253,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .commentId(id)
                 .parentId(po.getParentId())
                 .replyToUid(po.getReplyToUid())
+                .content(cmd.getContent())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
         return id;

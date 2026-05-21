@@ -60,6 +60,8 @@ public class PostApplicationService {
         events.publish(PostPublishedEvent.builder()
                 .postId(id)
                 .authorId(cmd.getAuthorId())
+                .title(cmd.getTitle())
+                .content(cmd.getContent())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
         return id;
@@ -85,6 +87,8 @@ public class PostApplicationService {
         events.publish(PostUpdatedEvent.builder()
                 .postId(post.getId())
                 .authorId(post.getAuthorId())
+                .title(post.getTitle())
+                .content(post.getContent())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
     }
