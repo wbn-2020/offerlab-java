@@ -60,7 +60,11 @@ public class PostFacadeImpl implements PostFacade {
         if (postIds == null || postIds.isEmpty()) return Map.of();
 
         // 先从 Redis 查
-        Map<Long, PostCounterDTO> result = postCounterRedis.batchGet(postIds);
+        Map<Long, PostCounterDTO> result = new HashMap<>(postIds.size());
+        Map<Long, PostCounterRedis.CounterValue> redisCounters = postCounterRedis.batchGet(postIds);
+        for (PostCounterRedis.CounterValue value : redisCounters.values()) {
+            result.put(value.postId(), toCounterDto(value));
+        }
 
         // 找出 Redis 中缺失的 postId
         List<Long> missingIds = postIds.stream()
@@ -151,6 +155,16 @@ public class PostFacadeImpl implements PostFacade {
                 .extJson(p.getExtJson())
                 .createTime(p.getCreateTime())
                 .updateTime(p.getUpdateTime())
+                .build();
+    }
+
+    private PostCounterDTO toCounterDto(PostCounterRedis.CounterValue value) {
+        return PostCounterDTO.builder()
+                .postId(value.postId())
+                .viewCount(value.viewCount())
+                .likeCount(value.likeCount())
+                .commentCount(value.commentCount())
+                .favoriteCount(value.favoriteCount())
                 .build();
     }
 

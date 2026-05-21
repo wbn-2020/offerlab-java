@@ -1,6 +1,4 @@
 package com.offerlab.community.infra.redis.cache;
-
-import com.offerlab.community.post.api.dto.PostCounterDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.HashOperations;
@@ -35,6 +33,14 @@ public class PostCounterRedis {
     private static final String FIELD_COMMENT = "comment";
     private static final String FIELD_FAVORITE = "favorite";
     private static final String FIELD_SHARE = "share";
+
+    public record CounterValue(Long postId,
+                               Long viewCount,
+                               Long likeCount,
+                               Long commentCount,
+                               Long favoriteCount,
+                               Long shareCount) {
+    }
 
     /**
      * 增加浏览数
@@ -80,7 +86,7 @@ public class PostCounterRedis {
      * 获取单个帖子的计数器
      * 如果 Redis 中不存在，返回空 DTO（调用方需要从 DB 加载并回填）
      */
-    public PostCounterDTO get(Long postId) {
+    public CounterValue get(Long postId) {
         String key = getKey(postId);
         HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
 
@@ -89,29 +95,29 @@ public class PostCounterRedis {
             return null;
         }
 
-        return PostCounterDTO.builder()
-                .postId(postId)
-                .viewCount(parseLong(entries.get(FIELD_VIEW)))
-                .likeCount(parseLong(entries.get(FIELD_LIKE)))
-                .commentCount(parseLong(entries.get(FIELD_COMMENT)))
-                .favoriteCount(parseLong(entries.get(FIELD_FAVORITE)))
-                .shareCount(parseLong(entries.get(FIELD_SHARE)))
-                .build();
+        return new CounterValue(
+                postId,
+                parseLong(entries.get(FIELD_VIEW)),
+                parseLong(entries.get(FIELD_LIKE)),
+                parseLong(entries.get(FIELD_COMMENT)),
+                parseLong(entries.get(FIELD_FAVORITE)),
+                parseLong(entries.get(FIELD_SHARE))
+        );
     }
 
     /**
      * 批量获取计数器
      */
-    public Map<Long, PostCounterDTO> batchGet(Collection<Long> postIds) {
+    public Map<Long, CounterValue> batchGet(Collection<Long> postIds) {
         if (postIds == null || postIds.isEmpty()) {
             return Map.of();
         }
 
-        Map<Long, PostCounterDTO> result = new HashMap<>(postIds.size());
+        Map<Long, CounterValue> result = new HashMap<>(postIds.size());
         for (Long postId : postIds) {
-            PostCounterDTO dto = get(postId);
-            if (dto != null) {
-                result.put(postId, dto);
+            CounterValue value = get(postId);
+            if (value != null) {
+                result.put(postId, value);
             }
         }
         return result;
