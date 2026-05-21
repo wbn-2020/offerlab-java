@@ -1,8 +1,4 @@
 package com.offerlab.community.infra.mq.producer;
-
-import com.offerlab.community.interaction.api.event.PostLikedEvent;
-import com.offerlab.community.post.api.event.PostPublishedEvent;
-import com.offerlab.community.user.api.event.UserFollowedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -35,25 +31,32 @@ public class EventTopicResolver {
      * @return TopicMapping
      */
     public TopicMapping resolve(Object event) {
-        if (event instanceof PostPublishedEvent) {
-            PostPublishedEvent e = (PostPublishedEvent) event;
-            return new TopicMapping("post.published", e.getPostId(), "POST_PUBLISHED");
+        String className = event.getClass().getSimpleName();
+        if ("PostPublishedEvent".equals(className)) {
+            return new TopicMapping("post.published", readLong(event, "getPostId"), "POST_PUBLISHED");
         }
 
-        if (event instanceof PostLikedEvent) {
-            PostLikedEvent e = (PostLikedEvent) event;
-            return new TopicMapping("interaction.like", e.getPostId(), "LIKE");
+        if ("PostLikedEvent".equals(className)) {
+            return new TopicMapping("interaction.like", readLong(event, "getPostId"), "LIKE");
         }
 
-        if (event instanceof UserFollowedEvent) {
-            UserFollowedEvent e = (UserFollowedEvent) event;
-            return new TopicMapping("user.followed", e.getFromUid(), "USER_FOLLOWED");
+        if ("UserFollowedEvent".equals(className)) {
+            return new TopicMapping("user.followed", readLong(event, "getFollowerId"), "USER_FOLLOWED");
         }
 
         // 未识别的事件类型，用类名小写作为 topic
-        String className = event.getClass().getSimpleName();
         String topic = className.replaceAll("([A-Z])", "_$1").toLowerCase().replaceFirst("^_", "");
         log.warn("Unknown event type: {}, using topic: {}", className, topic);
         return new TopicMapping(topic, 0L, className);
+    }
+
+    private Long readLong(Object event, String methodName) {
+        try {
+            Object value = event.getClass().getMethod(methodName).invoke(event);
+            return value instanceof Long ? (Long) value : 0L;
+        } catch (ReflectiveOperationException e) {
+            log.warn("Failed to read aggregateId by {} from {}", methodName, event.getClass().getName(), e);
+            return 0L;
+        }
     }
 }

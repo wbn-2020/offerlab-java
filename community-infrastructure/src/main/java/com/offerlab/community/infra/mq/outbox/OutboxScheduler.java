@@ -51,13 +51,13 @@ public class OutboxScheduler {
             for (OutboxMessage msg : pending) {
                 try {
                     // 反序列化 EventEnvelope
-                    EventEnvelope<?> envelope = objectMapper.readValue(msg.getPayload(), EventEnvelope.class);
+                    EventEnvelope envelope = objectMapper.readValue(msg.getPayload(), EventEnvelope.class);
 
                     // 构建 Kafka 消息，使用 aggregateId 作为 key 保证顺序
-                    Message<EventEnvelope<?>> kafkaMsg = MessageBuilder
+                    Message<EventEnvelope> kafkaMsg = MessageBuilder
                             .withPayload(envelope)
                             .setHeader(KafkaHeaders.TOPIC, msg.getTopic())
-                            .setHeader(KafkaHeaders.MESSAGE_KEY, msg.getAggregateId().toString())
+                            .setHeader(KafkaHeaders.KEY, msg.getAggregateId().toString())
                             .build();
 
                     // 发送到 Kafka
