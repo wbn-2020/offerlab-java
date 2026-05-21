@@ -52,4 +52,19 @@ public interface TagMapper extends BaseMapper<TagPO> {
             </script>
             """)
     List<TagPO> selectByNames(@Param("names") Collection<String> names);
+
+    @Select("""
+            SELECT t.tag_name AS name, COUNT(*) AS count
+            FROM t_post_tag_ref r
+            JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+            JOIN t_post_main p ON p.id = r.post_id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+            GROUP BY t.id, t.tag_name
+            ORDER BY COUNT(*) DESC, t.use_count DESC, t.id ASC
+            LIMIT #{limit}
+            """)
+    List<java.util.Map<String, Object>> countTopTags(@Param("since") java.time.LocalDateTime since, @Param("limit") int limit);
 }
