@@ -6,6 +6,7 @@ import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
+import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.user.application.UserApplicationService;
 import jakarta.validation.Valid;
 import lombok.Data;
@@ -61,6 +62,18 @@ public class UserController {
         Long uid = UserContext.require();
         userService.updateIntent(uid, intent);
         return Result.ok();
+    }
+
+    @GetMapping("/me/privacy-settings")
+    public Result<UserPrivacySettingDTO> getPrivacySettings() {
+        Long uid = UserContext.require();
+        return Result.ok(userService.getPrivacySetting(uid));
+    }
+
+    @PutMapping("/me/privacy-settings")
+    public Result<UserPrivacySettingDTO> updatePrivacySettings(@RequestBody UserPrivacySettingDTO setting) {
+        Long uid = UserContext.require();
+        return Result.ok(userService.updatePrivacySetting(uid, setting));
     }
 
     @PostMapping("/{uid}/follow")

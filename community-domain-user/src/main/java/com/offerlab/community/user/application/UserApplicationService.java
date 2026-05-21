@@ -8,10 +8,13 @@ import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
+import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.user.api.event.UserFollowedEvent;
 import com.offerlab.community.user.domain.model.User;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserPrivacySettingMapper;
+import com.offerlab.community.user.infrastructure.persistence.po.UserPrivacySettingPO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,6 +38,7 @@ public class UserApplicationService {
     private final JwtService jwtService;
     private final EventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final UserPrivacySettingMapper privacySettingMapper;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -125,5 +129,76 @@ public class UserApplicationService {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         userRepo.updateProfile(u);
+    }
+
+    @Transactional
+    public UserPrivacySettingDTO getPrivacySetting(Long uid) {
+        getUser(uid);
+        UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
+        if (po == null) {
+            po = defaultPrivacySetting(uid);
+            privacySettingMapper.insert(po);
+        }
+        return toPrivacyDTO(po);
+    }
+
+    @Transactional
+    public UserPrivacySettingDTO updatePrivacySetting(Long uid, UserPrivacySettingDTO setting) {
+        getUser(uid);
+        UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
+        boolean exists = po != null;
+        if (po == null) {
+            po = defaultPrivacySetting(uid);
+        }
+        po.setProfileVisibility(normalizeVisibility(setting.getProfileVisibility()));
+        po.setIntentVisibility(normalizeVisibility(setting.getIntentVisibility()));
+        po.setSearchable(toFlag(setting.getSearchable()));
+        po.setInteractionNotification(toFlag(setting.getInteractionNotification()));
+        po.setSystemNotification(toFlag(setting.getSystemNotification()));
+        if (exists) {
+            privacySettingMapper.updateById(po);
+        } else {
+            privacySettingMapper.insert(po);
+        }
+        return toPrivacyDTO(po);
+    }
+
+    private static UserPrivacySettingPO defaultPrivacySetting(Long uid) {
+        UserPrivacySettingPO po = new UserPrivacySettingPO();
+        po.setUserId(uid);
+        po.setProfileVisibility("PUBLIC");
+        po.setIntentVisibility("PUBLIC");
+        po.setSearchable(1);
+        po.setInteractionNotification(1);
+        po.setSystemNotification(1);
+        return po;
+    }
+
+    private static UserPrivacySettingDTO toPrivacyDTO(UserPrivacySettingPO po) {
+        return UserPrivacySettingDTO.builder()
+                .profileVisibility(po.getProfileVisibility())
+                .intentVisibility(po.getIntentVisibility())
+                .searchable(isEnabled(po.getSearchable()))
+                .interactionNotification(isEnabled(po.getInteractionNotification()))
+                .systemNotification(isEnabled(po.getSystemNotification()))
+                .build();
+    }
+
+    private static boolean isEnabled(Integer value) {
+        return value == null || value == 1;
+    }
+
+    private static int toFlag(Boolean value) {
+        return Boolean.FALSE.equals(value) ? 0 : 1;
+    }
+
+    private static String normalizeVisibility(String value) {
+        if ("PRIVATE".equalsIgnoreCase(value)) {
+            return "PRIVATE";
+        }
+        if ("FOLLOWERS".equalsIgnoreCase(value)) {
+            return "FOLLOWERS";
+        }
+        return "PUBLIC";
     }
 }

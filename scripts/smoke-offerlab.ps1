@@ -111,6 +111,18 @@ Assert-Ok "search post" $search
 $trend = Invoke-Json "GET" "/api/v1/dashboard/trend?range=7d"
 Assert-Ok "trend dashboard" $trend
 
+$privacy = Invoke-Json "GET" "/api/v1/users/me/privacy-settings" $null $authorToken
+Assert-Ok "privacy settings" $privacy
+
+$privacyUpdate = Invoke-Json "PUT" "/api/v1/users/me/privacy-settings" @{
+  profileVisibility = "FOLLOWERS"
+  intentVisibility = "PRIVATE"
+  searchable = $false
+  interactionNotification = $true
+  systemNotification = $false
+} $authorToken
+Assert-Ok "update privacy settings" $privacyUpdate
+
 $ops = Invoke-Json "GET" "/api/v1/ops/status" $null $adminToken
 Assert-Ok "ops status" $ops
 
@@ -128,6 +140,7 @@ $report = [ordered]@{
   commentId = $commentId
   notificationTotal = $notifications.data.total
   trendTotalPosts = $trend.data.totalPosts
+  privacyIntentVisibility = $privacyUpdate.data.intentVisibility
   outboxRows = @($outbox.data).Count
   steps = $steps
 }

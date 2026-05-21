@@ -6,7 +6,7 @@ OfferLab 是一个面向求职者的面经与技术内容社区。后端采用 J
 
 已完成 P0/P1/P2 主体能力：
 
-- 用户：注册、登录、登出、当前用户、个人主页、资料编辑、关注、粉丝和关注列表。
+- 用户：注册、登录、登出、当前用户、个人主页、资料编辑、求职意向、隐私设置、关注、粉丝和关注列表。
 - 内容：帖子发布、编辑、删除、详情、列表、标签、标签详情页帖子。
 - 互动：帖子点赞、收藏、评论、评论点赞、个人点赞/收藏列表。
 - Feed：关注流、推荐流、最新流、热门流，Kafka `post.published` fanout 写入关注收件箱。
@@ -102,6 +102,9 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 | POST | `/api/v1/auth/login` | 登录 | 否 |
 | GET | `/api/v1/users/me` | 当前用户 | 是 |
 | PATCH | `/api/v1/users/me` | 修改资料 | 是 |
+| PUT | `/api/v1/users/me/intent` | 修改求职意向 | 是 |
+| GET | `/api/v1/users/me/privacy-settings` | 查询隐私设置 | 是 |
+| PUT | `/api/v1/users/me/privacy-settings` | 保存隐私设置 | 是 |
 | GET | `/api/v1/users/{uid}` | 用户主页 | 否 |
 | POST/DELETE | `/api/v1/users/{uid}/follow` | 关注/取关 | 是 |
 | GET | `/api/v1/posts` | 帖子列表 | 否 |
@@ -149,6 +152,7 @@ offerlab:
 最近一次本机验证：
 
 - `mvn -DskipTests clean install` 通过。
+- `GET/PUT /api/v1/users/me/privacy-settings` 通过，本机可持久化个人隐私偏好。
 - `GET /api/v1/dashboard/trend?range=30d` 返回 `code=0`，本机 `totalPosts=8`。
 - `POST /api/v1/search/admin/rebuild` 返回任务，轮询后 `SUCCEEDED`，本机 `indexed=8, failed=0, total=8`。
 
@@ -169,5 +173,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\smoke-offerlab.ps1 -AdminEmai
 ## 后续可选增强
 
 - Outbox 批量运维操作。
-- Settings 隐私设置补后端模型与接口。
 - Docker Compose 补 Elasticsearch 服务与生产化 profile。
