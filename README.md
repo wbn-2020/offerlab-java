@@ -147,9 +147,17 @@ offerlab:
 - `GET /api/v1/dashboard/trend?range=30d` 返回 `code=0`，本机 `totalPosts=8`。
 - `POST /api/v1/search/admin/rebuild` 返回任务，轮询后 `SUCCEEDED`，本机 `indexed=8, failed=0, total=8`。
 
+全链路 smoke 脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke-offerlab.ps1
+```
+
+默认输出报告到 `C:\codeware\offerlab-smoke-report.json`。
+
 ## 后续可选增强
 
-- Outbox 失败消息详情与单条重试。
-- Admin 白名单升级为数据库 RBAC。
+- Outbox 批量运维操作。
+- 更完整的 Admin 角色管理页面。
 - Settings 隐私设置补后端模型与接口。
 - Docker Compose 补 Elasticsearch 服务与生产化 profile。

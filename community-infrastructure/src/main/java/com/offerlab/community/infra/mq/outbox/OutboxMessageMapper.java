@@ -45,4 +45,32 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
 
     @Select("SELECT COUNT(*) FROM t_outbox_message WHERE msg_status = 0 AND (next_retry_time IS NULL OR next_retry_time <= NOW())")
     long countDuePending();
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM t_outbox_message
+            <where>
+              <if test="status != null">
+                msg_status = #{status}
+              </if>
+            </where>
+            ORDER BY create_time DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<OutboxMessage> listRecent(@Param("status") Integer status, @Param("limit") int limit);
+
+    @Select("SELECT * FROM t_outbox_message WHERE id = #{id}")
+    OutboxMessage findById(@Param("id") Long id);
+
+    @Update("""
+            UPDATE t_outbox_message
+            SET msg_status = 0,
+                next_retry_time = NULL,
+                update_time = NOW()
+            WHERE id = #{id}
+              AND msg_status = 2
+            """)
+    int markFailedForRetry(@Param("id") Long id);
 }

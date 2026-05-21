@@ -14,22 +14,86 @@ import java.util.stream.Collectors;
 public class AdminPermissionService {
 
     private final Set<Long> adminUids;
+    private final AdminRoleMapper adminRoleMapper;
 
-    public AdminPermissionService(@Value("${offerlab.admin.uid-whitelist:${OFFERLAB_ADMIN_UIDS:}}") String whitelist) {
+    public AdminPermissionService(@Value("${offerlab.admin.uid-whitelist:${OFFERLAB_ADMIN_UIDS:}}") String whitelist,
+                                  AdminRoleMapper adminRoleMapper) {
         this.adminUids = parseWhitelist(whitelist);
+        this.adminRoleMapper = adminRoleMapper;
     }
 
     public void requireAdmin(Long uid) {
         if (uid == null) {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
-        if (!adminUids.isEmpty() && !adminUids.contains(uid)) {
-            throw new BizException(ErrorCode.FORBIDDEN);
+        if (isAdmin(uid)) {
+            return;
         }
+        if (isLocalOpenMode()) {
+            return;
+        }
+        throw new BizException(ErrorCode.FORBIDDEN);
+    }
+
+    public boolean isAdmin(Long uid) {
+        if (uid == null) {
+            return false;
+        }
+        if (adminUids.contains(uid)) {
+            return true;
+        }
+        if (!adminTableExists()) {
+            return false;
+        }
+        try {
+            return adminRoleMapper.countActiveAdmin(uid) > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public String mode() {
+        if (adminTableExists() && countEnabledAdmins() > 0) {
+            return "RBAC";
+        }
+        if (!adminUids.isEmpty()) {
+            return "WHITELIST";
+        }
+        return "LOCAL_OPEN";
+    }
+
+    public boolean isLocalOpenMode() {
+        return adminUids.isEmpty() && (!adminTableExists() || countEnabledAdmins() == 0);
     }
 
     public boolean whitelistEnabled() {
         return !adminUids.isEmpty();
+    }
+
+    public boolean roleTableEnabled() {
+        return adminTableExists() && countEnabledAdmins() > 0;
+    }
+
+    private boolean adminTableExists() {
+        try {
+            return adminRoleMapper.tableExists() > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private int countEnabledAdmins() {
+        try {
+            return adminRoleMapper.countEnabledAdmins();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public void requireStrictAdmin(Long uid) {
+        if (!isAdmin(uid)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
     }
 
     private static Set<Long> parseWhitelist(String whitelist) {
