@@ -10,6 +10,9 @@ import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
+import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
+import com.offerlab.community.interaction.api.event.CommentLikedEvent;
+import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.FavoriteMapper;
@@ -139,6 +142,13 @@ public class InteractionFacadeImpl implements InteractionFacade {
             likeMapper.insert(po);
         }
         updateCommentLikeCount(commentId, 1);
+        events.publish(CommentLikedEvent.builder()
+                .uid(uid)
+                .commentId(commentId)
+                .commentAuthorId(comment.getAuthorId())
+                .postId(comment.getPostId())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
     }
 
     @Override
@@ -184,6 +194,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrFavorite(postId, 1);
         postCounterMapper.incrFavorite(postId, 1);
+        events.publish(PostFavoritedEvent.builder()
+                .uid(uid).postId(postId).postAuthorId(post.getAuthorId())
+                .timestamp(Instant.now().toEpochMilli()).build());
     }
 
     @Override
@@ -233,6 +246,15 @@ public class InteractionFacadeImpl implements InteractionFacade {
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrComment(cmd.getPostId(), 1);
         postCounterMapper.incrComment(cmd.getPostId(), 1);
+        events.publish(CommentCreatedEvent.builder()
+                .uid(cmd.getAuthorUid())
+                .postId(cmd.getPostId())
+                .postAuthorId(post.getAuthorId())
+                .commentId(id)
+                .parentId(po.getParentId())
+                .replyToUid(po.getReplyToUid())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
         return id;
     }
 

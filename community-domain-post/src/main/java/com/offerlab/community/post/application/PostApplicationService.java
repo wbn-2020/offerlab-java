@@ -8,6 +8,7 @@ import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
+import com.offerlab.community.post.api.event.PostUpdatedEvent;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -81,6 +82,11 @@ public class PostApplicationService {
         if (tagIds != null) {
             syncTags(post.getId(), tagIds);
         }
+        events.publish(PostUpdatedEvent.builder()
+                .postId(post.getId())
+                .authorId(post.getAuthorId())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
     }
 
     @Transactional

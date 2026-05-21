@@ -36,8 +36,24 @@ public class EventTopicResolver {
             return new TopicMapping("post.published", readLong(event, "getPostId"), "POST_PUBLISHED");
         }
 
+        if ("PostUpdatedEvent".equals(className)) {
+            return new TopicMapping("post.updated", readLong(event, "getPostId"), "POST_UPDATED");
+        }
+
         if ("PostLikedEvent".equals(className)) {
             return new TopicMapping("interaction.like", readLong(event, "getPostId"), "LIKE");
+        }
+
+        if ("PostFavoritedEvent".equals(className)) {
+            return new TopicMapping("interaction.favorite", readLong(event, "getPostId"), "FAVORITE");
+        }
+
+        if ("CommentCreatedEvent".equals(className)) {
+            return new TopicMapping("interaction.comment", readLong(event, "getPostId"), "COMMENT_CREATED");
+        }
+
+        if ("CommentLikedEvent".equals(className)) {
+            return new TopicMapping("interaction.comment.like", readLong(event, "getCommentId"), "COMMENT_LIKED");
         }
 
         if ("UserFollowedEvent".equals(className)) {
