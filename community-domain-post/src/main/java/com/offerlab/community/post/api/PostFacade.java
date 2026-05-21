@@ -6,8 +6,10 @@ import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.dto.TagDTO;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 public interface PostFacade {
@@ -27,4 +29,10 @@ public interface PostFacade {
     PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size);
 
     PageResult<PostBriefDTO> getLatest(long cursor, int size);
+
+    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size);
+
+    List<TagDTO> listTags();
+
+    PageResult<PostBriefDTO> getPostsByTag(Long tagId, long cursor, int size);
 }

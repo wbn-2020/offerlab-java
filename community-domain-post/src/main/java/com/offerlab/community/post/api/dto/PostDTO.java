@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -21,6 +22,7 @@ public class PostDTO {
     private Integer visibility;
     private Integer postStatus;
     private String extJson;
+    private List<TagDTO> tags;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

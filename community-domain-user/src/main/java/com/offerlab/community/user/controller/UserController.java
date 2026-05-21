@@ -52,7 +52,7 @@ public class UserController {
     @PatchMapping("/me")
     public Result<Void> updateMe(@Valid @RequestBody UpdateProfileReq req) {
         Long uid = UserContext.require();
-        userService.updateProfile(uid, req.getNickname(), req.getAvatarUrl(), req.getBio());
+        userService.updateProfile(uid, req.getNickname(), req.getAvatarUrl(), req.effectiveBio());
         return Result.ok();
     }
 
@@ -105,5 +105,10 @@ public class UserController {
         private String nickname;
         private String avatarUrl;
         private String bio;
+        private String signature;
+
+        private String effectiveBio() {
+            return bio != null ? bio : signature;
+        }
     }
 }

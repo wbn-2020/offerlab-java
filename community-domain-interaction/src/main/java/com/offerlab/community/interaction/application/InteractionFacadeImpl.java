@@ -18,6 +18,7 @@ import com.offerlab.community.interaction.infrastructure.persistence.po.CommentP
 import com.offerlab.community.interaction.infrastructure.persistence.po.FavoritePO;
 import com.offerlab.community.interaction.infrastructure.persistence.po.LikePO;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -106,6 +108,52 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getTargetId, postId)
                 .eq(LikePO::getIsDeleted, 0));
         return cnt != null && cnt > 0;
+    }
+
+    @Override
+    @Transactional
+    public void likeComment(Long uid, Long commentId) {
+        CommentPO comment = commentMapper.selectById(commentId);
+        if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != 1) {
+            throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        }
+        LikePO existing = likeMapper.selectOne(new LambdaQueryWrapper<LikePO>()
+                .eq(LikePO::getUserId, uid)
+                .eq(LikePO::getTargetType, TARGET_COMMENT)
+                .eq(LikePO::getTargetId, commentId)
+                .last("LIMIT 1"));
+        if (existing != null) {
+            if (existing.getIsDeleted() == 0) {
+                throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+            }
+            existing.setIsDeleted(0);
+            likeMapper.updateById(existing);
+        } else {
+            LikePO po = new LikePO();
+            po.setId(idGen.nextId());
+            po.setUserId(uid);
+            po.setTargetType(TARGET_COMMENT);
+            po.setTargetId(commentId);
+            po.setTargetAuthorId(comment.getAuthorId());
+            po.setIsDeleted(0);
+            likeMapper.insert(po);
+        }
+        updateCommentLikeCount(commentId, 1);
+    }
+
+    @Override
+    @Transactional
+    public void unlikeComment(Long uid, Long commentId) {
+        LikePO po = likeMapper.selectOne(new LambdaQueryWrapper<LikePO>()
+                .eq(LikePO::getUserId, uid)
+                .eq(LikePO::getTargetType, TARGET_COMMENT)
+                .eq(LikePO::getTargetId, commentId)
+                .eq(LikePO::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
+        po.setIsDeleted(1);
+        likeMapper.updateById(po);
+        updateCommentLikeCount(commentId, -1);
     }
 
     @Override
@@ -219,6 +267,71 @@ public class InteractionFacadeImpl implements InteractionFacade {
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrComment(po.getPostId(), -1);
         postCounterMapper.incrComment(po.getPostId(), -1);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) {
+        LambdaQueryWrapper<LikePO> q = new LambdaQueryWrapper<LikePO>()
+                .eq(LikePO::getUserId, uid)
+                .eq(LikePO::getTargetType, TARGET_POST)
+                .eq(LikePO::getIsDeleted, 0)
+                .orderByDesc(LikePO::getCreateTime)
+                .last("LIMIT " + clampPageSize(size));
+        if (cursor > 0) {
+            q.lt(LikePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        }
+        List<LikePO> list = likeMapper.selectList(q);
+        return postPage(list.stream().map(LikePO::getTargetId).toList(), list, clampPageSize(size));
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size) {
+        LambdaQueryWrapper<FavoritePO> q = new LambdaQueryWrapper<FavoritePO>()
+                .eq(FavoritePO::getUserId, uid)
+                .eq(FavoritePO::getIsDeleted, 0)
+                .orderByDesc(FavoritePO::getCreateTime)
+                .last("LIMIT " + clampPageSize(size));
+        if (cursor > 0) {
+            q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        }
+        List<FavoritePO> list = favoriteMapper.selectList(q);
+        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, clampPageSize(size));
+    }
+
+    private void updateCommentLikeCount(Long commentId, int delta) {
+        CommentPO update = new CommentPO();
+        CommentPO latest = commentMapper.selectById(commentId);
+        if (latest == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        int current = latest.getLikeCount() == null ? 0 : latest.getLikeCount();
+        update.setId(commentId);
+        update.setLikeCount(Math.max(0, current + delta));
+        commentMapper.updateById(update);
+    }
+
+    private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size) {
+        if (postIds.isEmpty()) return PageResult.empty();
+        Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(postIds);
+        List<PostBriefDTO> items = postIds.stream()
+                .map(posts::get)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        boolean hasMore = sourceRows.size() == size;
+        String next = hasMore ? extractCreateTimeCursor(sourceRows.get(sourceRows.size() - 1)) : null;
+        return PageResult.of(items, next, hasMore);
+    }
+
+    private static int clampPageSize(int size) {
+        return Math.max(1, Math.min(size, 50));
+    }
+
+    private static String extractCreateTimeCursor(Object row) {
+        if (row instanceof LikePO po && po.getCreateTime() != null) {
+            return String.valueOf(po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+        }
+        if (row instanceof FavoritePO po && po.getCreateTime() != null) {
+            return String.valueOf(po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+        }
+        return null;
     }
 
     private static CommentDTO toDto(CommentPO po) {

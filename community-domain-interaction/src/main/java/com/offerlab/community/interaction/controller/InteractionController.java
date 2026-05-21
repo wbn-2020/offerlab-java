@@ -8,6 +8,7 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -46,6 +47,12 @@ public class InteractionController {
         return Result.ok(Map.of("liked", false));
     }
 
+    @GetMapping("/users/me/liked-posts")
+    public Result<PageResult<PostBriefDTO>> likedPosts(@RequestParam(defaultValue = "0") long cursor,
+                                                       @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(facade.listLikedPosts(UserContext.require(), cursor, size));
+    }
+
     @PostMapping("/posts/{postId}/favorite")
     public Result<Void> favorite(@PathVariable Long postId) {
         facade.favorite(UserContext.require(), postId);
@@ -56,6 +63,12 @@ public class InteractionController {
     public Result<Void> unfavorite(@PathVariable Long postId) {
         facade.unfavorite(UserContext.require(), postId);
         return Result.ok();
+    }
+
+    @GetMapping("/users/me/favorite-posts")
+    public Result<PageResult<PostBriefDTO>> favoritePosts(@RequestParam(defaultValue = "0") long cursor,
+                                                         @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(facade.listFavoritePosts(UserContext.require(), cursor, size));
     }
 
     @PostMapping("/posts/{postId}/comments")
@@ -84,6 +97,18 @@ public class InteractionController {
     public Result<Void> deleteComment(@PathVariable Long commentId) {
         facade.deleteComment(commentId, UserContext.require());
         return Result.ok();
+    }
+
+    @PostMapping("/comments/{commentId}/like")
+    public Result<Map<String, Object>> likeComment(@PathVariable Long commentId) {
+        facade.likeComment(UserContext.require(), commentId);
+        return Result.ok(Map.of("liked", true));
+    }
+
+    @DeleteMapping("/comments/{commentId}/like")
+    public Result<Map<String, Object>> unlikeComment(@PathVariable Long commentId) {
+        facade.unlikeComment(UserContext.require(), commentId);
+        return Result.ok(Map.of("liked", false));
     }
 
     @Data

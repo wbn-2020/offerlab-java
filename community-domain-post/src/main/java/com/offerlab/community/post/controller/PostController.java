@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/posts")
@@ -49,6 +50,8 @@ public class PostController {
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
+                .tagIds(req.effectiveTagIds())
+                .tagNames(req.getTagNames())
                 .build());
         return Result.ok(Map.of("postId", id));
     }
@@ -64,6 +67,8 @@ public class PostController {
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
+                .tagIds(req.effectiveTagIds())
+                .tagNames(req.getTagNames())
                 .build());
         return Result.ok();
     }
@@ -87,12 +92,13 @@ public class PostController {
     @PublicApi
     @GetMapping
     public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) Long authorId,
+                                                 @RequestParam(required = false) Long tagId,
+                                                 @RequestParam(required = false, name = "tag") Long tag,
+                                                 @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
-        if (authorId != null) {
-            return Result.ok(postFacade.getPostsByAuthor(authorId, cursor, size));
-        }
-        return Result.ok(postFacade.getLatest(cursor, size));
+        Long effectiveTagId = tagId != null ? tagId : tag;
+        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, cursor, size));
     }
 
     @Data
@@ -107,6 +113,13 @@ public class PostController {
         private String coverUrl;
         private Integer visibility;
         private String extJson;
+        private List<Long> tags;
+        private List<Long> tagIds;
+        private List<String> tagNames;
+
+        private List<Long> effectiveTagIds() {
+            return tagIds != null ? tagIds : tags;
+        }
     }
 
     @Data
@@ -116,5 +129,12 @@ public class PostController {
         private String coverUrl;
         private Integer visibility;
         private String extJson;
+        private List<Long> tags;
+        private List<Long> tagIds;
+        private List<String> tagNames;
+
+        private List<Long> effectiveTagIds() {
+            return tagIds != null ? tagIds : tags;
+        }
     }
 }

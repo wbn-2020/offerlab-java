@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -19,5 +20,6 @@ public class PostBriefDTO {
     private String summary;
     private String coverUrl;
     private String extJson;
+    private List<TagDTO> tags;
     private LocalDateTime createTime;
 }

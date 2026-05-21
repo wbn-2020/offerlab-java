@@ -10,10 +10,14 @@ import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
+import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
+import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
+import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +26,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +34,7 @@ public class PostFacadeImpl implements PostFacade {
 
     private final PostRepository postRepo;
     private final PostCounterMapper counterMapper;
+    private final TagMapper tagMapper;
     private final PostCounterRedis postCounterRedis;
     private final MultiLevelCache<PostDTO> multiLevelCache;
     private final PostApplicationService postService;
@@ -109,19 +115,34 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size) {
-        List<Post> list = postRepo.findByAuthor(authorId, cursor, size);
-        return paged(list, size);
+        return listPosts(authorId, null, null, cursor, size);
     }
 
     @Override
     public PageResult<PostBriefDTO> getLatest(long cursor, int size) {
-        List<Post> list = postRepo.findLatest(cursor, size);
+        return listPosts(null, null, null, cursor, size);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
+        List<Post> list = postRepo.findPosts(authorId, tagId, postType, cursor, size);
         return paged(list, size);
+    }
+
+    @Override
+    public List<TagDTO> listTags() {
+        return tagMapper.selectActiveTags().stream().map(this::toTagDto).toList();
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> getPostsByTag(Long tagId, long cursor, int size) {
+        return listPosts(null, tagId, null, cursor, size);
     }
 
     private PageResult<PostBriefDTO> paged(List<Post> list, int size) {
         if (list.isEmpty()) return PageResult.empty();
-        List<PostBriefDTO> items = list.stream().map(this::toBrief).toList();
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
+        List<PostBriefDTO> items = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
         boolean hasMore = list.size() == size;
         String next = hasMore
                 ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -130,6 +151,10 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     private PostBriefDTO toBrief(Post p) {
+        return toBrief(p, List.of());
+    }
+
+    private PostBriefDTO toBrief(Post p, List<TagDTO> tags) {
         return PostBriefDTO.builder()
                 .id(p.getId())
                 .authorId(p.getAuthorId())
@@ -138,11 +163,13 @@ public class PostFacadeImpl implements PostFacade {
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
                 .extJson(p.getExtJson())
+                .tags(tags)
                 .createTime(p.getCreateTime())
                 .build();
     }
 
     private PostDTO toFullDto(Post p) {
+        List<TagDTO> tags = tagsByPostIds(List.of(p.getId())).getOrDefault(p.getId(), List.of());
         return PostDTO.builder()
                 .id(p.getId())
                 .authorId(p.getAuthorId())
@@ -153,6 +180,7 @@ public class PostFacadeImpl implements PostFacade {
                 .visibility(p.getVisibility())
                 .postStatus(p.getPostStatus())
                 .extJson(p.getExtJson())
+                .tags(tags)
                 .createTime(p.getCreateTime())
                 .updateTime(p.getUpdateTime())
                 .build();
@@ -166,6 +194,57 @@ public class PostFacadeImpl implements PostFacade {
                 .commentCount(value.commentCount())
                 .favoriteCount(value.favoriteCount())
                 .build();
+    }
+
+    private Map<Long, List<TagDTO>> tagsByPostIds(Collection<Long> postIds) {
+        if (postIds == null || postIds.isEmpty()) {
+            return Map.of();
+        }
+        return tagMapper.selectTagsByPostIds(postIds).stream()
+                .collect(Collectors.groupingBy(PostTagView::getPostId,
+                        Collectors.mapping(this::toTagDto, Collectors.toList())));
+    }
+
+    private TagDTO toTagDto(TagPO tag) {
+        return TagDTO.builder()
+                .id(tag.getId())
+                .name(tag.getTagName())
+                .slug(toSlug(tag.getId(), tag.getTagName()))
+                .category(toCategory(tag.getTagType()))
+                .tagType(tag.getTagType())
+                .useCount(tag.getUseCount())
+                .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
+                .build();
+    }
+
+    private TagDTO toTagDto(PostTagView tag) {
+        return TagDTO.builder()
+                .id(tag.getId())
+                .name(tag.getTagName())
+                .slug(toSlug(tag.getId(), tag.getTagName()))
+                .category(toCategory(tag.getTagType()))
+                .tagType(tag.getTagType())
+                .useCount(tag.getUseCount())
+                .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
+                .build();
+    }
+
+    private static String toCategory(Integer tagType) {
+        if (tagType == null) return "custom";
+        return switch (tagType) {
+            case 1 -> "tech";
+            case 2 -> "company";
+            case 3 -> "position";
+            default -> "custom";
+        };
+    }
+
+    private static String toSlug(Long id, String name) {
+        if (name == null || name.isBlank()) {
+            return String.valueOf(id);
+        }
+        String slug = name.trim().toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
+        return slug.isBlank() ? String.valueOf(id) : slug;
     }
 
     private static String summary(String content) {
