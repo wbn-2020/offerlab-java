@@ -23,6 +23,10 @@
             <groupId>com.offerlab</groupId>
             <artifactId>community-infrastructure</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.offerlab</groupId>
+            <artifactId>community-domain-post</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

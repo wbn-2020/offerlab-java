@@ -10,6 +10,9 @@ import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
+import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
+import com.offerlab.community.interaction.api.event.CommentLikedEvent;
+import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.FavoriteMapper;
@@ -18,8 +21,11 @@ import com.offerlab.community.interaction.infrastructure.persistence.po.CommentP
 import com.offerlab.community.interaction.infrastructure.persistence.po.FavoritePO;
 import com.offerlab.community.interaction.infrastructure.persistence.po.LikePO;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -27,7 +33,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -43,6 +55,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     private final PostCounterMapper postCounterMapper;
     private final PostCounterRedis postCounterRedis;
     private final PostFacade postFacade;
+    private final UserFacade userFacade;
     private final SnowflakeIdGenerator idGen;
     private final EventPublisher events;
 
@@ -52,17 +65,12 @@ public class InteractionFacadeImpl implements InteractionFacade {
         PostDTO post = postFacade.getPost(postId);
         if (post == null) throw new BizException(ErrorCode.POST_NOT_FOUND);
 
-        LikePO existing = likeMapper.selectOne(new LambdaQueryWrapper<LikePO>()
-                .eq(LikePO::getUserId, uid)
-                .eq(LikePO::getTargetType, TARGET_POST)
-                .eq(LikePO::getTargetId, postId)
-                .last("LIMIT 1"));
+        LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_POST, postId);
         if (existing != null) {
             if (existing.getIsDeleted() == 0) {
                 throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
             }
-            existing.setIsDeleted(0);
-            likeMapper.updateById(existing);
+            likeMapper.restoreById(existing.getId());
         } else {
             LikePO po = new LikePO();
             po.setId(idGen.nextId());
@@ -91,8 +99,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getIsDeleted, 0)
                 .last("LIMIT 1"));
         if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
-        po.setIsDeleted(1);
-        likeMapper.updateById(po);
+        likeMapper.softDeleteById(po.getId());
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrLike(postId, -1);
         postCounterMapper.incrLike(postId, -1);
@@ -109,21 +116,73 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     @Override
+    public boolean hasFavorited(Long uid, Long postId) {
+        Long cnt = favoriteMapper.selectCount(new LambdaQueryWrapper<FavoritePO>()
+                .eq(FavoritePO::getUserId, uid)
+                .eq(FavoritePO::getPostId, postId)
+                .eq(FavoritePO::getIsDeleted, 0));
+        return cnt != null && cnt > 0;
+    }
+
+    @Override
+    @Transactional
+    public void likeComment(Long uid, Long commentId) {
+        CommentPO comment = commentMapper.selectById(commentId);
+        if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != 1) {
+            throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        }
+        LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_COMMENT, commentId);
+        if (existing != null) {
+            if (existing.getIsDeleted() == 0) {
+                throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+            }
+            likeMapper.restoreById(existing.getId());
+        } else {
+            LikePO po = new LikePO();
+            po.setId(idGen.nextId());
+            po.setUserId(uid);
+            po.setTargetType(TARGET_COMMENT);
+            po.setTargetId(commentId);
+            po.setTargetAuthorId(comment.getAuthorId());
+            po.setIsDeleted(0);
+            likeMapper.insert(po);
+        }
+        updateCommentLikeCount(commentId, 1);
+        events.publish(CommentLikedEvent.builder()
+                .uid(uid)
+                .commentId(commentId)
+                .commentAuthorId(comment.getAuthorId())
+                .postId(comment.getPostId())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
+    }
+
+    @Override
+    @Transactional
+    public void unlikeComment(Long uid, Long commentId) {
+        LikePO po = likeMapper.selectOne(new LambdaQueryWrapper<LikePO>()
+                .eq(LikePO::getUserId, uid)
+                .eq(LikePO::getTargetType, TARGET_COMMENT)
+                .eq(LikePO::getTargetId, commentId)
+                .eq(LikePO::getIsDeleted, 0)
+                .last("LIMIT 1"));
+        if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
+        likeMapper.softDeleteById(po.getId());
+        updateCommentLikeCount(commentId, -1);
+    }
+
+    @Override
     @Transactional
     public void favorite(Long uid, Long postId) {
         PostDTO post = postFacade.getPost(postId);
         if (post == null) throw new BizException(ErrorCode.POST_NOT_FOUND);
 
-        FavoritePO existing = favoriteMapper.selectOne(new LambdaQueryWrapper<FavoritePO>()
-                .eq(FavoritePO::getUserId, uid)
-                .eq(FavoritePO::getPostId, postId)
-                .last("LIMIT 1"));
+        FavoritePO existing = favoriteMapper.selectAnyByUserPost(uid, postId);
         if (existing != null) {
             if (existing.getIsDeleted() == 0) {
                 throw new BizException(ErrorCode.FAVORITE_ALREADY_EXISTS);
             }
-            existing.setIsDeleted(0);
-            favoriteMapper.updateById(existing);
+            favoriteMapper.restoreById(existing.getId());
         } else {
             FavoritePO po = new FavoritePO();
             po.setId(idGen.nextId());
@@ -136,6 +195,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrFavorite(postId, 1);
         postCounterMapper.incrFavorite(postId, 1);
+        events.publish(PostFavoritedEvent.builder()
+                .uid(uid).postId(postId).postAuthorId(post.getAuthorId())
+                .timestamp(Instant.now().toEpochMilli()).build());
     }
 
     @Override
@@ -147,8 +209,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(FavoritePO::getIsDeleted, 0)
                 .last("LIMIT 1"));
         if (po == null) throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
-        po.setIsDeleted(1);
-        favoriteMapper.updateById(po);
+        favoriteMapper.softDeleteById(po.getId());
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrFavorite(postId, -1);
         postCounterMapper.incrFavorite(postId, -1);
@@ -172,9 +233,12 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
         if (cmd.getParentId() != null && cmd.getParentId() > 0) {
             CommentPO parent = commentMapper.selectById(cmd.getParentId());
-            if (parent == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+            if (parent == null || parent.getCommentStatus() == null || parent.getCommentStatus() != 1
+                    || !Objects.equals(parent.getPostId(), cmd.getPostId())) {
+                throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+            }
             po.setParentId(cmd.getParentId());
-            po.setRootId(parent.getRootId() == 0 ? parent.getId() : parent.getRootId());
+            po.setRootId(parent.getRootId() == null || parent.getRootId() == 0 ? parent.getId() : parent.getRootId());
             po.setReplyToUid(cmd.getReplyToUid() != null ? cmd.getReplyToUid() : parent.getAuthorId());
         } else {
             po.setParentId(0L);
@@ -185,25 +249,62 @@ public class InteractionFacadeImpl implements InteractionFacade {
         // 双写：Redis 写主 + MySQL 兜底
         postCounterRedis.incrComment(cmd.getPostId(), 1);
         postCounterMapper.incrComment(cmd.getPostId(), 1);
+        events.publish(CommentCreatedEvent.builder()
+                .uid(cmd.getAuthorUid())
+                .postId(cmd.getPostId())
+                .postAuthorId(post.getAuthorId())
+                .commentId(id)
+                .parentId(po.getParentId())
+                .replyToUid(po.getReplyToUid())
+                .content(cmd.getContent())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
         return id;
     }
 
     @Override
-    public PageResult<CommentDTO> listComments(Long postId, long cursor, int size) {
+    public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size) {
+        int limit = clampPageSize(size);
         LambdaQueryWrapper<CommentPO> q = new LambdaQueryWrapper<CommentPO>()
                 .eq(CommentPO::getPostId, postId)
                 .eq(CommentPO::getRootId, 0L)             // 仅一级
                 .eq(CommentPO::getCommentStatus, 1)
                 .orderByDesc(CommentPO::getCreateTime)
-                .last("LIMIT " + size);
+                .last("LIMIT " + (limit + 1));
         if (cursor > 0) {
             q.lt(CommentPO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
-        List<CommentPO> list = commentMapper.selectList(q);
-        if (list.isEmpty()) return PageResult.empty();
-        List<CommentDTO> items = list.stream().map(InteractionFacadeImpl::toDto).toList();
-        boolean hasMore = list.size() == size;
-        String next = hasMore ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli()) : null;
+        List<CommentPO> roots = commentMapper.selectList(q);
+        if (roots.isEmpty()) return PageResult.empty();
+        boolean hasMore = roots.size() > limit;
+        if (hasMore) {
+            roots = roots.subList(0, limit);
+        }
+
+        List<Long> rootIds = roots.stream().map(CommentPO::getId).toList();
+        List<CommentPO> replies = commentMapper.selectList(new LambdaQueryWrapper<CommentPO>()
+                .eq(CommentPO::getPostId, postId)
+                .in(CommentPO::getRootId, rootIds)
+                .eq(CommentPO::getCommentStatus, 1)
+                .orderByAsc(CommentPO::getCreateTime));
+        List<CommentPO> all = new java.util.ArrayList<>(roots.size() + replies.size());
+        all.addAll(roots);
+        all.addAll(replies);
+
+        Map<Long, UserBriefDTO> users = usersFor(all);
+        Set<Long> likedCommentIds = likedCommentIds(viewerUid, all);
+        Map<Long, List<CommentDTO>> repliesByRoot = replies.stream()
+                .sorted(Comparator.comparing(CommentPO::getCreateTime, Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(po -> toDto(po, viewerUid, users, likedCommentIds))
+                .collect(Collectors.groupingBy(CommentDTO::getRootId));
+        List<CommentDTO> items = roots.stream()
+                .map(po -> {
+                    CommentDTO dto = toDto(po, viewerUid, users, likedCommentIds);
+                    dto.setReplies(repliesByRoot.getOrDefault(po.getId(), List.of()));
+                    return dto;
+                })
+                .toList();
+        String next = hasMore ? String.valueOf(roots.get(roots.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli()) : null;
         return PageResult.of(items, next, hasMore);
     }
 
@@ -212,25 +313,135 @@ public class InteractionFacadeImpl implements InteractionFacade {
     public void deleteComment(Long commentId, Long operatorUid) {
         CommentPO po = commentMapper.selectById(commentId);
         if (po == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
-        if (!po.getAuthorId().equals(operatorUid)) {
+        if (!Objects.equals(po.getAuthorId(), operatorUid) && !Objects.equals(po.getPostAuthorId(), operatorUid)) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
-        commentMapper.deleteById(commentId);
+        LambdaQueryWrapper<CommentPO> deleteQuery = new LambdaQueryWrapper<CommentPO>()
+                .eq(CommentPO::getPostId, po.getPostId())
+                .eq(CommentPO::getCommentStatus, 1);
+        if (po.getRootId() == null || po.getRootId() == 0L) {
+            deleteQuery.and(q -> q.eq(CommentPO::getId, po.getId()).or().eq(CommentPO::getRootId, po.getId()));
+        } else {
+            deleteQuery.eq(CommentPO::getId, po.getId());
+        }
+        Long deletedCount = commentMapper.selectCount(deleteQuery);
+        if (deletedCount == null || deletedCount <= 0) {
+            return;
+        }
+        commentMapper.delete(deleteQuery);
         // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrComment(po.getPostId(), -1);
-        postCounterMapper.incrComment(po.getPostId(), -1);
+        postCounterRedis.incrComment(po.getPostId(), -deletedCount);
+        postCounterMapper.incrComment(po.getPostId(), -deletedCount);
     }
 
-    private static CommentDTO toDto(CommentPO po) {
+    @Override
+    public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) {
+        LambdaQueryWrapper<LikePO> q = new LambdaQueryWrapper<LikePO>()
+                .eq(LikePO::getUserId, uid)
+                .eq(LikePO::getTargetType, TARGET_POST)
+                .eq(LikePO::getIsDeleted, 0)
+                .orderByDesc(LikePO::getCreateTime)
+                .last("LIMIT " + clampPageSize(size));
+        if (cursor > 0) {
+            q.lt(LikePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        }
+        List<LikePO> list = likeMapper.selectList(q);
+        return postPage(list.stream().map(LikePO::getTargetId).toList(), list, clampPageSize(size));
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size) {
+        LambdaQueryWrapper<FavoritePO> q = new LambdaQueryWrapper<FavoritePO>()
+                .eq(FavoritePO::getUserId, uid)
+                .eq(FavoritePO::getIsDeleted, 0)
+                .orderByDesc(FavoritePO::getCreateTime)
+                .last("LIMIT " + clampPageSize(size));
+        if (cursor > 0) {
+            q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        }
+        List<FavoritePO> list = favoriteMapper.selectList(q);
+        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, clampPageSize(size));
+    }
+
+    private void updateCommentLikeCount(Long commentId, int delta) {
+        CommentPO update = new CommentPO();
+        CommentPO latest = commentMapper.selectById(commentId);
+        if (latest == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        int current = latest.getLikeCount() == null ? 0 : latest.getLikeCount();
+        update.setId(commentId);
+        update.setLikeCount(Math.max(0, current + delta));
+        commentMapper.updateById(update);
+    }
+
+    private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size) {
+        if (postIds.isEmpty()) return PageResult.empty();
+        Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(postIds);
+        List<PostBriefDTO> items = postIds.stream()
+                .map(posts::get)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        boolean hasMore = sourceRows.size() == size;
+        String next = hasMore ? extractCreateTimeCursor(sourceRows.get(sourceRows.size() - 1)) : null;
+        return PageResult.of(items, next, hasMore);
+    }
+
+    private static int clampPageSize(int size) {
+        return Math.max(1, Math.min(size, 50));
+    }
+
+    private static String extractCreateTimeCursor(Object row) {
+        if (row instanceof LikePO po && po.getCreateTime() != null) {
+            return String.valueOf(po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+        }
+        if (row instanceof FavoritePO po && po.getCreateTime() != null) {
+            return String.valueOf(po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+        }
+        return null;
+    }
+
+    private Map<Long, UserBriefDTO> usersFor(List<CommentPO> comments) {
+        Set<Long> uids = new HashSet<>();
+        for (CommentPO comment : comments) {
+            if (comment.getAuthorId() != null) {
+                uids.add(comment.getAuthorId());
+            }
+            if (comment.getReplyToUid() != null && comment.getReplyToUid() > 0) {
+                uids.add(comment.getReplyToUid());
+            }
+        }
+        return userFacade.batchGetUserBriefs(uids);
+    }
+
+    private Set<Long> likedCommentIds(Long viewerUid, List<CommentPO> comments) {
+        if (viewerUid == null || comments == null || comments.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> ids = comments.stream().map(CommentPO::getId).toList();
+        return likeMapper.selectList(new LambdaQueryWrapper<LikePO>()
+                        .eq(LikePO::getUserId, viewerUid)
+                        .eq(LikePO::getTargetType, TARGET_COMMENT)
+                        .in(LikePO::getTargetId, ids)
+                        .eq(LikePO::getIsDeleted, 0))
+                .stream()
+                .map(LikePO::getTargetId)
+                .collect(Collectors.toSet());
+    }
+
+    private static CommentDTO toDto(CommentPO po, Long viewerUid, Map<Long, UserBriefDTO> users, Set<Long> likedCommentIds) {
         return CommentDTO.builder()
                 .id(po.getId())
                 .postId(po.getPostId())
                 .authorId(po.getAuthorId())
+                .author(users.get(po.getAuthorId()))
                 .rootId(po.getRootId())
                 .parentId(po.getParentId())
                 .replyToUid(po.getReplyToUid())
+                .replyToUser(po.getReplyToUid() == null ? null : users.get(po.getReplyToUid()))
                 .content(po.getContent())
                 .likeCount(po.getLikeCount())
+                .myLiked(likedCommentIds.contains(po.getId()))
+                .canDelete(viewerUid != null && (Objects.equals(viewerUid, po.getAuthorId()) || Objects.equals(viewerUid, po.getPostAuthorId())))
+                .replies(List.of())
                 .createTime(po.getCreateTime())
                 .build();
     }

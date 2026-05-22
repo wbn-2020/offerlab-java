@@ -41,4 +41,10 @@ public class IdempotentChecker {
 
         return isFirstTime;
     }
+
+    public void release(String messageId, String consumerName) {
+        String key = "idempotent:" + consumerName + ":" + messageId;
+        Boolean deleted = redisTemplate.delete(key);
+        log.warn("idempotent key released: consumer={} messageId={} deleted={}", consumerName, messageId, deleted);
+    }
 }

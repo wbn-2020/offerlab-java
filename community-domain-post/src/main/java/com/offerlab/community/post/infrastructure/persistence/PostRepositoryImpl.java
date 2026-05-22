@@ -107,15 +107,36 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     public List<Post> findLatest(long cursor, int size) {
+        LambdaQueryWrapper<PostPO> q = baseListQuery(cursor, size);
+        return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
+    }
+
+    @Override
+    public List<Post> findPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
+        LambdaQueryWrapper<PostPO> q = baseListQuery(cursor, size);
+        if (authorId != null) {
+            q.eq(PostPO::getAuthorId, authorId);
+        }
+        if (postType != null) {
+            q.eq(PostPO::getPostType, postType);
+        }
+        if (tagId != null) {
+            q.inSql(PostPO::getId, "SELECT post_id FROM t_post_tag_ref WHERE tag_id = " + tagId);
+        }
+        return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
+    }
+
+    private static LambdaQueryWrapper<PostPO> baseListQuery(long cursor, int size) {
+        int limit = Math.max(1, Math.min(size, 100));
         LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
                 .orderByDesc(PostPO::getCreateTime)
-                .last("LIMIT " + size);
+                .last("LIMIT " + limit);
         if (cursor > 0) {
             q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
-        return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
+        return q;
     }
 
     private static PostPO toPO(Post p) {

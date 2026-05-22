@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
+import com.offerlab.community.search.application.PostSearchIndexer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @PublicApi
 @RestController
@@ -20,12 +22,17 @@ import java.util.List;
 public class SearchController {
 
     private final SearchFacade facade;
+    private final PostSearchIndexer indexer;
 
     @GetMapping("/posts")
-    public Result<PageResult<PostBriefDTO>> searchPosts(@RequestParam("q") String keyword,
+    public Result<PageResult<PostBriefDTO>> searchPosts(@RequestParam(name = "q", required = false) String keyword,
+                                                       @RequestParam(required = false) String company,
+                                                       @RequestParam(required = false) String position,
+                                                       @RequestParam(required = false) Integer type,
+                                                       @RequestParam(required = false) String sort,
                                                        @RequestParam(required = false) String cursor,
                                                        @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(facade.searchPosts(keyword, cursor, size));
+        return Result.ok(facade.searchPosts(keyword, company, position, type, sort, cursor, size));
     }
 
     @GetMapping("/suggest")
@@ -37,5 +44,10 @@ public class SearchController {
     @GetMapping("/hot")
     public Result<List<String>> hot(@RequestParam(defaultValue = "10") int size) {
         return Result.ok(facade.getHotKeywords(size));
+    }
+
+    @GetMapping("/status")
+    public Result<Map<String, Object>> status() {
+        return Result.ok(indexer.status());
     }
 }

@@ -16,6 +16,8 @@ public interface UserFacade {
 
     Map<Long, UserBriefDTO> batchGetUserBriefs(Collection<Long> uids);
 
+    Map<String, Long> findUserIdsByNicknames(Collection<String> nicknames);
+
     boolean isFollowing(Long fromUid, Long toUid);
 
     Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids);
@@ -29,4 +31,14 @@ public interface UserFacade {
     boolean isBigV(Long uid);
 
     UserIntentDTO getUserIntent(Long uid);
+
+    boolean isProfileVisible(Long viewerUid, Long targetUid);
+
+    boolean isIntentVisible(Long viewerUid, Long targetUid);
+
+    boolean isSearchable(Long uid);
+
+    boolean allowsInteractionNotification(Long uid);
+
+    boolean allowsSystemNotification(Long uid);
 }

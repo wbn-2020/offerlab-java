@@ -8,6 +8,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -17,6 +19,7 @@ public class FeedItemVO {
     private UserBriefDTO author;
     private PostCounterDTO counter;
     private MyInteraction myInteraction;
+    private List<String> recommendationReasons;
 
     @Data
     @Builder

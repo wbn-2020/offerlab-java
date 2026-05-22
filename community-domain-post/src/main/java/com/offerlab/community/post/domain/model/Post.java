@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -39,6 +40,7 @@ public class Post {
     private LocalDateTime updateTime;
     /** 扩展字段 JSON（公司/岗位/年限/结果 等） */
     private String extJson;
+    private List<Long> tagIds;
 
     public boolean isVisibleTo(Long viewerUid, boolean isFollowing) {
         if (postStatus == null || postStatus != STATUS_PUBLISHED) return false;

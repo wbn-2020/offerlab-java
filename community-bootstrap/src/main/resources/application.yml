@@ -74,6 +74,12 @@ offerlab:
     bigv-threshold: 1000
     inbox-capacity: 1000
     inbox-ttl-seconds: 604800
+  elasticsearch:
+    enabled: true
+    url: ${ELASTICSEARCH_URL:http://127.0.0.1:9200}
+    post-index: post_idx
+    connect-timeout-millis: 800
+    request-timeout-millis: 1500
 
 logging:
   level:

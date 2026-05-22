@@ -16,4 +16,6 @@ public interface UserRepository {
     void updateProfile(User user);
 
     void updateLastLogin(Long uid, String ip);
+
+    void updatePassword(Long uid, String passwordHash);
 }
