@@ -3,6 +3,7 @@ package com.offerlab.community.feed.application;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.feed.api.FeedFacade;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
+import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.post.api.PostFacade;
@@ -33,6 +34,7 @@ import java.util.stream.Collectors;
 public class FeedFacadeImpl implements FeedFacade {
 
     private final FeedInboxRedis feedRedis;
+    private final FeedFeedbackStore feedbackStore;
     private final PostFacade postFacade;
     private final UserFacade userFacade;
     private final InteractionFacade interactionFacade;
@@ -54,7 +56,9 @@ public class FeedFacadeImpl implements FeedFacade {
             return PageResult.empty();
         }
         UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
+        Set<Long> hiddenPostIds = feedbackStore.hiddenPostIds(uid);
         List<PostBriefDTO> ranked = page.getItems().stream()
+                .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
                 .sorted(Comparator.<PostBriefDTO>comparingDouble(post -> recommendScore(post, intent)).reversed()
                         .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(size)
@@ -81,6 +85,11 @@ public class FeedFacadeImpl implements FeedFacade {
             return getLatestFeed(viewerUid, cursor, size);
         }
         return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+    }
+
+    @Override
+    public void recordFeedback(Long uid, Long postId, String action, String reason) {
+        feedbackStore.record(uid, postId, action, reason);
     }
 
     private PageResult<FeedItemVO> assembleFromTuples(Set<ZSetOperations.TypedTuple<String>> tuples,

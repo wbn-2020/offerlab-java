@@ -227,6 +227,18 @@ Assert-Ok "recommend feed" $recommendFeed
 $recommendedPost = @($recommendFeed.data.items) | Where-Object { "$($_.post.id)" -eq "$postId" } | Select-Object -First 1
 Assert-True "recommend feed includes intent matched post" ($null -ne $recommendedPost)
 
+$recommendFeedback = Invoke-Json "POST" "/api/v1/feeds/feedback" @{
+  postId = $postId
+  action = "not_interested"
+  reason = "smoke-feedback"
+} $authorToken
+Assert-Ok "record recommend feedback" $recommendFeedback
+
+$recommendAfterFeedback = Invoke-Json "GET" "/api/v1/feeds/recommend?size=20" $null $authorToken
+Assert-Ok "recommend feed after feedback" $recommendAfterFeedback
+$hiddenRecommendedPost = @($recommendAfterFeedback.data.items) | Where-Object { "$($_.post.id)" -eq "$postId" } | Select-Object -First 1
+Assert-True "recommend feedback hides post" ($null -eq $hiddenRecommendedPost)
+
 $hotFeed = Invoke-Json "GET" "/api/v1/feeds/hot?size=10" $null $authorToken
 Assert-Ok "hot feed" $hotFeed
 Assert-True "hot feed not empty" (@($hotFeed.data.items).Count -gt 0)
@@ -319,8 +331,10 @@ $report = [ordered]@{
   userSearchRows = @($userSearch.data).Count
   recommendedUserRows = @($recommendedUsers.data).Count
   recommendFeedRows = @($recommendFeed.data.items).Count
+  recommendAfterFeedbackRows = @($recommendAfterFeedback.data.items).Count
   hotFeedRows = @($hotFeed.data.items).Count
   recommendContainsPost = ($null -ne $recommendedPost)
+  recommendHiddenAfterFeedback = ($null -eq $hiddenRecommendedPost)
   searchHotRows = @($searchHot.data.items).Count
   searchLatestRows = @($searchLatest.data.items).Count
   searchEmptyRows = @($searchEmpty.data.items).Count
