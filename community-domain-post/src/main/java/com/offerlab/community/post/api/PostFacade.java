@@ -30,6 +30,8 @@ public interface PostFacade {
 
     PageResult<PostBriefDTO> getLatest(long cursor, int size);
 
+    PageResult<PostBriefDTO> getHot(long cursor, int size);
+
     PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size);
 
     List<TagDTO> listTags();

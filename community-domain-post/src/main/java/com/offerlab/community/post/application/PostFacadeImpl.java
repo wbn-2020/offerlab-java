@@ -14,8 +14,12 @@ import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
+import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
+import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
+import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
+import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.user.api.UserFacade;
@@ -23,6 +27,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.ZoneOffset;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -34,6 +40,8 @@ import java.util.stream.Collectors;
 public class PostFacadeImpl implements PostFacade {
 
     private final PostRepository postRepo;
+    private final PostMapper postMapper;
+    private final PostExtensionMapper extensionMapper;
     private final PostCounterMapper counterMapper;
     private final TagMapper tagMapper;
     private final PostCounterRedis postCounterRedis;
@@ -131,6 +139,15 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
+    public PageResult<PostBriefDTO> getHot(long cursor, int size) {
+        int limit = Math.min(size <= 0 ? 20 : size, 50);
+        LocalDateTime cursorTime = cursor > 0
+                ? LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC)
+                : null;
+        return pagedPo(postMapper.selectHotPosts(cursorTime, limit), limit);
+    }
+
+    @Override
     public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
         List<Post> list = postRepo.findPosts(authorId, tagId, postType, cursor, size);
         return paged(list, size);
@@ -150,6 +167,33 @@ public class PostFacadeImpl implements PostFacade {
         if (list.isEmpty()) return PageResult.empty();
         Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
         List<PostBriefDTO> items = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
+        enrichBriefs(items);
+        boolean hasMore = list.size() == size;
+        String next = hasMore
+                ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+                : null;
+        return PageResult.of(items, next, hasMore);
+    }
+
+    private PageResult<PostBriefDTO> pagedPo(List<PostPO> list, int size) {
+        if (list.isEmpty()) return PageResult.empty();
+        List<Long> postIds = list.stream().map(PostPO::getId).toList();
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(postIds);
+        Map<Long, String> extJson = extensionMapper.selectBatchIds(postIds).stream()
+                .collect(Collectors.toMap(PostExtensionPO::getPostId, PostExtensionPO::getExtJson, (a, b) -> a));
+        List<PostBriefDTO> items = list.stream()
+                .map(p -> PostBriefDTO.builder()
+                        .id(p.getId())
+                        .authorId(p.getAuthorId())
+                        .postType(p.getPostType())
+                        .title(p.getTitle())
+                        .summary(summary(p.getContent()))
+                        .coverUrl(p.getCoverUrl())
+                        .extJson(extJson.get(p.getId()))
+                        .tags(tags.getOrDefault(p.getId(), List.of()))
+                        .createTime(p.getCreateTime())
+                        .build())
+                .toList();
         enrichBriefs(items);
         boolean hasMore = list.size() == size;
         String next = hasMore

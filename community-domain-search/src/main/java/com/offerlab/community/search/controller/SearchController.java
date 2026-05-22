@@ -29,9 +29,10 @@ public class SearchController {
                                                        @RequestParam(required = false) String company,
                                                        @RequestParam(required = false) String position,
                                                        @RequestParam(required = false) Integer type,
+                                                       @RequestParam(required = false) String sort,
                                                        @RequestParam(required = false) String cursor,
                                                        @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(facade.searchPosts(keyword, company, position, type, cursor, size));
+        return Result.ok(facade.searchPosts(keyword, company, position, type, sort, cursor, size));
     }
 
     @GetMapping("/suggest")

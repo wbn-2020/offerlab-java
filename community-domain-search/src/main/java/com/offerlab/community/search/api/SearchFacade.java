@@ -8,7 +8,7 @@ import java.util.List;
 public interface SearchFacade {
 
     PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
-                                         Integer type, String cursor, int size);
+                                         Integer type, String sort, String cursor, int size);
 
     List<String> suggest(String prefix, int size);
 

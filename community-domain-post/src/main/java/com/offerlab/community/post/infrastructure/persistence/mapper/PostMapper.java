@@ -88,4 +88,25 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND create_time >= #{since}
             """)
     long countPublishedSince(@Param("since") LocalDateTime since);
+
+    @Select("""
+            SELECT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (#{cursorTime} IS NULL OR p.create_time < #{cursorTime})
+            ORDER BY (
+                COALESCE(c.like_count, 0) * 3
+                + COALESCE(c.favorite_count, 0) * 4
+                + COALESCE(c.comment_count, 0) * 5
+                + COALESCE(c.view_count, 0) * 0.2
+                + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
+            ) DESC,
+            p.create_time DESC,
+            p.id DESC
+            LIMIT #{limit}
+            """)
+    List<PostPO> selectHotPosts(@Param("cursorTime") LocalDateTime cursorTime, @Param("limit") int limit);
 }

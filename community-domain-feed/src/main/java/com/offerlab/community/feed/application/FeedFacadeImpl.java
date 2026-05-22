@@ -15,10 +15,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -42,8 +43,18 @@ public class FeedFacadeImpl implements FeedFacade {
 
     @Override
     public PageResult<FeedItemVO> getRecommendFeed(Long uid, String cursor, int size) {
-        // MVP：先复用最新流；二期接入用户求职意向 + 热度
-        return getLatestFeed(uid, cursor, size);
+        long c = parseCursorAsEpoch(cursor);
+        int candidateSize = Math.min(Math.max(size * 3, size), 50);
+        var page = postFacade.getLatest(c, candidateSize);
+        if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+            return PageResult.empty();
+        }
+        List<PostBriefDTO> ranked = page.getItems().stream()
+                .sorted(Comparator.comparingDouble(this::recommendScore).reversed()
+                        .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(size)
+                .toList();
+        return assembleFromPosts(ranked, uid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
     }
 
     @Override
@@ -59,8 +70,12 @@ public class FeedFacadeImpl implements FeedFacade {
 
     @Override
     public PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size) {
-        // MVP：先复用最新流；二期接入热度算法
-        return getLatestFeed(viewerUid, cursor, size);
+        long c = parseCursorAsEpoch(cursor);
+        var page = postFacade.getHot(c, size);
+        if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+            return getLatestFeed(viewerUid, cursor, size);
+        }
+        return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
     }
 
     private PageResult<FeedItemVO> assembleFromTuples(Set<ZSetOperations.TypedTuple<String>> tuples,
@@ -110,13 +125,21 @@ public class FeedFacadeImpl implements FeedFacade {
         long c = parseCursorAsEpoch(cursor);
         var page = postFacade.getLatest(c, size);
         if (page == null || page.getItems() == null || page.getItems().isEmpty()) return PageResult.empty();
-        List<Long> postIds = page.getItems().stream().map(PostBriefDTO::getId).toList();
+        return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+    }
+
+    private PageResult<FeedItemVO> assembleFromPosts(List<PostBriefDTO> posts,
+                                                     Long viewerUid,
+                                                     String nextCursor,
+                                                     boolean hasMore) {
+        if (posts == null || posts.isEmpty()) return PageResult.empty();
+        List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
         var counters = postFacade.batchGetCounters(postIds);
-        var authors = userFacade.batchGetUserBriefs(page.getItems().stream()
+        var authors = userFacade.batchGetUserBriefs(posts.stream()
                 .map(PostBriefDTO::getAuthorId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet()));
-        List<FeedItemVO> items = page.getItems().stream().map(p -> FeedItemVO.builder()
+        List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
                 .author(authors.get(p.getAuthorId()))
                 .counter(counters.get(p.getId()))
@@ -125,7 +148,27 @@ public class FeedFacadeImpl implements FeedFacade {
                         .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
                         .build())
                 .build()).toList();
-        return PageResult.of(items, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+        return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private double recommendScore(PostBriefDTO post) {
+        PostCounterDTO counter = post.getCounter();
+        double heat = 0D;
+        if (counter != null) {
+            heat += safe(counter.getLikeCount()) * 3D;
+            heat += safe(counter.getFavoriteCount()) * 4D;
+            heat += safe(counter.getCommentCount()) * 5D;
+            heat += safe(counter.getViewCount()) * 0.2D;
+        }
+        double recency = post.getCreateTime() == null
+                ? 0D
+                : Math.max(0D, 72D - Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
+        double tagBonus = post.getTags() == null ? 0D : Math.min(post.getTags().size(), 3) * 1.5D;
+        return heat + recency + tagBonus;
+    }
+
+    private static long safe(Long value) {
+        return value == null ? 0L : value;
     }
 
     /** 当 cursor 表示 score (timestamp ms) 时；空则视为 +∞（从最新开始） */
