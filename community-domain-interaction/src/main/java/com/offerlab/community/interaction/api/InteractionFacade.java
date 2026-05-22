@@ -13,6 +13,8 @@ public interface InteractionFacade {
 
     boolean hasLiked(Long uid, Long postId);
 
+    boolean hasFavorited(Long uid, Long postId);
+
     void likeComment(Long uid, Long commentId);
 
     void unlikeComment(Long uid, Long commentId);

@@ -114,6 +114,15 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     @Override
+    public boolean hasFavorited(Long uid, Long postId) {
+        Long cnt = favoriteMapper.selectCount(new LambdaQueryWrapper<FavoritePO>()
+                .eq(FavoritePO::getUserId, uid)
+                .eq(FavoritePO::getPostId, postId)
+                .eq(FavoritePO::getIsDeleted, 0));
+        return cnt != null && cnt > 0;
+    }
+
+    @Override
     @Transactional
     public void likeComment(Long uid, Long commentId) {
         CommentPO comment = commentMapper.selectById(commentId);

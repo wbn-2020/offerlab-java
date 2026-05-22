@@ -100,7 +100,7 @@ public class UserController {
 
     @PublicApi
     @GetMapping("/search")
-    public Result<List<UserBriefDTO>> searchUsers(@RequestParam(name = "q") String keyword,
+    public Result<List<UserBriefDTO>> searchUsers(@RequestParam(name = "q", required = false) String keyword,
                                                   @RequestParam(defaultValue = "10") int size) {
         return Result.ok(userService.searchUsers(keyword, UserContext.get(), size, userFacade));
     }

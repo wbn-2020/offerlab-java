@@ -18,6 +18,7 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
+import com.offerlab.community.user.api.UserFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -38,28 +39,32 @@ public class PostFacadeImpl implements PostFacade {
     private final PostCounterRedis postCounterRedis;
     private final MultiLevelCache<PostDTO> multiLevelCache;
     private final PostApplicationService postService;
+    private final UserFacade userFacade;
 
     private static final int SUMMARY_LEN = 120;
 
     @Override
     public PostDTO getPost(Long postId) {
         String cacheKey = CacheKeyBuilder.postDetail(postId);
-        return multiLevelCache.get(cacheKey, key -> {
+        PostDTO dto = multiLevelCache.get(cacheKey, key -> {
             Post post = postRepo.findById(postId).orElse(null);
             return post != null && post.isVisibleTo(null, false) ? toFullDto(post) : null;
         }, PostDTO.class);
+        return enrichFull(dto);
     }
 
     @Override
     public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) {
         if (postIds == null || postIds.isEmpty()) return Map.of();
         Map<Long, Post> posts = postRepo.batchFindByIds(postIds);
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.keySet());
         Map<Long, PostBriefDTO> result = new HashMap<>(posts.size());
         for (Post p : posts.values()) {
             if (p.isVisibleTo(null, false)) {
-                result.put(p.getId(), toBrief(p));
+                result.put(p.getId(), toBrief(p, tags.getOrDefault(p.getId(), List.of())));
             }
         }
+        enrichBriefs(result.values());
         return result;
     }
 
@@ -145,6 +150,7 @@ public class PostFacadeImpl implements PostFacade {
         if (list.isEmpty()) return PageResult.empty();
         Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
         List<PostBriefDTO> items = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
+        enrichBriefs(items);
         boolean hasMore = list.size() == size;
         String next = hasMore
                 ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -167,6 +173,42 @@ public class PostFacadeImpl implements PostFacade {
                 .extJson(p.getExtJson())
                 .tags(tags)
                 .createTime(p.getCreateTime())
+                .build();
+    }
+
+    private void enrichBriefs(Collection<PostBriefDTO> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return;
+        }
+        List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
+        Map<Long, PostCounterDTO> counters = batchGetCounters(postIds);
+        Map<Long, com.offerlab.community.user.api.dto.UserBriefDTO> authors = userFacade.batchGetUserBriefs(
+                posts.stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet()));
+        posts.forEach(p -> {
+            p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
+            p.setAuthor(authors.get(p.getAuthorId()));
+        });
+    }
+
+    private PostDTO enrichFull(PostDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        return PostDTO.builder()
+                .id(dto.getId())
+                .authorId(dto.getAuthorId())
+                .author(userFacade.getUserBrief(dto.getAuthorId()))
+                .postType(dto.getPostType())
+                .title(dto.getTitle())
+                .content(dto.getContent())
+                .coverUrl(dto.getCoverUrl())
+                .visibility(dto.getVisibility())
+                .postStatus(dto.getPostStatus())
+                .extJson(dto.getExtJson())
+                .tags(dto.getTags())
+                .counter(batchGetCounters(List.of(dto.getId())).getOrDefault(dto.getId(), emptyCounter(dto.getId())))
+                .createTime(dto.getCreateTime())
+                .updateTime(dto.getUpdateTime())
                 .build();
     }
 
@@ -195,6 +237,16 @@ public class PostFacadeImpl implements PostFacade {
                 .likeCount(value.likeCount())
                 .commentCount(value.commentCount())
                 .favoriteCount(value.favoriteCount())
+                .build();
+    }
+
+    private static PostCounterDTO emptyCounter(Long postId) {
+        return PostCounterDTO.builder()
+                .postId(postId)
+                .viewCount(0L)
+                .likeCount(0L)
+                .commentCount(0L)
+                .favoriteCount(0L)
                 .build();
     }
 

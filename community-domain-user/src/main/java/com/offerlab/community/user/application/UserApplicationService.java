@@ -190,14 +190,15 @@ public class UserApplicationService {
     }
 
     public List<UserBriefDTO> searchUsers(String keyword, Long viewerUid, int size, UserFacade userFacade) {
-        if (!StringUtils.hasText(keyword)) {
-            return List.of();
-        }
         int limit = Math.max(1, Math.min(size, 20));
-        return profileMapper.selectList(new LambdaQueryWrapper<UserProfilePO>()
-                        .like(UserProfilePO::getNickname, keyword.trim())
-                        .eq(UserProfilePO::getIsDeleted, 0)
-                        .last("LIMIT " + Math.min(limit * 3, 60)))
+        LambdaQueryWrapper<UserProfilePO> query = new LambdaQueryWrapper<UserProfilePO>()
+                .eq(UserProfilePO::getIsDeleted, 0)
+                .orderByDesc(UserProfilePO::getUpdateTime)
+                .last("LIMIT " + Math.min(limit * 3, 60));
+        if (StringUtils.hasText(keyword)) {
+            query.like(UserProfilePO::getNickname, keyword.trim());
+        }
+        return profileMapper.selectList(query)
                 .stream()
                 .map(UserProfilePO::getId)
                 .filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))

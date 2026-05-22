@@ -87,7 +87,7 @@ public class FeedFacadeImpl implements FeedFacade {
             if (viewerUid != null) {
                 my = FeedItemVO.MyInteraction.builder()
                         .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
-                        .favorited(false)
+                        .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
                         .build();
             }
             items.add(FeedItemVO.builder()
@@ -122,7 +122,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .counter(counters.get(p.getId()))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
                         .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
-                        .favorited(false)
+                        .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
                         .build())
                 .build()).toList();
         return PageResult.of(items, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));

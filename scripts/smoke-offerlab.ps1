@@ -40,6 +40,14 @@ function Assert-Ok {
   $script:steps += [ordered]@{ name = $Name; ok = $true }
 }
 
+function Assert-True {
+  param([string]$Name, [bool]$Condition)
+  if (-not $Condition) {
+    throw "$Name failed"
+  }
+  $script:steps += [ordered]@{ name = $Name; ok = $true }
+}
+
 $steps = @()
 $suffix = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
 $authorEmail = "smoke-author-$suffix@offerlab.local"
@@ -86,6 +94,8 @@ $postId = $publish.data.postId
 
 $detail = Invoke-Json "GET" "/api/v1/posts/$postId"
 Assert-Ok "post detail" $detail
+Assert-True "post detail has author" ($null -ne $detail.data.author -and $detail.data.author.uid -eq $authorRegister.data.uid)
+Assert-True "post detail has counter" ($null -ne $detail.data.counter)
 
 $comment = Invoke-Json "POST" "/api/v1/posts/$postId/comments" @{ content = "Smoke comment $suffix" } $actorToken
 Assert-Ok "comment post" $comment
@@ -97,6 +107,10 @@ Assert-Ok "like post" $like
 $favorite = Invoke-Json "POST" "/api/v1/posts/$postId/favorite" $null $actorToken
 Assert-Ok "favorite post" $favorite
 
+$interactionState = Invoke-Json "GET" "/api/v1/posts/$postId/interaction" $null $actorToken
+Assert-Ok "post interaction state" $interactionState
+Assert-True "post interaction liked favorited" ($interactionState.data.liked -and $interactionState.data.favorited)
+
 $commentLike = Invoke-Json "POST" "/api/v1/comments/$commentId/like" $null $authorToken
 Assert-Ok "like comment" $commentLike
 
@@ -107,6 +121,8 @@ Assert-Ok "author unread notifications" $notifications
 
 $search = Invoke-Json "GET" "/api/v1/search/posts?q=$suffix"
 Assert-Ok "search post" $search
+$firstSearchItem = @($search.data.items)[0]
+Assert-True "search result enriched" (@($search.data.items).Count -gt 0 -and $null -ne $firstSearchItem.author -and $null -ne $firstSearchItem.counter)
 
 $trend = Invoke-Json "GET" "/api/v1/dashboard/trend?range=7d"
 Assert-Ok "trend dashboard" $trend
@@ -122,6 +138,10 @@ Assert-Ok "update author intent" $intent
 
 $userSearch = Invoke-Json "GET" "/api/v1/users/search?q=SmokeActor&size=5"
 Assert-Ok "search users" $userSearch
+
+$recommendedUsers = Invoke-Json "GET" "/api/v1/users/search?size=5"
+Assert-Ok "recommend users" $recommendedUsers
+Assert-True "recommend users not empty" (@($recommendedUsers.data).Count -gt 0)
 
 $privacy = Invoke-Json "GET" "/api/v1/users/me/privacy-settings" $null $authorToken
 Assert-Ok "privacy settings" $privacy
@@ -169,6 +189,10 @@ $report = [ordered]@{
   notificationTotal = $notifications.data.total
   trendTotalPosts = $trend.data.totalPosts
   userSearchRows = @($userSearch.data).Count
+  recommendedUserRows = @($recommendedUsers.data).Count
+  searchAuthorNickname = $firstSearchItem.author.nickname
+  interactionLiked = $interactionState.data.liked
+  interactionFavorited = $interactionState.data.favorited
   privacyIntentVisibility = $privacyUpdate.data.intentVisibility
   hiddenIntentIsNull = ($null -eq $hiddenIntent.data)
   outboxRows = @($outbox.data).Count

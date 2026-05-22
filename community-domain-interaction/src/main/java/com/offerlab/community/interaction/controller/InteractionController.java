@@ -47,6 +47,16 @@ public class InteractionController {
         return Result.ok(Map.of("liked", false));
     }
 
+    @PublicApi
+    @GetMapping("/posts/{postId}/interaction")
+    public Result<Map<String, Object>> postInteraction(@PathVariable Long postId) {
+        Long uid = UserContext.get();
+        return Result.ok(Map.of(
+                "liked", uid != null && facade.hasLiked(uid, postId),
+                "favorited", uid != null && facade.hasFavorited(uid, postId)
+        ));
+    }
+
     @GetMapping("/users/me/liked-posts")
     public Result<PageResult<PostBriefDTO>> likedPosts(@RequestParam(defaultValue = "0") long cursor,
                                                        @RequestParam(defaultValue = "20") int size) {

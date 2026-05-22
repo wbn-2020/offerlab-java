@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
+import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
@@ -16,6 +18,8 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.search.api.SearchFacade;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -46,6 +50,8 @@ public class SearchFacadeImpl implements SearchFacade {
     private final ObjectMapper objectMapper;
     private final ElasticsearchHttpClient elasticsearch;
     private final PostSearchIndexer postSearchIndexer;
+    private final PostFacade postFacade;
+    private final UserFacade userFacade;
 
     @Override
     public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
@@ -164,7 +170,7 @@ public class SearchFacadeImpl implements SearchFacade {
         String next = hasMore
                 ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
-        return PageResult.of(items, next, hasMore);
+        return PageResult.of(enrich(items), next, hasMore);
     }
 
     private Optional<String> firstHighlight(JsonNode hit, String field) {
@@ -278,7 +284,32 @@ public class SearchFacadeImpl implements SearchFacade {
         String next = hasMore
                 ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
-        return PageResult.of(items, next, hasMore);
+        return PageResult.of(enrich(items), next, hasMore);
+    }
+
+    private List<PostBriefDTO> enrich(List<PostBriefDTO> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, PostCounterDTO> counters = postFacade.batchGetCounters(posts.stream().map(PostBriefDTO::getId).toList());
+        Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(posts.stream()
+                .map(PostBriefDTO::getAuthorId)
+                .collect(Collectors.toSet()));
+        posts.forEach(p -> {
+            p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
+            p.setAuthor(authors.get(p.getAuthorId()));
+        });
+        return posts;
+    }
+
+    private static PostCounterDTO emptyCounter(Long postId) {
+        return PostCounterDTO.builder()
+                .postId(postId)
+                .viewCount(0L)
+                .likeCount(0L)
+                .commentCount(0L)
+                .favoriteCount(0L)
+                .build();
     }
 
     private boolean matchExt(String extJson, String company, String position) {
