@@ -226,6 +226,8 @@ $recommendFeed = Invoke-Json "GET" "/api/v1/feeds/recommend?size=10" $null $auth
 Assert-Ok "recommend feed" $recommendFeed
 $recommendedPost = @($recommendFeed.data.items) | Where-Object { "$($_.post.id)" -eq "$postId" } | Select-Object -First 1
 Assert-True "recommend feed includes intent matched post" ($null -ne $recommendedPost)
+$firstRecommendReason = ($recommendedPost.recommendationReasons | Where-Object { -not [string]::IsNullOrWhiteSpace("$($_)") } | Select-Object -First 1)
+Assert-True "recommend feed explains reason" ($null -ne $firstRecommendReason)
 
 $recommendFeedback = Invoke-Json "POST" "/api/v1/feeds/feedback" @{
   postId = $postId
@@ -315,6 +317,8 @@ $report = [ordered]@{
   ok = $true
   baseUrl = $BaseUrl
   timestamp = (Get-Date).ToString("s")
+  authorEmail = $authorEmail
+  actorEmail = $actorEmail
   authorUid = $authorRegister.data.uid
   actorUid = $actorRegister.data.uid
   adminAccount = $adminAccount
@@ -334,6 +338,7 @@ $report = [ordered]@{
   recommendAfterFeedbackRows = @($recommendAfterFeedback.data.items).Count
   hotFeedRows = @($hotFeed.data.items).Count
   recommendContainsPost = ($null -ne $recommendedPost)
+  recommendReason = "$firstRecommendReason"
   recommendHiddenAfterFeedback = ($null -eq $hiddenRecommendedPost)
   searchHotRows = @($searchHot.data.items).Count
   searchLatestRows = @($searchLatest.data.items).Count

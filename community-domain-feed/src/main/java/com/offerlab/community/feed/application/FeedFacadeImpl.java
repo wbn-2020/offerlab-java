@@ -63,7 +63,7 @@ public class FeedFacadeImpl implements FeedFacade {
                         .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(size)
                 .toList();
-        return assembleFromPosts(ranked, uid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+        return assembleRecommendPosts(ranked, uid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()), intent);
     }
 
     @Override
@@ -165,6 +165,31 @@ public class FeedFacadeImpl implements FeedFacade {
         return PageResult.of(items, nextCursor, hasMore);
     }
 
+    private PageResult<FeedItemVO> assembleRecommendPosts(List<PostBriefDTO> posts,
+                                                          Long viewerUid,
+                                                          String nextCursor,
+                                                          boolean hasMore,
+                                                          UserIntentDTO intent) {
+        if (posts == null || posts.isEmpty()) return PageResult.empty();
+        List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
+        var counters = postFacade.batchGetCounters(postIds);
+        var authors = userFacade.batchGetUserBriefs(posts.stream()
+                .map(PostBriefDTO::getAuthorId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet()));
+        List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
+                .post(p)
+                .author(authors.get(p.getAuthorId()))
+                .counter(counters.get(p.getId()))
+                .recommendationReasons(recommendationReasons(p, counters.get(p.getId()), intent))
+                .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
+                        .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
+                        .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
+                        .build())
+                .build()).toList();
+        return PageResult.of(items, nextCursor, hasMore);
+    }
+
     private double recommendScore(PostBriefDTO post, UserIntentDTO intent) {
         PostCounterDTO counter = post.getCounter();
         double heat = 0D;
@@ -200,6 +225,37 @@ public class FeedFacadeImpl implements FeedFacade {
             score += 14D;
         }
         return score;
+    }
+
+    private List<String> recommendationReasons(PostBriefDTO post, PostCounterDTO counter, UserIntentDTO intent) {
+        List<String> reasons = new ArrayList<>();
+        JsonNode ext = parseExt(post.getExtJson());
+        String company = clean(ext.path("company").asText(""));
+        String position = clean(ext.path("position").asText(""));
+        String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
+        if (intent != null && matchesAny(company, intent.getTargetCompanies())) {
+            reasons.add("匹配你的目标公司：" + company);
+        }
+        if (intent != null && matchesAny(position, intent.getTargetPositions())) {
+            reasons.add("匹配你的目标岗位：" + position);
+        }
+        if (intent != null && matchesAny(content, intent.getTechStack())) {
+            reasons.add("包含你关注的技术栈");
+        }
+        long heat = counter == null ? 0L : safe(counter.getLikeCount()) + safe(counter.getFavoriteCount()) + safe(counter.getCommentCount());
+        if (heat >= 3) {
+            reasons.add("近期互动热度较高");
+        }
+        if (post.getCreateTime() != null && Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours() <= 24) {
+            reasons.add("24 小时内新发布");
+        }
+        if ((post.getTags() == null ? 0 : post.getTags().size()) >= 2) {
+            reasons.add("标签信息完整，便于快速判断");
+        }
+        if (reasons.isEmpty()) {
+            reasons.add("根据近期内容质量和活跃度推荐");
+        }
+        return reasons.stream().limit(3).toList();
     }
 
     private JsonNode parseExt(String extJson) {
