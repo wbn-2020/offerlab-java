@@ -39,6 +39,7 @@ public class JwtService {
         return Jwts.builder()
                 .subject(String.valueOf(uid))
                 .issuedAt(now)
+                .claim("iatMillis", now.getTime())
                 .expiration(exp)
                 .signWith(key())
                 .compact();
@@ -60,7 +61,16 @@ public class JwtService {
             if (Boolean.TRUE.equals(redis.hasKey("auth:blacklist:" + token))) {
                 return null;
             }
-            return Long.parseLong(sub);
+            Long uid = Long.parseLong(sub);
+            String revokedBefore = redis.opsForValue().get(revokedBeforeKey(uid));
+            Number issuedAtMillis = claims.get("iatMillis", Number.class);
+            long issuedAt = issuedAtMillis != null
+                    ? issuedAtMillis.longValue()
+                    : claims.getIssuedAt() == null ? 0L : claims.getIssuedAt().getTime();
+            if (revokedBefore != null && issuedAt <= Long.parseLong(revokedBefore)) {
+                return null;
+            }
+            return uid;
         } catch (Exception e) {
             return null;
         }
@@ -71,5 +81,13 @@ public class JwtService {
      */
     public void invalidate(String token) {
         redis.opsForValue().set("auth:blacklist:" + token, "1", Duration.ofHours(ttlHours));
+    }
+
+    public void invalidateAll(Long uid) {
+        redis.opsForValue().set(revokedBeforeKey(uid), String.valueOf(System.currentTimeMillis()), Duration.ofHours(ttlHours));
+    }
+
+    private static String revokedBeforeKey(Long uid) {
+        return "auth:revoked-before:" + uid;
     }
 }

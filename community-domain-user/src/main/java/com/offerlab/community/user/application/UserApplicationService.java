@@ -7,11 +7,19 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
+import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.user.api.event.UserFollowedEvent;
 import com.offerlab.community.user.domain.model.User;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserPrivacySettingMapper;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserProfileMapper;
+import com.offerlab.community.user.infrastructure.persistence.po.UserPrivacySettingPO;
+import com.offerlab.community.user.infrastructure.persistence.po.UserProfilePO;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 用户应用服务：编排领域逻辑，事务边界
@@ -35,6 +44,8 @@ public class UserApplicationService {
     private final JwtService jwtService;
     private final EventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final UserPrivacySettingMapper privacySettingMapper;
+    private final UserProfileMapper profileMapper;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -76,6 +87,25 @@ public class UserApplicationService {
 
     public void logout(String token) {
         jwtService.invalidate(token);
+    }
+
+    @Transactional
+    public void changePassword(Long uid, String oldPassword, String newPassword) {
+        User user = getUser(uid);
+        if (!StringUtils.hasText(oldPassword) || !passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
+            throw new BizException(ErrorCode.PASSWORD_ERROR);
+        }
+        if (!StringUtils.hasText(newPassword) || newPassword.length() < 6 || newPassword.length() > 64
+                || oldPassword.equals(newPassword)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        userRepo.updatePassword(uid, passwordEncoder.encode(newPassword));
+        jwtService.invalidateAll(uid);
+    }
+
+    public void logoutAll(Long uid) {
+        getUser(uid);
+        jwtService.invalidateAll(uid);
     }
 
     @Transactional
@@ -125,5 +155,95 @@ public class UserApplicationService {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         userRepo.updateProfile(u);
+    }
+
+    @Transactional
+    public UserPrivacySettingDTO getPrivacySetting(Long uid) {
+        getUser(uid);
+        UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
+        if (po == null) {
+            po = defaultPrivacySetting(uid);
+            privacySettingMapper.insert(po);
+        }
+        return toPrivacyDTO(po);
+    }
+
+    @Transactional
+    public UserPrivacySettingDTO updatePrivacySetting(Long uid, UserPrivacySettingDTO setting) {
+        getUser(uid);
+        UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
+        boolean exists = po != null;
+        if (po == null) {
+            po = defaultPrivacySetting(uid);
+        }
+        po.setProfileVisibility(normalizeVisibility(setting.getProfileVisibility()));
+        po.setIntentVisibility(normalizeVisibility(setting.getIntentVisibility()));
+        po.setSearchable(toFlag(setting.getSearchable()));
+        po.setInteractionNotification(toFlag(setting.getInteractionNotification()));
+        po.setSystemNotification(toFlag(setting.getSystemNotification()));
+        if (exists) {
+            privacySettingMapper.updateById(po);
+        } else {
+            privacySettingMapper.insert(po);
+        }
+        return toPrivacyDTO(po);
+    }
+
+    public List<UserBriefDTO> searchUsers(String keyword, Long viewerUid, int size, UserFacade userFacade) {
+        int limit = Math.max(1, Math.min(size, 20));
+        LambdaQueryWrapper<UserProfilePO> query = new LambdaQueryWrapper<UserProfilePO>()
+                .eq(UserProfilePO::getIsDeleted, 0)
+                .orderByDesc(UserProfilePO::getUpdateTime)
+                .last("LIMIT " + Math.min(limit * 3, 60));
+        if (StringUtils.hasText(keyword)) {
+            query.like(UserProfilePO::getNickname, keyword.trim());
+        }
+        return profileMapper.selectList(query)
+                .stream()
+                .map(UserProfilePO::getId)
+                .filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))
+                .map(userFacade::getUserBrief)
+                .filter(java.util.Objects::nonNull)
+                .limit(limit)
+                .toList();
+    }
+
+    private static UserPrivacySettingPO defaultPrivacySetting(Long uid) {
+        UserPrivacySettingPO po = new UserPrivacySettingPO();
+        po.setUserId(uid);
+        po.setProfileVisibility("PUBLIC");
+        po.setIntentVisibility("PUBLIC");
+        po.setSearchable(1);
+        po.setInteractionNotification(1);
+        po.setSystemNotification(1);
+        return po;
+    }
+
+    private static UserPrivacySettingDTO toPrivacyDTO(UserPrivacySettingPO po) {
+        return UserPrivacySettingDTO.builder()
+                .profileVisibility(po.getProfileVisibility())
+                .intentVisibility(po.getIntentVisibility())
+                .searchable(isEnabled(po.getSearchable()))
+                .interactionNotification(isEnabled(po.getInteractionNotification()))
+                .systemNotification(isEnabled(po.getSystemNotification()))
+                .build();
+    }
+
+    private static boolean isEnabled(Integer value) {
+        return value == null || value == 1;
+    }
+
+    private static int toFlag(Boolean value) {
+        return Boolean.FALSE.equals(value) ? 0 : 1;
+    }
+
+    private static String normalizeVisibility(String value) {
+        if ("PRIVATE".equalsIgnoreCase(value)) {
+            return "PRIVATE";
+        }
+        if ("FOLLOWERS".equalsIgnoreCase(value)) {
+            return "FOLLOWERS";
+        }
+        return "PUBLIC";
     }
 }

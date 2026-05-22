@@ -14,7 +14,21 @@ public interface NotificationFacade {
 
     long getUnreadCount(Long uid);
 
+    Map<String, Long> getUnreadCountByType(Long uid);
+
     void markAsRead(Long uid, List<Long> notifIds);
 
     void markAllAsRead(Long uid);
+
+    void notifyLike(Long receiverUid, Long senderUid, Integer targetType, Long targetId);
+
+    void notifyCommentLike(Long receiverUid, Long senderUid, Long postId, Long commentId);
+
+    void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId);
+
+    void notifyFollower(Long receiverUid, Long senderUid);
+
+    void notifyFavorite(Long receiverUid, Long senderUid, Long postId);
+
+    void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId);
 }

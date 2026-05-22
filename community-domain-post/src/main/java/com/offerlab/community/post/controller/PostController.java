@@ -2,6 +2,7 @@ package com.offerlab.community.post.controller;
 
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -9,8 +10,10 @@ import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.application.PostApplicationService;
+import com.offerlab.community.post.application.PostReportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -28,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/posts")
@@ -36,6 +40,8 @@ public class PostController {
 
     private final PostFacade postFacade;
     private final PostApplicationService postService;
+    private final PostReportService reportService;
+    private final AdminPermissionService adminPermissionService;
 
     @PostMapping
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
@@ -49,6 +55,8 @@ public class PostController {
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
+                .tagIds(req.effectiveTagIds())
+                .tagNames(req.getTagNames())
                 .build());
         return Result.ok(Map.of("postId", id));
     }
@@ -64,6 +72,8 @@ public class PostController {
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
+                .tagIds(req.effectiveTagIds())
+                .tagNames(req.getTagNames())
                 .build());
         return Result.ok();
     }
@@ -87,12 +97,34 @@ public class PostController {
     @PublicApi
     @GetMapping
     public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) Long authorId,
+                                                 @RequestParam(required = false) Long tagId,
+                                                 @RequestParam(required = false, name = "tag") Long tag,
+                                                 @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
-        if (authorId != null) {
-            return Result.ok(postFacade.getPostsByAuthor(authorId, cursor, size));
-        }
-        return Result.ok(postFacade.getLatest(cursor, size));
+        Long effectiveTagId = tagId != null ? tagId : tag;
+        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, cursor, size));
+    }
+
+    @PostMapping("/{postId}/reports")
+    @RateLimit(key = "'post:report:' + #postId + ':' + #uid", rate = 10, per = 86400)
+    public Result<Map<String, Long>> report(@PathVariable Long postId, @Valid @RequestBody ReportReq req) {
+        Long reportId = reportService.reportPost(postId, UserContext.require(), req.getReason(), req.getDetail());
+        return Result.ok(Map.of("reportId", reportId));
+    }
+
+    @GetMapping("/admin/reports")
+    public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
+                                                   @RequestParam(defaultValue = "20") int limit) {
+        adminPermissionService.requireAdmin(UserContext.require());
+        return Result.ok(reportService.listRecent(status, limit));
+    }
+
+    @PostMapping("/admin/reports/{reportId}/review")
+    public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireAdmin(uid);
+        return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
 
     @Data
@@ -107,6 +139,13 @@ public class PostController {
         private String coverUrl;
         private Integer visibility;
         private String extJson;
+        private List<Long> tags;
+        private List<Long> tagIds;
+        private List<String> tagNames;
+
+        private List<Long> effectiveTagIds() {
+            return tagIds != null ? tagIds : tags;
+        }
     }
 
     @Data
@@ -116,5 +155,55 @@ public class PostController {
         private String coverUrl;
         private Integer visibility;
         private String extJson;
+        private List<Long> tags;
+        private List<Long> tagIds;
+        private List<String> tagNames;
+
+        private List<Long> effectiveTagIds() {
+            return tagIds != null ? tagIds : tags;
+        }
+    }
+
+    @Data
+    public static class ReportReq {
+        @NotBlank
+        @Size(max = 64)
+        private String reason;
+        @Size(max = 1000)
+        private String detail;
+    }
+
+    @Data
+    public static class ReviewReq {
+        private Boolean approved;
+        private Integer status;
+        private String action;
+        @Size(max = 1000)
+        private String note;
+
+        private Boolean resolveApproved() {
+            if (approved != null) {
+                return approved;
+            }
+            if (status != null) {
+                if (status == PostReportService.STATUS_APPROVED) {
+                    return true;
+                }
+                if (status == PostReportService.STATUS_REJECTED) {
+                    return false;
+                }
+            }
+            if (action == null) {
+                return null;
+            }
+            String normalized = action.trim().toUpperCase();
+            if ("APPROVE".equals(normalized) || "APPROVED".equals(normalized) || "PASS".equals(normalized)) {
+                return true;
+            }
+            if ("REJECT".equals(normalized) || "REJECTED".equals(normalized) || "DISMISS".equals(normalized)) {
+                return false;
+            }
+            return null;
+        }
     }
 }

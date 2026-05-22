@@ -7,10 +7,12 @@ import com.offerlab.community.notification.api.NotificationFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -29,12 +31,30 @@ public class NotificationController {
 
     @GetMapping("/unread-count")
     public Result<Map<String, Long>> unreadCount() {
-        return Result.ok(Map.of("count", facade.getUnreadCount(UserContext.require())));
+        return Result.ok(facade.getUnreadCountByType(UserContext.require()));
+    }
+
+    @PostMapping("/read")
+    public Result<Void> read(@RequestBody ReadReq req) {
+        facade.markAsRead(UserContext.require(), req == null ? List.of() : req.getIds());
+        return Result.ok();
     }
 
     @PostMapping("/read-all")
     public Result<Void> readAll() {
         facade.markAllAsRead(UserContext.require());
         return Result.ok();
+    }
+
+    public static class ReadReq {
+        private List<Long> ids;
+
+        public List<Long> getIds() {
+            return ids;
+        }
+
+        public void setIds(List<Long> ids) {
+            this.ids = ids;
+        }
     }
 }

@@ -12,4 +12,6 @@ public interface FeedFacade {
     PageResult<FeedItemVO> getLatestFeed(Long viewerUid, String cursor, int size);
 
     PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size);
+
+    void recordFeedback(Long uid, Long postId, String action, String reason);
 }

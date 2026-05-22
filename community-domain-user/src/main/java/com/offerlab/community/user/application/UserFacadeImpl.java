@@ -1,5 +1,6 @@
 package com.offerlab.community.user.application;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
@@ -10,7 +11,11 @@ import com.offerlab.community.user.domain.model.User;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
 import com.offerlab.community.user.infrastructure.persistence.mapper.UserCounterMapper;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserPrivacySettingMapper;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserProfileMapper;
 import com.offerlab.community.user.infrastructure.persistence.po.UserCounterPO;
+import com.offerlab.community.user.infrastructure.persistence.po.UserPrivacySettingPO;
+import com.offerlab.community.user.infrastructure.persistence.po.UserProfilePO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +35,8 @@ public class UserFacadeImpl implements UserFacade {
     private final UserRepository userRepo;
     private final FollowRepository followRepo;
     private final UserCounterMapper counterMapper;
+    private final UserProfileMapper profileMapper;
+    private final UserPrivacySettingMapper privacySettingMapper;
     private final ObjectMapper objectMapper;
     private final MultiLevelCache<UserBriefDTO> multiLevelCache;
 
@@ -54,6 +61,23 @@ public class UserFacadeImpl implements UserFacade {
             if (dto != null) result.put(uid, dto);
         }
         return result;
+    }
+
+    @Override
+    public Map<String, Long> findUserIdsByNicknames(Collection<String> nicknames) {
+        if (nicknames == null || nicknames.isEmpty()) return Map.of();
+        List<String> names = nicknames.stream()
+                .filter(name -> name != null && !name.isBlank())
+                .map(String::trim)
+                .distinct()
+                .limit(20)
+                .toList();
+        if (names.isEmpty()) return Map.of();
+        return profileMapper.selectList(new LambdaQueryWrapper<UserProfilePO>()
+                        .in(UserProfilePO::getNickname, names)
+                        .eq(UserProfilePO::getIsDeleted, 0))
+                .stream()
+                .collect(Collectors.toMap(UserProfilePO::getNickname, UserProfilePO::getId, (a, b) -> a));
     }
 
     @Override
@@ -98,6 +122,31 @@ public class UserFacadeImpl implements UserFacade {
                 .orElse(null);
     }
 
+    @Override
+    public boolean isProfileVisible(Long viewerUid, Long targetUid) {
+        return visible(viewerUid, targetUid, setting(targetUid).getProfileVisibility());
+    }
+
+    @Override
+    public boolean isIntentVisible(Long viewerUid, Long targetUid) {
+        return visible(viewerUid, targetUid, setting(targetUid).getIntentVisibility());
+    }
+
+    @Override
+    public boolean isSearchable(Long uid) {
+        return enabled(setting(uid).getSearchable());
+    }
+
+    @Override
+    public boolean allowsInteractionNotification(Long uid) {
+        return enabled(setting(uid).getInteractionNotification());
+    }
+
+    @Override
+    public boolean allowsSystemNotification(Long uid) {
+        return enabled(setting(uid).getSystemNotification());
+    }
+
     private UserIntentDTO parseIntent(String json) {
         try {
             return objectMapper.readValue(json, UserIntentDTO.class);
@@ -122,5 +171,37 @@ public class UserFacadeImpl implements UserFacade {
             b.followerCount(0L).followingCount(0L).postCount(0L);
         }
         return b.build();
+    }
+
+    private UserPrivacySettingPO setting(Long uid) {
+        UserPrivacySettingPO setting = privacySettingMapper.selectById(uid);
+        if (setting != null) {
+            return setting;
+        }
+        UserPrivacySettingPO defaults = new UserPrivacySettingPO();
+        defaults.setProfileVisibility("PUBLIC");
+        defaults.setIntentVisibility("PUBLIC");
+        defaults.setSearchable(1);
+        defaults.setInteractionNotification(1);
+        defaults.setSystemNotification(1);
+        return defaults;
+    }
+
+    private boolean visible(Long viewerUid, Long targetUid, String visibility) {
+        if (targetUid == null) {
+            return false;
+        }
+        if (targetUid.equals(viewerUid)) {
+            return true;
+        }
+        if ("PRIVATE".equalsIgnoreCase(visibility)) {
+            return false;
+        }
+        return !"FOLLOWERS".equalsIgnoreCase(visibility)
+                || viewerUid != null && followRepo.isFollowing(viewerUid, targetUid);
+    }
+
+    private boolean enabled(Integer value) {
+        return value == null || value == 1;
     }
 }

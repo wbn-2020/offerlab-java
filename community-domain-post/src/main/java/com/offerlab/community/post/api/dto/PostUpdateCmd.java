@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -17,4 +19,6 @@ public class PostUpdateCmd {
     private String coverUrl;
     private Integer visibility;
     private String extJson;
+    private List<Long> tagIds;
+    private List<String> tagNames;
 }

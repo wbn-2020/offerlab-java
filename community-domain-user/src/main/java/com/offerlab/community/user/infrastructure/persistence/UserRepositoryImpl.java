@@ -83,6 +83,14 @@ public class UserRepositoryImpl implements UserRepository {
         accountMapper.updateById(acc);
     }
 
+    @Override
+    public void updatePassword(Long uid, String passwordHash) {
+        UserAccountPO acc = new UserAccountPO();
+        acc.setId(uid);
+        acc.setPasswordHash(passwordHash);
+        accountMapper.updateById(acc);
+    }
+
     private User toDomain(UserAccountPO acc, UserProfilePO prof) {
         User u = User.builder()
                 .id(acc.getId())

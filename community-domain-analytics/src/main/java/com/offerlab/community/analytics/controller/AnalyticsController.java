@@ -21,8 +21,9 @@ public class AnalyticsController {
 
     @PublicApi
     @GetMapping("/trend")
-    public Result<Map<String, Object>> trend(@RequestParam(defaultValue = "30d") String range) {
-        return Result.ok(facade.getTrendDashboard(range));
+    public Result<Map<String, Object>> trend(@RequestParam(defaultValue = "30d") String range,
+                                             @RequestParam(required = false) String period) {
+        return Result.ok(facade.getTrendDashboard(period == null ? range : period));
     }
 
     @GetMapping("/me")
