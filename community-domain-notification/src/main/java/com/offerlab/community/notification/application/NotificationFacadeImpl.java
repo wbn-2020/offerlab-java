@@ -10,6 +10,7 @@ import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationMessagePO;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,8 @@ import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -61,7 +64,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
         }
         List<NotificationMessagePO> rows = mapper.selectList(q);
         if (rows.isEmpty()) return PageResult.empty();
-        List<Map<String, Object>> items = rows.stream().map(this::toItem).toList();
+        Set<Long> senderIds = rows.stream()
+                .map(NotificationMessagePO::getSenderUid)
+                .filter(id -> id != null && id > 0)
+                .collect(Collectors.toSet());
+        Map<Long, UserBriefDTO> senders = userFacade.batchGetUserBriefs(senderIds);
+        List<Map<String, Object>> items = rows.stream()
+                .map(row -> toItem(row, senders.get(row.getSenderUid())))
+                .toList();
         boolean hasMore = rows.size() == limit;
         String next = hasMore && rows.get(rows.size() - 1).getCreateTime() != null
                 ? String.valueOf(rows.get(rows.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -194,11 +204,12 @@ public class NotificationFacadeImpl implements NotificationFacade {
         return count == null ? 0L : count;
     }
 
-    private Map<String, Object> toItem(NotificationMessagePO po) {
+    private Map<String, Object> toItem(NotificationMessagePO po, UserBriefDTO sender) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("id", po.getId());
         item.put("receiverUid", po.getReceiverUid());
         item.put("senderUid", po.getSenderUid());
+        item.put("sender", sender);
         item.put("type", typeName(po.getNotifType()));
         item.put("notifType", po.getNotifType());
         item.put("targetType", po.getTargetType());

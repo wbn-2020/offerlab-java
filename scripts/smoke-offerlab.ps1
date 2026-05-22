@@ -178,6 +178,32 @@ Start-Sleep -Seconds 2
 
 $notifications = Invoke-Json "GET" "/api/v1/notifications/unread-count" $null $authorToken
 Assert-Ok "author unread notifications" $notifications
+Assert-True "author has unread notifications" ($notifications.data.total -gt 0)
+
+$notificationList = Invoke-Json "GET" "/api/v1/notifications?size=10" $null $authorToken
+Assert-Ok "author notification list" $notificationList
+$firstNotification = @($notificationList.data.items) | Select-Object -First 1
+Assert-True "notification list not empty" ($null -ne $firstNotification)
+Assert-True "notification sender enriched" ($null -ne $firstNotification.sender -and $null -ne $firstNotification.sender.nickname)
+Assert-True "notification unread flag" ($firstNotification.isRead -eq $false)
+
+$notificationTypeList = Invoke-Json "GET" "/api/v1/notifications?type=comment&size=10" $null $authorToken
+Assert-Ok "author comment notification list" $notificationTypeList
+Assert-True "comment notification filter works" (@($notificationTypeList.data.items).Count -gt 0)
+
+$markOneRead = Invoke-Json "POST" "/api/v1/notifications/read" @{ ids = @($firstNotification.id) } $authorToken
+Assert-Ok "mark one notification read" $markOneRead
+
+$notificationsAfterRead = Invoke-Json "GET" "/api/v1/notifications/unread-count" $null $authorToken
+Assert-Ok "author unread notifications after one read" $notificationsAfterRead
+Assert-True "unread decreases after one read" ($notificationsAfterRead.data.total -lt $notifications.data.total)
+
+$markAllRead = Invoke-Json "POST" "/api/v1/notifications/read-all" $null $authorToken
+Assert-Ok "mark all notifications read" $markAllRead
+
+$notificationsAfterReadAll = Invoke-Json "GET" "/api/v1/notifications/unread-count" $null $authorToken
+Assert-Ok "author unread notifications after read all" $notificationsAfterReadAll
+Assert-True "unread zero after read all" ($notificationsAfterReadAll.data.total -eq 0)
 
 $search = Invoke-Json "GET" "/api/v1/search/posts?q=$suffix"
 Assert-Ok "search post" $search
@@ -284,6 +310,11 @@ $report = [ordered]@{
   commentId = $commentId
   replyId = $replyId
   notificationTotal = $notifications.data.total
+  notificationRows = @($notificationList.data.items).Count
+  firstNotificationType = $firstNotification.type
+  firstNotificationSender = $firstNotification.sender.nickname
+  notificationUnreadAfterOneRead = $notificationsAfterRead.data.total
+  notificationUnreadAfterReadAll = $notificationsAfterReadAll.data.total
   trendTotalPosts = $trend.data.totalPosts
   userSearchRows = @($userSearch.data).Count
   recommendedUserRows = @($recommendedUsers.data).Count
