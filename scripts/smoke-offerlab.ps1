@@ -114,6 +114,40 @@ Assert-True "post interaction liked favorited" ($interactionState.data.liked -an
 $commentLike = Invoke-Json "POST" "/api/v1/comments/$commentId/like" $null $authorToken
 Assert-Ok "like comment" $commentLike
 
+$reply = Invoke-Json "POST" "/api/v1/posts/$postId/comments" @{
+  content = "Smoke reply $suffix"
+  parentId = $commentId
+  replyToUid = $actorRegister.data.uid
+} $authorToken
+Assert-Ok "reply comment" $reply
+$replyId = $reply.data.commentId
+
+$commentsWithReply = Invoke-Json "GET" "/api/v1/posts/$postId/comments?size=10" $null $authorToken
+Assert-Ok "list comments with reply" $commentsWithReply
+$rootComment = @($commentsWithReply.data.items) | Where-Object { "$($_.id)" -eq "$commentId" } | Select-Object -First 1
+Assert-True "comment root enriched" ($null -ne $rootComment -and $null -ne $rootComment.author -and $rootComment.author.uid -eq $actorRegister.data.uid)
+Assert-True "comment root liked state" ($rootComment.myLiked -eq $true -and $rootComment.canDelete -eq $true)
+$replyComment = @($rootComment.replies) | Where-Object { "$($_.id)" -eq "$replyId" } | Select-Object -First 1
+Assert-True "comment reply enriched" ($null -ne $replyComment -and $null -ne $replyComment.author -and $replyComment.author.uid -eq $authorRegister.data.uid)
+Assert-True "comment reply target user" ($null -ne $replyComment.replyToUser -and $replyComment.replyToUser.uid -eq $actorRegister.data.uid)
+
+$commentUnlike = Invoke-Json "DELETE" "/api/v1/comments/$commentId/like" $null $authorToken
+Assert-Ok "unlike comment" $commentUnlike
+
+$commentsAfterUnlike = Invoke-Json "GET" "/api/v1/posts/$postId/comments?size=10" $null $authorToken
+Assert-Ok "list comments after unlike" $commentsAfterUnlike
+$rootAfterUnlike = @($commentsAfterUnlike.data.items) | Where-Object { "$($_.id)" -eq "$commentId" } | Select-Object -First 1
+Assert-True "comment unlike reflected" ($null -ne $rootAfterUnlike -and $rootAfterUnlike.myLiked -eq $false)
+
+$deleteReply = Invoke-Json "DELETE" "/api/v1/comments/$replyId" $null $authorToken
+Assert-Ok "delete reply comment" $deleteReply
+
+$commentsAfterDelete = Invoke-Json "GET" "/api/v1/posts/$postId/comments?size=10" $null $authorToken
+Assert-Ok "list comments after reply delete" $commentsAfterDelete
+$rootAfterDelete = @($commentsAfterDelete.data.items) | Where-Object { "$($_.id)" -eq "$commentId" } | Select-Object -First 1
+$deletedReply = @($rootAfterDelete.replies) | Where-Object { "$($_.id)" -eq "$replyId" } | Select-Object -First 1
+Assert-True "deleted reply hidden" ($null -ne $rootAfterDelete -and $null -eq $deletedReply)
+
 Start-Sleep -Seconds 2
 
 $notifications = Invoke-Json "GET" "/api/v1/notifications/unread-count" $null $authorToken
@@ -186,6 +220,7 @@ $report = [ordered]@{
   adminAccount = $adminAccount
   postId = $postId
   commentId = $commentId
+  replyId = $replyId
   notificationTotal = $notifications.data.total
   trendTotalPosts = $trend.data.totalPosts
   userSearchRows = @($userSearch.data).Count
@@ -193,6 +228,10 @@ $report = [ordered]@{
   searchAuthorNickname = $firstSearchItem.author.nickname
   interactionLiked = $interactionState.data.liked
   interactionFavorited = $interactionState.data.favorited
+  commentRootAuthor = $rootComment.author.nickname
+  commentReplyAuthor = $replyComment.author.nickname
+  commentLikedAfterLike = $rootComment.myLiked
+  commentLikedAfterUnlike = $rootAfterUnlike.myLiked
   privacyIntentVisibility = $privacyUpdate.data.intentVisibility
   hiddenIntentIsNull = ($null -eq $hiddenIntent.data)
   outboxRows = @($outbox.data).Count

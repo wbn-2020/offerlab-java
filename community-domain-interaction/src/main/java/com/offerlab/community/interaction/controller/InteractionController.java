@@ -100,7 +100,7 @@ public class InteractionController {
     public Result<PageResult<CommentDTO>> comments(@PathVariable Long postId,
                                                    @RequestParam(defaultValue = "0") long cursor,
                                                    @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(facade.listComments(postId, cursor, size));
+        return Result.ok(facade.listComments(postId, UserContext.get(), cursor, size));
     }
 
     @DeleteMapping("/comments/{commentId}")

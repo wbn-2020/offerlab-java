@@ -25,7 +25,7 @@ public interface InteractionFacade {
 
     Long addComment(CommentCreateCmd cmd);
 
-    PageResult<CommentDTO> listComments(Long postId, long cursor, int size);
+    PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size);
 
     void deleteComment(Long commentId, Long operatorUid);
 
