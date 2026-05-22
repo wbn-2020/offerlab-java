@@ -46,7 +46,7 @@ public class PostFacadeImpl implements PostFacade {
         String cacheKey = CacheKeyBuilder.postDetail(postId);
         return multiLevelCache.get(cacheKey, key -> {
             Post post = postRepo.findById(postId).orElse(null);
-            return post != null ? toFullDto(post) : null;
+            return post != null && post.isVisibleTo(null, false) ? toFullDto(post) : null;
         }, PostDTO.class);
     }
 
@@ -56,7 +56,9 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, Post> posts = postRepo.batchFindByIds(postIds);
         Map<Long, PostBriefDTO> result = new HashMap<>(posts.size());
         for (Post p : posts.values()) {
-            result.put(p.getId(), toBrief(p));
+            if (p.isVisibleTo(null, false)) {
+                result.put(p.getId(), toBrief(p));
+            }
         }
         return result;
     }

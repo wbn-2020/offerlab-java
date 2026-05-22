@@ -73,4 +73,19 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
               AND msg_status = 2
             """)
     int markFailedForRetry(@Param("id") Long id);
+
+    @Update("""
+            <script>
+            UPDATE t_outbox_message
+            SET msg_status = 0,
+                next_retry_time = NULL,
+                update_time = NOW()
+            WHERE msg_status = 2
+              AND id IN
+              <foreach collection="ids" item="id" open="(" separator="," close=")">
+                #{id}
+              </foreach>
+            </script>
+            """)
+    int markFailedForRetryBatch(@Param("ids") List<Long> ids);
 }

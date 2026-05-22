@@ -9,6 +9,7 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationMessagePO;
+import com.offerlab.community.user.api.UserFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,6 +41,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private final NotificationMessageMapper mapper;
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
+    private final UserFacade userFacade;
 
     @Override
     public PageResult<Map<String, Object>> listNotifications(Long uid, String type, long cursor, int size) {
@@ -158,6 +160,13 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private void create(Long receiverUid, Long senderUid, Integer notifType,
                         Integer targetType, Long targetId, Map<String, Object> content) {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
+            return;
+        }
+        if (TYPE_SYSTEM == notifType) {
+            if (!userFacade.allowsSystemNotification(receiverUid)) {
+                return;
+            }
+        } else if (!userFacade.allowsInteractionNotification(receiverUid)) {
             return;
         }
         NotificationMessagePO po = new NotificationMessagePO();

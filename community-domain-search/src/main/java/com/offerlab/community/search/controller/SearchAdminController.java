@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/search/admin")
@@ -30,5 +33,11 @@ public class SearchAdminController {
     public Result<SearchIndexTaskService.SearchIndexTask> getTask(@PathVariable String taskId) {
         adminPermissionService.requireAdmin(UserContext.require());
         return Result.ok(taskService.getTask(taskId));
+    }
+
+    @GetMapping("/tasks")
+    public Result<List<SearchIndexTaskService.SearchIndexTask>> listTasks(@RequestParam(defaultValue = "10") int limit) {
+        adminPermissionService.requireAdmin(UserContext.require());
+        return Result.ok(taskService.listRecentTasks(limit));
     }
 }

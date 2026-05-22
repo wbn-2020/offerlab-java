@@ -31,4 +31,14 @@ public interface UserFacade {
     boolean isBigV(Long uid);
 
     UserIntentDTO getUserIntent(Long uid);
+
+    boolean isProfileVisible(Long viewerUid, Long targetUid);
+
+    boolean isIntentVisible(Long viewerUid, Long targetUid);
+
+    boolean isSearchable(Long uid);
+
+    boolean allowsInteractionNotification(Long uid);
+
+    boolean allowsSystemNotification(Long uid);
 }

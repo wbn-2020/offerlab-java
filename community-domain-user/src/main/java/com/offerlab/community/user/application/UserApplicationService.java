@@ -7,6 +7,8 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.user.api.event.UserFollowedEvent;
@@ -14,7 +16,10 @@ import com.offerlab.community.user.domain.model.User;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
 import com.offerlab.community.user.infrastructure.persistence.mapper.UserPrivacySettingMapper;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserProfileMapper;
 import com.offerlab.community.user.infrastructure.persistence.po.UserPrivacySettingPO;
+import com.offerlab.community.user.infrastructure.persistence.po.UserProfilePO;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 用户应用服务：编排领域逻辑，事务边界
@@ -39,6 +45,7 @@ public class UserApplicationService {
     private final EventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final UserPrivacySettingMapper privacySettingMapper;
+    private final UserProfileMapper profileMapper;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -80,6 +87,25 @@ public class UserApplicationService {
 
     public void logout(String token) {
         jwtService.invalidate(token);
+    }
+
+    @Transactional
+    public void changePassword(Long uid, String oldPassword, String newPassword) {
+        User user = getUser(uid);
+        if (!StringUtils.hasText(oldPassword) || !passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
+            throw new BizException(ErrorCode.PASSWORD_ERROR);
+        }
+        if (!StringUtils.hasText(newPassword) || newPassword.length() < 6 || newPassword.length() > 64
+                || oldPassword.equals(newPassword)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        userRepo.updatePassword(uid, passwordEncoder.encode(newPassword));
+        jwtService.invalidateAll(uid);
+    }
+
+    public void logoutAll(Long uid) {
+        getUser(uid);
+        jwtService.invalidateAll(uid);
     }
 
     @Transactional
@@ -161,6 +187,24 @@ public class UserApplicationService {
             privacySettingMapper.insert(po);
         }
         return toPrivacyDTO(po);
+    }
+
+    public List<UserBriefDTO> searchUsers(String keyword, Long viewerUid, int size, UserFacade userFacade) {
+        if (!StringUtils.hasText(keyword)) {
+            return List.of();
+        }
+        int limit = Math.max(1, Math.min(size, 20));
+        return profileMapper.selectList(new LambdaQueryWrapper<UserProfilePO>()
+                        .like(UserProfilePO::getNickname, keyword.trim())
+                        .eq(UserProfilePO::getIsDeleted, 0)
+                        .last("LIMIT " + Math.min(limit * 3, 60)))
+                .stream()
+                .map(UserProfilePO::getId)
+                .filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))
+                .map(userFacade::getUserBrief)
+                .filter(java.util.Objects::nonNull)
+                .limit(limit)
+                .toList();
     }
 
     private static UserPrivacySettingPO defaultPrivacySetting(Long uid) {

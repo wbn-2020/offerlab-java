@@ -111,6 +111,18 @@ Assert-Ok "search post" $search
 $trend = Invoke-Json "GET" "/api/v1/dashboard/trend?range=7d"
 Assert-Ok "trend dashboard" $trend
 
+$intent = Invoke-Json "PUT" "/api/v1/users/me/intent" @{
+  targetCompanies = @("SmokeCo")
+  targetPositions = @("Backend")
+  yearsOfExp = 3
+  expectedCity = "Shanghai"
+  techStack = @("Java", "Spring Boot")
+} $authorToken
+Assert-Ok "update author intent" $intent
+
+$userSearch = Invoke-Json "GET" "/api/v1/users/search?q=SmokeActor&size=5"
+Assert-Ok "search users" $userSearch
+
 $privacy = Invoke-Json "GET" "/api/v1/users/me/privacy-settings" $null $authorToken
 Assert-Ok "privacy settings" $privacy
 
@@ -122,6 +134,22 @@ $privacyUpdate = Invoke-Json "PUT" "/api/v1/users/me/privacy-settings" @{
   systemNotification = $false
 } $authorToken
 Assert-Ok "update privacy settings" $privacyUpdate
+
+$hiddenIntent = Invoke-Json "GET" "/api/v1/users/$($authorRegister.data.uid)/intent" $null $actorToken
+Assert-Ok "privacy intent hidden" $hiddenIntent
+
+$changePassword = Invoke-Json "PUT" "/api/v1/users/me/password" @{
+  oldPassword = $password
+  newPassword = "password456"
+} $actorToken
+Assert-Ok "change password" $changePassword
+
+$actorRelogin = Invoke-Json "POST" "/api/v1/auth/login" @{ email = $actorEmail; password = "password456" }
+Assert-Ok "login changed password" $actorRelogin
+$actorChangedToken = $actorRelogin.data.token
+
+$logoutAll = Invoke-Json "POST" "/api/v1/users/me/logout-all" $null $actorChangedToken
+Assert-Ok "logout all sessions" $logoutAll
 
 $ops = Invoke-Json "GET" "/api/v1/ops/status" $null $adminToken
 Assert-Ok "ops status" $ops
@@ -140,7 +168,9 @@ $report = [ordered]@{
   commentId = $commentId
   notificationTotal = $notifications.data.total
   trendTotalPosts = $trend.data.totalPosts
+  userSearchRows = @($userSearch.data).Count
   privacyIntentVisibility = $privacyUpdate.data.intentVisibility
+  hiddenIntentIsNull = ($null -eq $hiddenIntent.data)
   outboxRows = @($outbox.data).Count
   steps = $steps
 }

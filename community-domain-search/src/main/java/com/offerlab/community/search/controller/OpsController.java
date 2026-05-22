@@ -82,6 +82,21 @@ public class OpsController {
         return Result.ok(Map.of("id", id, "retried", updated > 0));
     }
 
+    @PostMapping("/outbox/retry-batch")
+    public Result<Map<String, Object>> retryOutboxBatch(@RequestBody OutboxRetryBatchRequest request) {
+        adminPermissionService.requireAdmin(UserContext.require());
+        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .limit(100)
+                .toList();
+        if (ids.isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int updated = outboxMessageMapper.markFailedForRetryBatch(ids);
+        return Result.ok(Map.of("requested", ids.size(), "retried", updated));
+    }
+
     @GetMapping("/admins")
     public Result<List<Map<String, Object>>> listAdmins(@RequestParam(defaultValue = "50") int limit) {
         adminPermissionService.requireAdmin(UserContext.require());
@@ -174,5 +189,8 @@ public class OpsController {
     }
 
     public record AdminStatusRequest(Boolean enabled, String remark) {
+    }
+
+    public record OutboxRetryBatchRequest(List<Long> ids) {
     }
 }

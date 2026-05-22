@@ -110,6 +110,7 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 | GET | `/api/v1/posts` | 帖子列表 | 否 |
 | POST | `/api/v1/posts` | 发布帖子 | 是 |
 | GET | `/api/v1/posts/{postId}` | 帖子详情 | 否 |
+| POST | `/api/v1/posts/{postId}/reports` | 举报帖子 | 是 |
 | POST/DELETE | `/api/v1/posts/{postId}/like` | 点赞/取消 | 是 |
 | POST/DELETE | `/api/v1/posts/{postId}/favorite` | 收藏/取消 | 是 |
 | POST | `/api/v1/posts/{postId}/comments` | 评论 | 是 |
@@ -121,6 +122,8 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 | GET | `/api/v1/search/status` | 搜索状态 | 否 |
 | POST | `/api/v1/search/admin/rebuild` | 异步重建索引 | 是，admin |
 | GET | `/api/v1/search/admin/tasks/{taskId}` | 查询重建任务 | 是，admin |
+| GET | `/api/v1/posts/admin/reports` | 最近举报列表 | 是，admin |
+| POST | `/api/v1/posts/admin/reports/{reportId}/review` | 审核举报，通过时下架帖子 | 是，admin |
 | GET | `/api/v1/ops/status` | 运维状态 | 是，admin |
 | GET | `/api/v1/ops/outbox` | Outbox 最近消息 | 是，admin |
 | POST | `/api/v1/ops/outbox/{id}/retry` | 单条失败消息重试 | 是，admin |

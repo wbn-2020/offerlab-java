@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -43,6 +45,14 @@ public class SearchIndexTaskService {
     public SearchIndexTask getTask(String taskId) {
         SearchIndexTask task = tasks.get(taskId);
         return task == null ? null : snapshot(task);
+    }
+
+    public List<SearchIndexTask> listRecentTasks(int limit) {
+        return tasks.values().stream()
+                .sorted(Comparator.comparing(SearchIndexTask::getCreatedAt).reversed())
+                .limit(Math.max(1, Math.min(limit, 20)))
+                .map(SearchIndexTaskService::snapshot)
+                .toList();
     }
 
     private void runRebuild(String taskId) {
