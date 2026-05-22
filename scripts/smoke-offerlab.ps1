@@ -279,6 +279,49 @@ Assert-Ok "update privacy settings" $privacyUpdate
 $hiddenIntent = Invoke-Json "GET" "/api/v1/users/$($authorRegister.data.uid)/intent" $null $actorToken
 Assert-Ok "privacy intent hidden" $hiddenIntent
 
+$postReport = Invoke-Json "POST" "/api/v1/posts/$postId/reports" @{
+  reason = "SPAM"
+  detail = "Smoke post moderation report $suffix"
+} $actorToken
+Assert-Ok "report post" $postReport
+$postReportId = $postReport.data.reportId
+
+$postReports = Invoke-Json "GET" "/api/v1/posts/admin/reports?status=0&limit=20" $null $adminToken
+Assert-Ok "admin list post reports" $postReports
+$pendingPostReport = @($postReports.data) | Where-Object { "$($_.id)" -eq "$postReportId" } | Select-Object -First 1
+Assert-True "admin sees post report" ($null -ne $pendingPostReport)
+
+$rejectPostReport = Invoke-Json "POST" "/api/v1/posts/admin/reports/$postReportId/review" @{
+  approved = $false
+  note = "Smoke reject"
+} $adminToken
+Assert-Ok "reject post report" $rejectPostReport
+Assert-True "post report rejected" ($rejectPostReport.data.reportStatus -eq 2)
+
+$commentReport = Invoke-Json "POST" "/api/v1/comments/$commentId/reports" @{
+  reason = "ABUSE"
+  detail = "Smoke comment moderation report $suffix"
+} $authorToken
+Assert-Ok "report comment" $commentReport
+$commentReportId = $commentReport.data.reportId
+
+$commentReports = Invoke-Json "GET" "/api/v1/comments/admin/reports?status=0&limit=20" $null $adminToken
+Assert-Ok "admin list comment reports" $commentReports
+$pendingCommentReport = @($commentReports.data) | Where-Object { "$($_.id)" -eq "$commentReportId" } | Select-Object -First 1
+Assert-True "admin sees comment report" ($null -ne $pendingCommentReport)
+
+$approveCommentReport = Invoke-Json "POST" "/api/v1/comments/admin/reports/$commentReportId/review" @{
+  approved = $true
+  note = "Smoke hide comment"
+} $adminToken
+Assert-Ok "approve comment report" $approveCommentReport
+Assert-True "comment report approved" ($approveCommentReport.data.reportStatus -eq 1)
+
+$commentsAfterModeration = Invoke-Json "GET" "/api/v1/posts/$postId/comments?size=10" $null $authorToken
+Assert-Ok "list comments after moderation" $commentsAfterModeration
+$hiddenModeratedComment = @($commentsAfterModeration.data.items) | Where-Object { "$($_.id)" -eq "$commentId" } | Select-Object -First 1
+Assert-True "moderated comment hidden" ($null -eq $hiddenModeratedComment)
+
 $changePassword = Invoke-Json "PUT" "/api/v1/users/me/password" @{
   oldPassword = $password
   newPassword = "password456"
@@ -325,6 +368,8 @@ $report = [ordered]@{
   postId = $postId
   commentId = $commentId
   replyId = $replyId
+  postReportId = $postReportId
+  commentReportId = $commentReportId
   notificationTotal = $notifications.data.total
   notificationRows = @($notificationList.data.items).Count
   firstNotificationType = $firstNotification.type
@@ -355,6 +400,9 @@ $report = [ordered]@{
   commentLikedAfterUnlike = $rootAfterUnlike.myLiked
   privacyIntentVisibility = $privacyUpdate.data.intentVisibility
   hiddenIntentIsNull = ($null -eq $hiddenIntent.data)
+  postReportRejected = ($rejectPostReport.data.reportStatus -eq 2)
+  commentReportApproved = ($approveCommentReport.data.reportStatus -eq 1)
+  moderatedCommentHidden = ($null -eq $hiddenModeratedComment)
   outboxRows = @($outbox.data).Count
   steps = $steps
 }
