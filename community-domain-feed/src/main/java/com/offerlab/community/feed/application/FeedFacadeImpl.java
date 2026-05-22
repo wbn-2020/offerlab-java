@@ -10,11 +10,14 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
+import com.offerlab.community.user.api.dto.UserIntentDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -33,6 +36,7 @@ public class FeedFacadeImpl implements FeedFacade {
     private final PostFacade postFacade;
     private final UserFacade userFacade;
     private final InteractionFacade interactionFacade;
+    private final ObjectMapper objectMapper;
 
     @Override
     public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size) {
@@ -49,8 +53,9 @@ public class FeedFacadeImpl implements FeedFacade {
         if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
             return PageResult.empty();
         }
+        UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
         List<PostBriefDTO> ranked = page.getItems().stream()
-                .sorted(Comparator.comparingDouble(this::recommendScore).reversed()
+                .sorted(Comparator.<PostBriefDTO>comparingDouble(post -> recommendScore(post, intent)).reversed()
                         .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(size)
                 .toList();
@@ -151,7 +156,7 @@ public class FeedFacadeImpl implements FeedFacade {
         return PageResult.of(items, nextCursor, hasMore);
     }
 
-    private double recommendScore(PostBriefDTO post) {
+    private double recommendScore(PostBriefDTO post, UserIntentDTO intent) {
         PostCounterDTO counter = post.getCounter();
         double heat = 0D;
         if (counter != null) {
@@ -164,7 +169,54 @@ public class FeedFacadeImpl implements FeedFacade {
                 ? 0D
                 : Math.max(0D, 72D - Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
         double tagBonus = post.getTags() == null ? 0D : Math.min(post.getTags().size(), 3) * 1.5D;
-        return heat + recency + tagBonus;
+        return heat + recency + tagBonus + intentScore(post, intent);
+    }
+
+    private double intentScore(PostBriefDTO post, UserIntentDTO intent) {
+        if (intent == null) {
+            return 0D;
+        }
+        JsonNode ext = parseExt(post.getExtJson());
+        String company = clean(ext.path("company").asText(""));
+        String position = clean(ext.path("position").asText(""));
+        String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
+        double score = 0D;
+        if (matchesAny(company, intent.getTargetCompanies())) {
+            score += 28D;
+        }
+        if (matchesAny(position, intent.getTargetPositions())) {
+            score += 22D;
+        }
+        if (matchesAny(content, intent.getTechStack())) {
+            score += 14D;
+        }
+        return score;
+    }
+
+    private JsonNode parseExt(String extJson) {
+        if (extJson == null || extJson.isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(extJson);
+        } catch (Exception e) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private static boolean matchesAny(String source, List<String> candidates) {
+        String text = clean(source).toLowerCase();
+        if (text.isBlank() || candidates == null || candidates.isEmpty()) {
+            return false;
+        }
+        return candidates.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .map(item -> item.trim().toLowerCase())
+                .anyMatch(item -> text.contains(item) || item.contains(text));
+    }
+
+    private static String clean(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static long safe(Long value) {

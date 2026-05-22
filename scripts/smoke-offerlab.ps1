@@ -2,7 +2,9 @@ param(
   [string]$BaseUrl = "http://127.0.0.1:8080",
   [string]$ReportPath = "C:\codeware\offerlab-smoke-report.json",
   [string]$AdminEmail = "",
-  [string]$AdminPassword = "password123"
+  [string]$AdminPassword = "password123",
+  [string]$KafkaBootstrap = "localhost:9092",
+  [string]$KafkaHome = "C:\codeware\kafka_2.13-3.6.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +48,30 @@ function Assert-True {
     throw "$Name failed"
   }
   $script:steps += [ordered]@{ name = $Name; ok = $true }
+}
+
+function Test-KafkaTool {
+  param([string]$Name)
+  $tool = Join-Path $KafkaHome "bin\windows\$Name"
+  if (Test-Path $tool) {
+    return $tool
+  }
+  return $null
+}
+
+$kafkaOk = $false
+$kafkaTopics = @()
+$kafkaLag = $null
+$topicsTool = Test-KafkaTool "kafka-topics.bat"
+$groupsTool = Test-KafkaTool "kafka-consumer-groups.bat"
+if ($topicsTool) {
+  try {
+    $kafkaTopics = @(& $topicsTool --bootstrap-server $KafkaBootstrap --list 2>$null)
+    $kafkaOk = $kafkaTopics -contains "post.published"
+    Assert-True "kafka post.published topic available" $kafkaOk
+  } catch {
+    Assert-True "kafka post.published topic available" $false
+  }
 }
 
 $steps = @()
@@ -170,6 +196,27 @@ $intent = Invoke-Json "PUT" "/api/v1/users/me/intent" @{
 } $authorToken
 Assert-Ok "update author intent" $intent
 
+$recommendFeed = Invoke-Json "GET" "/api/v1/feeds/recommend?size=10" $null $authorToken
+Assert-Ok "recommend feed" $recommendFeed
+$recommendedPost = @($recommendFeed.data.items) | Where-Object { "$($_.post.id)" -eq "$postId" } | Select-Object -First 1
+Assert-True "recommend feed includes intent matched post" ($null -ne $recommendedPost)
+
+$hotFeed = Invoke-Json "GET" "/api/v1/feeds/hot?size=10" $null $authorToken
+Assert-Ok "hot feed" $hotFeed
+Assert-True "hot feed not empty" (@($hotFeed.data.items).Count -gt 0)
+
+$searchHot = Invoke-Json "GET" "/api/v1/search/posts?q=$suffix&sort=hot&size=5"
+Assert-Ok "search post hot sort" $searchHot
+Assert-True "search hot result enriched" (@($searchHot.data.items).Count -gt 0 -and $null -ne @($searchHot.data.items)[0].author)
+
+$searchLatest = Invoke-Json "GET" "/api/v1/search/posts?q=$suffix&sort=latest&size=5"
+Assert-Ok "search post latest sort" $searchLatest
+Assert-True "search latest result enriched" (@($searchLatest.data.items).Count -gt 0 -and $null -ne @($searchLatest.data.items)[0].counter)
+
+$searchEmpty = Invoke-Json "GET" "/api/v1/search/posts?q=NoSuchOfferLabKeyword$suffix&company=NoSuchCompany&position=NoSuchPosition&sort=hot&size=5"
+Assert-Ok "search empty state api" $searchEmpty
+Assert-True "search empty returns no items" (@($searchEmpty.data.items).Count -eq 0)
+
 $userSearch = Invoke-Json "GET" "/api/v1/users/search?q=SmokeActor&size=5"
 Assert-Ok "search users" $userSearch
 
@@ -211,6 +258,21 @@ Assert-Ok "ops status" $ops
 $outbox = Invoke-Json "GET" "/api/v1/ops/outbox?limit=10" $null $adminToken
 Assert-Ok "outbox list" $outbox
 
+if ($groupsTool) {
+  try {
+    $groupLines = @(& $groupsTool --bootstrap-server $KafkaBootstrap --describe --group offerlab-feed-fanout 2>$null)
+    $dataLine = $groupLines | Where-Object { $_ -match "post\.published" } | Select-Object -First 1
+    if ($dataLine) {
+      $parts = $dataLine -split "\s+"
+      $lagText = @($parts | Where-Object { $_ -match "^\d+$" })[-1]
+      $kafkaLag = [int]$lagText
+      Assert-True "kafka feed fanout lag zero" ($kafkaLag -eq 0)
+    }
+  } catch {
+    Assert-True "kafka feed fanout lag zero" $false
+  }
+}
+
 $report = [ordered]@{
   ok = $true
   baseUrl = $BaseUrl
@@ -225,6 +287,15 @@ $report = [ordered]@{
   trendTotalPosts = $trend.data.totalPosts
   userSearchRows = @($userSearch.data).Count
   recommendedUserRows = @($recommendedUsers.data).Count
+  recommendFeedRows = @($recommendFeed.data.items).Count
+  hotFeedRows = @($hotFeed.data.items).Count
+  recommendContainsPost = ($null -ne $recommendedPost)
+  searchHotRows = @($searchHot.data.items).Count
+  searchLatestRows = @($searchLatest.data.items).Count
+  searchEmptyRows = @($searchEmpty.data.items).Count
+  kafkaOk = $kafkaOk
+  kafkaTopicCount = @($kafkaTopics).Count
+  kafkaLag = $kafkaLag
   searchAuthorNickname = $firstSearchItem.author.nickname
   interactionLiked = $interactionState.data.liked
   interactionFavorited = $interactionState.data.favorited
