@@ -32,6 +32,9 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // 先初始化 traceId，确保鉴权失败等早期异常也能带链路信息返回。
+        TraceContext.ensure();
+
         // 非 controller 直接放行（静态资源等）
         if (!(handler instanceof HandlerMethod hm)) {
             return true;
@@ -47,6 +50,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             try {
                 uid = jwtService.parseUid(auth.substring(PREFIX.length()));
             } catch (Exception e) {
+                // 公共接口允许无登录访问，非法 token 按匿名处理；受保护接口后续统一抛 401。
                 log.debug("invalid token: {}", e.getMessage());
             }
         }
@@ -59,13 +63,13 @@ public class AuthInterceptor implements HandlerInterceptor {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
 
-        TraceContext.ensure();
         return true;
     }
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
                                 Object handler, Exception ex) {
+        // UserContext/TraceContext 均为线程上下文，必须在请求结束时清理，避免线程复用串号。
         UserContext.clear();
         TraceContext.clear();
     }

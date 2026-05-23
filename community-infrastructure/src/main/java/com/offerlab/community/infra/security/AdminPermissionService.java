@@ -3,6 +3,7 @@ package com.offerlab.community.infra.security;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -15,11 +16,14 @@ public class AdminPermissionService {
 
     private final Set<Long> adminUids;
     private final AdminRoleMapper adminRoleMapper;
+    private final Environment environment;
 
     public AdminPermissionService(@Value("${offerlab.admin.uid-whitelist:${OFFERLAB_ADMIN_UIDS:}}") String whitelist,
-                                  AdminRoleMapper adminRoleMapper) {
+                                  AdminRoleMapper adminRoleMapper,
+                                  Environment environment) {
         this.adminUids = parseWhitelist(whitelist);
         this.adminRoleMapper = adminRoleMapper;
+        this.environment = environment;
     }
 
     public void requireAdmin(Long uid) {
@@ -62,11 +66,16 @@ public class AdminPermissionService {
         if (adminTableExists() && countAdminRows() > 0) {
             return "RBAC_EMPTY";
         }
+        if (environment.matchesProfiles("prod")) {
+            return "LOCKED";
+        }
         return "LOCAL_OPEN";
     }
 
     public boolean isLocalOpenMode() {
-        return adminUids.isEmpty() && (!adminTableExists() || countAdminRows() == 0);
+        return !environment.matchesProfiles("prod")
+                && adminUids.isEmpty()
+                && (!adminTableExists() || countAdminRows() == 0);
     }
 
     public boolean whitelistEnabled() {

@@ -3,8 +3,11 @@ package com.offerlab.community.infra.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -21,13 +24,27 @@ import java.util.Date;
 @RequiredArgsConstructor
 public class JwtService {
 
-    @Value("${offerlab.jwt.secret:offerlab-default-secret-key-please-change-in-prod-1234567890}")
+    private static final String DEFAULT_SECRET = "offerlab-default-secret-key-please-change-in-prod-1234567890";
+    private static final String APP_DEFAULT_SECRET = "offerlab-dev-secret-key-please-change-in-prod-1234567890abcdef";
+
+    @Value("${offerlab.jwt.secret:" + DEFAULT_SECRET + "}")
     private String secret;
 
     @Value("${offerlab.jwt.ttl-hours:168}")
     private long ttlHours;
 
     private final StringRedisTemplate redis;
+
+    @Autowired
+    private Environment environment;
+
+    @PostConstruct
+    void validateSecret() {
+        if (environment.matchesProfiles("prod")
+                && (DEFAULT_SECRET.equals(secret) || APP_DEFAULT_SECRET.equals(secret))) {
+            throw new IllegalStateException("生产环境必须通过 JWT_SECRET 配置非默认 JWT 密钥");
+        }
+    }
 
     private SecretKey key() {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));

@@ -57,6 +57,7 @@ public class InteractionController {
     @GetMapping("/posts/{postId}/interaction")
     public Result<Map<String, Object>> postInteraction(@PathVariable Long postId) {
         Long uid = UserContext.get();
+        // 匿名访问时固定返回 false，前端可直接渲染未互动状态而不必额外判断登录态。
         return Result.ok(Map.of(
                 "liked", uid != null && facade.hasLiked(uid, postId),
                 "favorited", uid != null && facade.hasFavorited(uid, postId)
@@ -70,15 +71,17 @@ public class InteractionController {
     }
 
     @PostMapping("/posts/{postId}/favorite")
-    public Result<Void> favorite(@PathVariable Long postId) {
+    public Result<Map<String, Object>> favorite(@PathVariable Long postId) {
+        // 返回 favorited 与点赞接口保持一致，便于前端乐观更新后校正状态。
         facade.favorite(UserContext.require(), postId);
-        return Result.ok();
+        return Result.ok(Map.of("favorited", true));
     }
 
     @DeleteMapping("/posts/{postId}/favorite")
-    public Result<Void> unfavorite(@PathVariable Long postId) {
+    public Result<Map<String, Object>> unfavorite(@PathVariable Long postId) {
+        // 返回 favorited 与点赞接口保持一致，便于前端乐观更新后校正状态。
         facade.unfavorite(UserContext.require(), postId);
-        return Result.ok();
+        return Result.ok(Map.of("favorited", false));
     }
 
     @GetMapping("/users/me/favorite-posts")
@@ -91,6 +94,7 @@ public class InteractionController {
     @RateLimit(key = "'comment:' + #uid", rate = 30, per = 60)
     public Result<Map<String, Long>> comment(@PathVariable Long postId, @Valid @RequestBody CommentReq req) {
         Long uid = UserContext.require();
+        // parentId/replyToUid 同时传入时表示楼中楼回复，领域层负责归并根评论关系。
         Long id = facade.addComment(CommentCreateCmd.builder()
                 .postId(postId)
                 .authorUid(uid)
@@ -133,6 +137,7 @@ public class InteractionController {
     public Result<CommentReportDTO> reviewCommentReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
         adminPermissionService.requireAdmin(uid);
+        // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
 
