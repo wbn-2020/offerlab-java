@@ -1,6 +1,7 @@
 package com.offerlab.community.infra.web.ratelimit;
 
 import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.exception.SystemException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.redis.lua.LuaScriptLoader;
 import com.offerlab.community.infra.security.UserContext;
@@ -23,7 +24,7 @@ import java.util.Collections;
 
 /**
  * 限流切面：调用 Redis Lua 滑动窗口
- * key 支持 SpEL：#cmd.uid、@userContext.require()
+ * key 支持 SpEL：#uid、#cmd.uid 等方法上下文变量
  */
 @Slf4j
 @Aspect
@@ -68,15 +69,19 @@ public class RateLimitAspect {
             Method method = ms.getMethod();
             MethodBasedEvaluationContext ctx = new MethodBasedEvaluationContext(
                     null, method, pjp.getArgs(), paramNames);
-            // 注入便捷变量
+            // 控制器通常在方法体内才读取 uid，这里提前注入便捷变量供限流 key 使用。
             Long uid = UserContext.get();
             ctx.setVariable("uid", uid);
             Expression expr = parser.parseExpression(spel);
             Object value = expr.getValue(ctx);
+            // key 解析失败必须阻断请求，避免所有用户退化到同一个字面量限流桶。
+            if (value == null || String.valueOf(value).isBlank()) {
+                throw new IllegalStateException("Rate limit key resolved to blank value");
+            }
             return String.valueOf(value);
         } catch (Exception e) {
-            log.warn("resolve rate limit key failed: spel={}, fallback to literal", spel);
-            return spel;
+            log.error("resolve rate limit key failed: spel={}", spel, e);
+            throw new SystemException("Resolve rate limit key failed", e);
         }
     }
 }

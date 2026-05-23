@@ -2,7 +2,7 @@ spring:
   application:
     name: offerlab-community
   profiles:
-    active: dev
+    active: ${SPRING_PROFILES_ACTIVE:dev}
 
   datasource:
     url: jdbc:mysql://localhost:3306/offerlab?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
@@ -74,6 +74,9 @@ offerlab:
     bigv-threshold: 1000
     inbox-capacity: 1000
     inbox-ttl-seconds: 604800
+  kafka:
+    # 本地单 broker 默认 1，生产环境可按 topic 分区数调高，避免无效消费者线程反复协调。
+    listener-concurrency: ${OFFERLAB_KAFKA_LISTENER_CONCURRENCY:1}
   elasticsearch:
     enabled: true
     url: ${ELASTICSEARCH_URL:http://127.0.0.1:9200}

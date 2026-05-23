@@ -56,6 +56,7 @@ public class PostFacadeImpl implements PostFacade {
         String cacheKey = CacheKeyBuilder.postDetail(postId);
         PostDTO dto = multiLevelCache.get(cacheKey, key -> {
             Post post = postRepo.findById(postId).orElse(null);
+            // 详情缓存只缓存公开可见内容，避免后续匿名访问命中受限帖子。
             return post != null && post.isVisibleTo(null, false) ? toFullDto(post) : null;
         }, PostDTO.class);
         return enrichFull(dto);
@@ -121,11 +122,15 @@ public class PostFacadeImpl implements PostFacade {
     @Override
     public void updatePost(PostUpdateCmd cmd) {
         postService.update(cmd);
+        // 帖子正文、可见性和标签都可能变化，更新成功后必须清理详情缓存。
+        multiLevelCache.evict(CacheKeyBuilder.postDetail(cmd.getPostId()));
     }
 
     @Override
     public void deletePost(Long postId, Long operatorUid) {
         postService.delete(postId, operatorUid);
+        // 删除走逻辑删除，仍需清详情缓存，避免旧内容继续对外可见。
+        multiLevelCache.evict(CacheKeyBuilder.postDetail(postId));
     }
 
     @Override
@@ -168,6 +173,7 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
         List<PostBriefDTO> items = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
         enrichBriefs(items);
+        // 普通列表使用 createTime 毫秒时间戳作为游标，前端需原样传回。
         boolean hasMore = list.size() == size;
         String next = hasMore
                 ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -179,6 +185,7 @@ public class PostFacadeImpl implements PostFacade {
         if (list.isEmpty()) return PageResult.empty();
         List<Long> postIds = list.stream().map(PostPO::getId).toList();
         Map<Long, List<TagDTO>> tags = tagsByPostIds(postIds);
+        // 热榜直接查 PO，需要额外批量取扩展字段，避免逐条查询扩展表。
         Map<Long, String> extJson = extensionMapper.selectBatchIds(postIds).stream()
                 .collect(Collectors.toMap(PostExtensionPO::getPostId, PostExtensionPO::getExtJson, (a, b) -> a));
         List<PostBriefDTO> items = list.stream()

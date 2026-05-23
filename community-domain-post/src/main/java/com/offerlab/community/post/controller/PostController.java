@@ -64,6 +64,7 @@ public class PostController {
     @PutMapping("/{postId}")
     public Result<Void> update(@PathVariable Long postId, @RequestBody UpdateReq req) {
         Long uid = UserContext.require();
+        // 更新后只返回成功状态；详情接口会按可见性重新拉取，避免私密帖被匿名视角误判为空。
         postFacade.updatePost(PostUpdateCmd.builder()
                 .postId(postId)
                 .operatorUid(uid)
@@ -88,6 +89,7 @@ public class PostController {
     @GetMapping("/{postId}")
     public Result<PostDTO> get(@PathVariable Long postId) {
         PostDTO p = postFacade.getPost(postId);
+        // 只有实际可见的帖子才计浏览，避免不存在或不可见内容污染计数。
         if (p != null) {
             postService.incrView(postId);
         }
@@ -109,6 +111,7 @@ public class PostController {
     @PostMapping("/{postId}/reports")
     @RateLimit(key = "'post:report:' + #postId + ':' + #uid", rate = 10, per = 86400)
     public Result<Map<String, Long>> report(@PathVariable Long postId, @Valid @RequestBody ReportReq req) {
+        // 举报写入后进入管理员审核流；这里仅返回 reportId，审核动作由 admin 接口处理。
         Long reportId = reportService.reportPost(postId, UserContext.require(), req.getReason(), req.getDetail());
         return Result.ok(Map.of("reportId", reportId));
     }
@@ -124,6 +127,7 @@ public class PostController {
     public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
         adminPermissionService.requireAdmin(uid);
+        // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
 
@@ -144,6 +148,7 @@ public class PostController {
         private List<String> tagNames;
 
         private List<Long> effectiveTagIds() {
+            // tags 是早期请求字段，tagIds 是当前字段；保留兼容避免旧草稿发布失败。
             return tagIds != null ? tagIds : tags;
         }
     }
@@ -160,6 +165,7 @@ public class PostController {
         private List<String> tagNames;
 
         private List<Long> effectiveTagIds() {
+            // tags 是早期请求字段，tagIds 是当前字段；保留兼容避免旧编辑页提交失败。
             return tagIds != null ? tagIds : tags;
         }
     }
