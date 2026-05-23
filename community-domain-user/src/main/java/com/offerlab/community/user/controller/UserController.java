@@ -44,6 +44,7 @@ public class UserController {
             if (viewer != null && !viewer.equals(uid)) {
                 dto.setIsFollowing(userFacade.isFollowing(viewer, uid));
             }
+            // 公开接口允许匿名访问，但返回前必须按访问者身份裁剪隐私字段。
             boolean profileVisible = userFacade.isProfileVisible(viewer, uid);
             dto.setProfileVisible(profileVisible);
             dto.setIntentVisible(userFacade.isIntentVisible(viewer, uid));
@@ -88,6 +89,7 @@ public class UserController {
     @PutMapping("/me/intent")
     public Result<Void> updateIntent(@RequestBody UserIntentDTO intent) {
         Long uid = UserContext.require();
+        // UserIntentDTO 同时兼容 targetCity/expectedCity，避免旧前端保存后丢城市字段。
         userService.updateIntent(uid, intent);
         return Result.ok();
     }
@@ -149,6 +151,7 @@ public class UserController {
                 .map(userFacade::getUserBrief)
                 .filter(java.util.Objects::nonNull)
                 .toList();
+        // 关注列表游标使用最后一个 uid，前端需把 nextCursor 原样带回。
         boolean hasMore = ids.size() == size;
         String next = hasMore ? String.valueOf(ids.get(ids.size() - 1)) : null;
         return PageResult.of(items, next, hasMore);
@@ -181,6 +184,7 @@ public class UserController {
         private String signature;
 
         private String effectiveBio() {
+            // signature 是早期前端字段名，新旧字段同时出现时以 bio 为准。
             return bio != null ? bio : signature;
         }
     }

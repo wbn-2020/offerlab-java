@@ -150,6 +150,7 @@ public class UserApplicationService {
     public void updateIntent(Long uid, UserIntentDTO intent) {
         User u = getUser(uid);
         try {
+            // 求职意向当前以 JSON 存在用户资料表，DTO 需保持字段兼容后再序列化。
             u.setIntentJson(objectMapper.writeValueAsString(intent));
         } catch (Exception e) {
             throw new BizException(ErrorCode.PARAM_ERROR);
@@ -162,6 +163,7 @@ public class UserApplicationService {
         getUser(uid);
         UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
         if (po == null) {
+            // 首次访问即落默认配置，后续隐私判断可只面对显式记录或同一套默认值。
             po = defaultPrivacySetting(uid);
             privacySettingMapper.insert(po);
         }
@@ -174,6 +176,7 @@ public class UserApplicationService {
         UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
         boolean exists = po != null;
         if (po == null) {
+            // 允许用户在没有历史配置时直接保存，避免前端必须先调用 GET 初始化。
             po = defaultPrivacySetting(uid);
         }
         po.setProfileVisibility(normalizeVisibility(setting.getProfileVisibility()));
@@ -191,6 +194,7 @@ public class UserApplicationService {
 
     public List<UserBriefDTO> searchUsers(String keyword, Long viewerUid, int size, UserFacade userFacade) {
         int limit = Math.max(1, Math.min(size, 20));
+        // 先放宽查询数量，再按隐私过滤并截断，避免少量受限用户占满结果页。
         LambdaQueryWrapper<UserProfilePO> query = new LambdaQueryWrapper<UserProfilePO>()
                 .eq(UserProfilePO::getIsDeleted, 0)
                 .orderByDesc(UserProfilePO::getUpdateTime)

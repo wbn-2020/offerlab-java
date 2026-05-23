@@ -7,6 +7,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,6 +37,9 @@ public class KafkaConfig {
 
     private final KafkaProperties kafkaProperties;
     private final ObjectMapper objectMapper;
+
+    @Value("${offerlab.kafka.listener-concurrency:1}")
+    private int listenerConcurrency;
 
     /**
      * 生产者工厂配置
@@ -114,7 +118,7 @@ public class KafkaConfig {
         ConcurrentKafkaListenerContainerFactory<String, EventEnvelope<?>> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory());
-        factory.setConcurrency(4);  // 单实例 4 个消费线程
+        factory.setConcurrency(listenerConcurrency);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);  // 手动立即提交
         factory.setBatchListener(false);  // 单条消息处理
         return factory;
