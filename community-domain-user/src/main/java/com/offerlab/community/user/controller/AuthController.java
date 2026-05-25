@@ -2,6 +2,7 @@ package com.offerlab.community.user.controller;
 
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.user.application.UserApplicationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -27,12 +28,14 @@ public class AuthController {
     private final UserApplicationService userService;
 
     @PostMapping("/register")
-    public Result<Map<String, Long>> register(@Valid @RequestBody RegisterReq req) {
+    @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600)
+    public Result<Map<String, Long>> register(@Valid @RequestBody RegisterReq req, HttpServletRequest http) {
         Long uid = userService.register(req.getEmail(), req.getPassword(), req.getNickname());
         return Result.ok(Map.of("uid", uid));
     }
 
     @PostMapping("/login")
+    @RateLimit(key = "'auth:login:' + #http.remoteAddr", rate = 20, per = 300)
     public Result<Map<String, Object>> login(@Valid @RequestBody LoginReq req, HttpServletRequest http) {
         String token = userService.login(req.getEmail(), req.getPassword(), http.getRemoteAddr());
         return Result.ok(Map.of("token", token));

@@ -4,6 +4,8 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.user.controller.AuthController;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -17,6 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ProductionSecurityGuardTest {
+
+    @Test
+    void publicAuthMutationEndpointsAreRateLimited() throws Exception {
+        assertRateLimited("register", AuthController.RegisterReq.class, jakarta.servlet.http.HttpServletRequest.class);
+        assertRateLimited("login", AuthController.LoginReq.class, jakarta.servlet.http.HttpServletRequest.class);
+    }
 
     @Test
     void prodProfileRejectsDefaultJwtSecret() throws Exception {
@@ -134,5 +142,12 @@ class ProductionSecurityGuardTest {
             }
             throw e;
         }
+    }
+
+    private static void assertRateLimited(String methodName, Class<?>... parameterTypes) throws Exception {
+        Method method = AuthController.class.getDeclaredMethod(methodName, parameterTypes);
+        RateLimit rateLimit = method.getAnnotation(RateLimit.class);
+        org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, methodName + " must be rate limited");
+        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), methodName + " rate limit key must not be blank");
     }
 }
