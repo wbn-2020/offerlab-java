@@ -44,6 +44,9 @@ class ProductionSecurityGuardTest {
         assertRateLimited(NotificationController.class, "readAll");
         assertRateLimited(UserController.class, "updateMe", UserController.UpdateProfileReq.class);
         assertRateLimited(UserController.class, "changePassword", UserController.ChangePasswordReq.class);
+        assertRateLimited(UserController.class, "logoutAll");
+        assertRateLimited(UserController.class, "updateIntent", com.offerlab.community.user.api.dto.UserIntentDTO.class);
+        assertRateLimited(UserController.class, "updatePrivacySettings", com.offerlab.community.user.api.dto.UserPrivacySettingDTO.class);
         assertRateLimited(UserController.class, "follow", Long.class);
     }
 

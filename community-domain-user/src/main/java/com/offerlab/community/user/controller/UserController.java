@@ -84,12 +84,14 @@ public class UserController {
     }
 
     @PostMapping("/me/logout-all")
+    @RateLimit(key = "'user:logout-all:' + #uid", rate = 5, per = 300)
     public Result<Void> logoutAll() {
         userService.logoutAll(UserContext.require());
         return Result.ok();
     }
 
     @PutMapping("/me/intent")
+    @RateLimit(key = "'user:intent:update:' + #uid", rate = 30, per = 60)
     public Result<Void> updateIntent(@RequestBody UserIntentDTO intent) {
         Long uid = UserContext.require();
         // UserIntentDTO 同时兼容 targetCity/expectedCity，避免旧前端保存后丢城市字段。
@@ -117,6 +119,7 @@ public class UserController {
     }
 
     @PutMapping("/me/privacy-settings")
+    @RateLimit(key = "'user:privacy:update:' + #uid", rate = 30, per = 60)
     public Result<UserPrivacySettingDTO> updatePrivacySettings(@RequestBody UserPrivacySettingDTO setting) {
         Long uid = UserContext.require();
         return Result.ok(userService.updatePrivacySetting(uid, setting));
