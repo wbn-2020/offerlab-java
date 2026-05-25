@@ -73,6 +73,7 @@ public class InteractionController {
     }
 
     @PostMapping("/posts/{postId}/favorite")
+    @RateLimit(key = "'favorite:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> favorite(@PathVariable Long postId) {
         // 返回 favorited 与点赞接口保持一致，便于前端乐观更新后校正状态。
         facade.favorite(UserContext.require(), postId);
@@ -146,6 +147,7 @@ public class InteractionController {
     }
 
     @PostMapping("/comments/{commentId}/like")
+    @RateLimit(key = "'comment:like:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> likeComment(@PathVariable Long commentId) {
         facade.likeComment(UserContext.require(), commentId);
         return Result.ok(Map.of("liked", true));

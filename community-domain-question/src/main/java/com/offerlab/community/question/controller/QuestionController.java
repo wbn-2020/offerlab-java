@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.question.api.dto.CompanyPrepDTO;
 import com.offerlab.community.question.api.dto.PrepTargetCmd;
 import com.offerlab.community.question.api.dto.PrepTargetDTO;
@@ -73,6 +74,7 @@ public class QuestionController {
     }
 
     @PostMapping("/questions/{id}/favorite")
+    @RateLimit(key = "'question:favorite:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> favorite(@PathVariable Long id) {
         return Result.ok(questionFacade.favorite(id, UserContext.require(), true));
     }
@@ -83,6 +85,7 @@ public class QuestionController {
     }
 
     @PutMapping("/questions/{id}/progress")
+    @RateLimit(key = "'question:progress:' + #uid", rate = 120, per = 60)
     public Result<Map<String, Object>> progress(@PathVariable Long id, @RequestBody ProgressReq req) {
         return Result.ok(questionFacade.updateProgress(id, UserContext.require(), req.getStatus()));
     }
@@ -117,6 +120,7 @@ public class QuestionController {
     }
 
     @PostMapping("/me/prep/targets")
+    @RateLimit(key = "'prep:target:add:' + #uid", rate = 30, per = 60)
     public Result<PrepTargetDTO> addPrepTarget(@RequestBody PrepTargetCmd cmd) {
         return Result.ok(questionFacade.addPrepTarget(UserContext.require(), cmd));
     }

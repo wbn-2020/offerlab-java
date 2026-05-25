@@ -3,6 +3,7 @@ package com.offerlab.community.notification.controller;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.notification.api.NotificationFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,12 +36,14 @@ public class NotificationController {
     }
 
     @PostMapping("/read")
+    @RateLimit(key = "'notification:read:' + #uid", rate = 120, per = 60)
     public Result<Void> read(@RequestBody ReadReq req) {
         facade.markAsRead(UserContext.require(), req == null ? List.of() : req.getIds());
         return Result.ok();
     }
 
     @PostMapping("/read-all")
+    @RateLimit(key = "'notification:read-all:' + #uid", rate = 20, per = 60)
     public Result<Void> readAll() {
         facade.markAllAsRead(UserContext.require());
         return Result.ok();

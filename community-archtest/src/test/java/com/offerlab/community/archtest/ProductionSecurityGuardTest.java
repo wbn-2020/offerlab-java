@@ -6,7 +6,11 @@ import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.infra.web.config.WebMvcConfig;
+import com.offerlab.community.interaction.controller.InteractionController;
+import com.offerlab.community.notification.controller.NotificationController;
+import com.offerlab.community.question.controller.QuestionController;
 import com.offerlab.community.user.controller.AuthController;
+import com.offerlab.community.user.controller.UserController;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -23,8 +27,24 @@ class ProductionSecurityGuardTest {
 
     @Test
     void publicAuthMutationEndpointsAreRateLimited() throws Exception {
-        assertRateLimited("register", AuthController.RegisterReq.class, jakarta.servlet.http.HttpServletRequest.class);
-        assertRateLimited("login", AuthController.LoginReq.class, jakarta.servlet.http.HttpServletRequest.class);
+        assertRateLimited(AuthController.class, "register", AuthController.RegisterReq.class, jakarta.servlet.http.HttpServletRequest.class);
+        assertRateLimited(AuthController.class, "login", AuthController.LoginReq.class, jakarta.servlet.http.HttpServletRequest.class);
+    }
+
+    @Test
+    void highFrequencyUserMutationEndpointsAreRateLimited() throws Exception {
+        assertRateLimited(InteractionController.class, "like", Long.class);
+        assertRateLimited(InteractionController.class, "favorite", Long.class);
+        assertRateLimited(InteractionController.class, "comment", Long.class, InteractionController.CommentReq.class);
+        assertRateLimited(InteractionController.class, "likeComment", Long.class);
+        assertRateLimited(QuestionController.class, "favorite", Long.class);
+        assertRateLimited(QuestionController.class, "progress", Long.class, QuestionController.ProgressReq.class);
+        assertRateLimited(QuestionController.class, "addPrepTarget", com.offerlab.community.question.api.dto.PrepTargetCmd.class);
+        assertRateLimited(NotificationController.class, "read", NotificationController.ReadReq.class);
+        assertRateLimited(NotificationController.class, "readAll");
+        assertRateLimited(UserController.class, "updateMe", UserController.UpdateProfileReq.class);
+        assertRateLimited(UserController.class, "changePassword", UserController.ChangePasswordReq.class);
+        assertRateLimited(UserController.class, "follow", Long.class);
     }
 
     @Test
@@ -161,11 +181,11 @@ class ProductionSecurityGuardTest {
         }
     }
 
-    private static void assertRateLimited(String methodName, Class<?>... parameterTypes) throws Exception {
-        Method method = AuthController.class.getDeclaredMethod(methodName, parameterTypes);
+    private static void assertRateLimited(Class<?> controllerClass, String methodName, Class<?>... parameterTypes) throws Exception {
+        Method method = controllerClass.getDeclaredMethod(methodName, parameterTypes);
         RateLimit rateLimit = method.getAnnotation(RateLimit.class);
-        org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, methodName + " must be rate limited");
-        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), methodName + " rate limit key must not be blank");
+        org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, controllerClass.getSimpleName() + "." + methodName + " must be rate limited");
+        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), controllerClass.getSimpleName() + "." + methodName + " rate limit key must not be blank");
     }
 
     private static void invokeValidateCorsOrigins(WebMvcConfig config) throws Exception {
