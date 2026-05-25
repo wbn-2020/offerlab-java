@@ -98,6 +98,9 @@ Invoke-WebRequest http://localhost:8080/swagger-ui.html -UseBasicParsing
 - Redis is bound to localhost on port `6379`, has `daemonize no`, and has
   `appendonly no` in the current local config. This is fine for development, but
   not for durable production-like testing.
+- Run `powershell -ExecutionPolicy Bypass -File .\scripts\check-local-middleware.ps1`
+  from the backend repo for a read-only check of the expected `C:\codeware`
+  Redis, Elasticsearch, and Kafka paths.
 - The app has MySQL credentials in local development config. Keep any real
   credentials in local-only overrides or environment variables and do not commit
   secrets.

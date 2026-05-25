@@ -133,6 +133,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{uid}/follow")
+    @RateLimit(key = "'user:unfollow:' + #uid", rate = 60, per = 60)
     public Result<Void> unfollow(@PathVariable Long uid) {
         userService.unfollow(UserContext.require(), uid);
         return Result.ok();

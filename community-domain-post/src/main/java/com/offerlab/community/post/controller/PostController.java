@@ -1,5 +1,7 @@
 package com.offerlab.community.post.controller;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.AdminPermissionService;
@@ -66,7 +68,11 @@ public class PostController {
     }
 
     @PutMapping("/{postId}")
-    public Result<Void> update(@PathVariable Long postId, @RequestBody UpdateReq req) {
+    @RateLimit(key = "'post:update:' + #uid", rate = 30, per = 300)
+    public Result<Void> update(@PathVariable Long postId, @Valid @RequestBody UpdateReq req) {
+        if (req == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
         Long uid = UserContext.require();
         contentModerationService.requireUserCanPublish(uid);
         contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
@@ -86,6 +92,7 @@ public class PostController {
     }
 
     @DeleteMapping("/{postId}")
+    @RateLimit(key = "'post:delete:' + #uid", rate = 20, per = 300)
     public Result<Void> delete(@PathVariable Long postId) {
         postFacade.deletePost(postId, UserContext.require());
         return Result.ok();
@@ -161,10 +168,14 @@ public class PostController {
 
     @Data
     public static class UpdateReq {
+        @Size(max = 255)
         private String title;
+        @Size(max = 20000)
         private String content;
+        @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
+        @Size(max = 20000)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;

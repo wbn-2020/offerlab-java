@@ -80,6 +80,7 @@ public class QuestionController {
     }
 
     @DeleteMapping("/questions/{id}/favorite")
+    @RateLimit(key = "'question:unfavorite:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> unfavorite(@PathVariable Long id) {
         return Result.ok(questionFacade.favorite(id, UserContext.require(), false));
     }
@@ -126,6 +127,7 @@ public class QuestionController {
     }
 
     @DeleteMapping("/me/prep/targets/{id}")
+    @RateLimit(key = "'prep:target:delete:' + #uid", rate = 30, per = 60)
     public Result<Map<String, Object>> deletePrepTarget(@PathVariable Long id) {
         return Result.ok(questionFacade.deletePrepTarget(UserContext.require(), id));
     }

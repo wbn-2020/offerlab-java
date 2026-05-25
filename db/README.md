@@ -6,7 +6,9 @@ Use the folders differently:
   manually in the target environment.
 - `db/init`: fresh local initialization scripts. These files may contain
   `DROP TABLE IF EXISTS` and must not be run against an existing database unless
-  you intentionally want to rebuild it from scratch.
+  you intentionally want to rebuild it from scratch. Run
+  `db/init/00_empty_database_guard.sql` first when applying the init folder; it
+  aborts if the current schema already contains tables.
 
 Before running an existing-database migration, use:
 

@@ -49,6 +49,7 @@ public class InteractionController {
     }
 
     @DeleteMapping("/posts/{postId}/like")
+    @RateLimit(key = "'unlike:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> unlike(@PathVariable Long postId) {
         Long uid = UserContext.require();
         facade.unlike(uid, postId);
@@ -81,6 +82,7 @@ public class InteractionController {
     }
 
     @DeleteMapping("/posts/{postId}/favorite")
+    @RateLimit(key = "'unfavorite:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> unfavorite(@PathVariable Long postId) {
         // 返回 favorited 与点赞接口保持一致，便于前端乐观更新后校正状态。
         facade.unfavorite(UserContext.require(), postId);
@@ -119,6 +121,7 @@ public class InteractionController {
     }
 
     @DeleteMapping("/comments/{commentId}")
+    @RateLimit(key = "'comment:delete:' + #uid", rate = 30, per = 60)
     public Result<Void> deleteComment(@PathVariable Long commentId) {
         facade.deleteComment(commentId, UserContext.require());
         return Result.ok();
@@ -154,6 +157,7 @@ public class InteractionController {
     }
 
     @DeleteMapping("/comments/{commentId}/like")
+    @RateLimit(key = "'comment:unlike:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> unlikeComment(@PathVariable Long commentId) {
         facade.unlikeComment(UserContext.require(), commentId);
         return Result.ok(Map.of("liked", false));

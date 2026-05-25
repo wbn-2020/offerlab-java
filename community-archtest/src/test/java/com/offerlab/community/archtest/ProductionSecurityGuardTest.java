@@ -6,8 +6,10 @@ import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.infra.web.config.WebMvcConfig;
+import com.offerlab.community.feed.controller.FeedController;
 import com.offerlab.community.interaction.controller.InteractionController;
 import com.offerlab.community.notification.controller.NotificationController;
+import com.offerlab.community.post.controller.PostController;
 import com.offerlab.community.question.controller.QuestionController;
 import com.offerlab.community.user.controller.AuthController;
 import com.offerlab.community.user.controller.UserController;
@@ -34,12 +36,22 @@ class ProductionSecurityGuardTest {
     @Test
     void highFrequencyUserMutationEndpointsAreRateLimited() throws Exception {
         assertRateLimited(InteractionController.class, "like", Long.class);
+        assertRateLimited(InteractionController.class, "unlike", Long.class);
         assertRateLimited(InteractionController.class, "favorite", Long.class);
+        assertRateLimited(InteractionController.class, "unfavorite", Long.class);
         assertRateLimited(InteractionController.class, "comment", Long.class, InteractionController.CommentReq.class);
+        assertRateLimited(InteractionController.class, "deleteComment", Long.class);
         assertRateLimited(InteractionController.class, "likeComment", Long.class);
+        assertRateLimited(InteractionController.class, "unlikeComment", Long.class);
+        assertRateLimited(PostController.class, "publish", PostController.PublishReq.class);
+        assertRateLimited(PostController.class, "update", Long.class, PostController.UpdateReq.class);
+        assertRateLimited(PostController.class, "delete", Long.class);
+        assertRateLimited(FeedController.class, "feedback", com.offerlab.community.feed.api.dto.FeedFeedbackCmd.class);
         assertRateLimited(QuestionController.class, "favorite", Long.class);
+        assertRateLimited(QuestionController.class, "unfavorite", Long.class);
         assertRateLimited(QuestionController.class, "progress", Long.class, QuestionController.ProgressReq.class);
         assertRateLimited(QuestionController.class, "addPrepTarget", com.offerlab.community.question.api.dto.PrepTargetCmd.class);
+        assertRateLimited(QuestionController.class, "deletePrepTarget", Long.class);
         assertRateLimited(NotificationController.class, "read", NotificationController.ReadReq.class);
         assertRateLimited(NotificationController.class, "readAll");
         assertRateLimited(UserController.class, "updateMe", UserController.UpdateProfileReq.class);
@@ -48,6 +60,7 @@ class ProductionSecurityGuardTest {
         assertRateLimited(UserController.class, "updateIntent", com.offerlab.community.user.api.dto.UserIntentDTO.class);
         assertRateLimited(UserController.class, "updatePrivacySettings", com.offerlab.community.user.api.dto.UserPrivacySettingDTO.class);
         assertRateLimited(UserController.class, "follow", Long.class);
+        assertRateLimited(UserController.class, "unfollow", Long.class);
     }
 
     @Test
