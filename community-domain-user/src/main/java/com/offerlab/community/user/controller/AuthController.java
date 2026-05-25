@@ -64,7 +64,6 @@ public class AuthController {
 
     @Data
     public static class LoginReq {
-        @Email
         @NotBlank
         private String email;
         @NotBlank
