@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS t_post_report (
     update_time    DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     KEY idx_status_time (report_status, create_time),
     KEY idx_post_time (post_id, create_time),
-    KEY idx_reporter_time (reporter_uid, create_time)
+    KEY idx_reporter_time (reporter_uid, create_time),
+    KEY idx_post_reporter_status (post_id, reporter_uid, report_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Post reports';
 
 CREATE TABLE IF NOT EXISTS t_comment_report (
@@ -36,5 +37,6 @@ CREATE TABLE IF NOT EXISTS t_comment_report (
     KEY idx_status_time (report_status, create_time),
     KEY idx_comment_time (comment_id, create_time),
     KEY idx_post_time (post_id, create_time),
-    KEY idx_reporter_time (reporter_uid, create_time)
+    KEY idx_reporter_time (reporter_uid, create_time),
+    KEY idx_comment_reporter_status (comment_id, reporter_uid, report_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Comment reports';

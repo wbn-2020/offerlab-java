@@ -82,6 +82,11 @@ class ProductionSecurityGuardTest {
             }
 
             @Override
+            public int countActiveRole(Long uid, String roleCode) {
+                return 0;
+            }
+
+            @Override
             public int countEnabledAdmins() {
                 return 0;
             }
@@ -97,12 +102,12 @@ class ProductionSecurityGuardTest {
             }
 
             @Override
-            public int upsertAdmin(Long uid, String remark, Long operatorUid) {
+            public int upsertAdmin(Long uid, String roleCode, String remark, Long operatorUid) {
                 return 0;
             }
 
             @Override
-            public int updateAdminStatus(Long uid, int enabled, String remark, Long operatorUid) {
+            public int updateAdminStatus(Long uid, String roleCode, int enabled, String remark, Long operatorUid) {
                 return 0;
             }
         };

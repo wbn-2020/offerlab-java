@@ -150,6 +150,34 @@ offerlab:
 
 白名单为空且 `t_user_admin` 没有任何 Admin 记录时，本地开发环境允许已登录用户访问运维接口，避免开发时锁死。一旦表中已配置过 Admin 记录，则按 RBAC 校验，不再自动回退到本地宽松模式。生产环境应显式配置数据库 Admin 或白名单。
 
+### Admin scopes
+
+`ADMIN` 拥有全部后台权限。也可以授予更小的角色：
+
+- `OPS`：运维状态、Outbox 重试、审计日志。
+- `CONTENT_MODERATOR`：帖子/评论举报审核。
+- `QUESTION_OPERATOR`：题目提取、题目审核、公司别名维护。
+
+后台写操作会在 `t_admin_audit_log` 存在时记录审计日志。
+
+## Existing Database Migration
+
+`db/init/*.sql` 只用于新库初始化。已有数据库请先审阅再手动执行非破坏性迁移：
+
+```sql
+SOURCE db/migration/20260524_ops_governance.sql;
+```
+
+该脚本只创建缺失表和缺失索引，不会删除表、清空数据或重置 schema。
+
+## Content Governance
+
+可选表 `t_moderation_keyword` 与 `t_user_moderation_state` 提供轻量内容治理：
+
+- 启用的关键词会拦截帖子、评论和举报文本。
+- 被禁言或封禁的用户不能发布、评论或举报。
+- 举报会拦截同一用户对同一对象的待审核重复项，并限制单用户每天最多 50 条帖子举报和 50 条评论举报。
+
 ## 验证记录
 
 最近一次本机验证：

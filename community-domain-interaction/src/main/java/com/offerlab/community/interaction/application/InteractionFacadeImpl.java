@@ -336,31 +336,33 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     @Override
     public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) {
+        int limit = clampPageSize(size);
         LambdaQueryWrapper<LikePO> q = new LambdaQueryWrapper<LikePO>()
                 .eq(LikePO::getUserId, uid)
                 .eq(LikePO::getTargetType, TARGET_POST)
                 .eq(LikePO::getIsDeleted, 0)
                 .orderByDesc(LikePO::getCreateTime)
-                .last("LIMIT " + clampPageSize(size));
+                .last("LIMIT " + (limit + 1));
         if (cursor > 0) {
             q.lt(LikePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
         List<LikePO> list = likeMapper.selectList(q);
-        return postPage(list.stream().map(LikePO::getTargetId).toList(), list, clampPageSize(size));
+        return postPage(list.stream().map(LikePO::getTargetId).toList(), list, limit);
     }
 
     @Override
     public PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size) {
+        int limit = clampPageSize(size);
         LambdaQueryWrapper<FavoritePO> q = new LambdaQueryWrapper<FavoritePO>()
                 .eq(FavoritePO::getUserId, uid)
                 .eq(FavoritePO::getIsDeleted, 0)
                 .orderByDesc(FavoritePO::getCreateTime)
-                .last("LIMIT " + clampPageSize(size));
+                .last("LIMIT " + (limit + 1));
         if (cursor > 0) {
             q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
         List<FavoritePO> list = favoriteMapper.selectList(q);
-        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, clampPageSize(size));
+        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, limit);
     }
 
     private void updateCommentLikeCount(Long commentId, int delta) {
@@ -375,13 +377,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size) {
         if (postIds.isEmpty()) return PageResult.empty();
-        Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(postIds);
-        List<PostBriefDTO> items = postIds.stream()
+        boolean hasMore = sourceRows.size() > size;
+        List<Long> pagePostIds = hasMore ? postIds.subList(0, size) : postIds;
+        Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(pagePostIds);
+        List<PostBriefDTO> items = pagePostIds.stream()
                 .map(posts::get)
                 .filter(java.util.Objects::nonNull)
                 .toList();
-        boolean hasMore = sourceRows.size() == size;
-        String next = hasMore ? extractCreateTimeCursor(sourceRows.get(sourceRows.size() - 1)) : null;
+        String next = hasMore ? extractCreateTimeCursor(sourceRows.get(size - 1)) : null;
         return PageResult.of(items, next, hasMore);
     }
 

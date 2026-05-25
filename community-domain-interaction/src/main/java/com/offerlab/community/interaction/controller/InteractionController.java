@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.interaction.api.InteractionFacade;
@@ -37,6 +38,7 @@ public class InteractionController {
     private final InteractionFacade facade;
     private final CommentReportService reportService;
     private final AdminPermissionService adminPermissionService;
+    private final ContentModerationService contentModerationService;
 
     @PostMapping("/posts/{postId}/like")
     @RateLimit(key = "'like:' + #uid", rate = 60, per = 60)
@@ -94,6 +96,8 @@ public class InteractionController {
     @RateLimit(key = "'comment:' + #uid", rate = 30, per = 60)
     public Result<Map<String, Long>> comment(@PathVariable Long postId, @Valid @RequestBody CommentReq req) {
         Long uid = UserContext.require();
+        contentModerationService.requireUserCanPublish(uid);
+        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_COMMENT, req.getContent());
         // parentId/replyToUid 同时传入时表示楼中楼回复，领域层负责归并根评论关系。
         Long id = facade.addComment(CommentCreateCmd.builder()
                 .postId(postId)
@@ -129,14 +133,14 @@ public class InteractionController {
     @GetMapping("/comments/admin/reports")
     public Result<List<CommentReportDTO>> listCommentReports(@RequestParam(required = false) Integer status,
                                                              @RequestParam(defaultValue = "20") int limit) {
-        adminPermissionService.requireAdmin(UserContext.require());
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
         return Result.ok(reportService.listRecent(status, limit));
     }
 
     @PostMapping("/comments/admin/reports/{reportId}/review")
     public Result<CommentReportDTO> reviewCommentReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireAdmin(uid);
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
