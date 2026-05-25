@@ -18,6 +18,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class QuestionIndexTaskService {
+    private static final int MAX_RETAINED_TASKS = 100;
+
     private final QuestionSearchIndexer indexer;
     private final Map<String, QuestionIndexTask> tasks = new ConcurrentHashMap<>();
 
@@ -32,6 +34,7 @@ public class QuestionIndexTaskService {
                 .updatedAt(LocalDateTime.now())
                 .build();
         tasks.put(taskId, task);
+        pruneOldTasks();
         CompletableFuture.runAsync(() -> runRebuild(taskId));
         return snapshot(task);
     }
@@ -73,6 +76,18 @@ public class QuestionIndexTaskService {
         } finally {
             task.setUpdatedAt(LocalDateTime.now());
         }
+    }
+
+    private void pruneOldTasks() {
+        int overflow = tasks.size() - MAX_RETAINED_TASKS;
+        if (overflow <= 0) {
+            return;
+        }
+        tasks.values().stream()
+                .sorted(Comparator.comparing(QuestionIndexTask::getCreatedAt))
+                .limit(overflow)
+                .map(QuestionIndexTask::getTaskId)
+                .forEach(tasks::remove);
     }
 
     private static QuestionIndexTask snapshot(QuestionIndexTask task) {
