@@ -38,6 +38,9 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
 
     // 随机数生成器
     private static final Random RANDOM = new Random();
+    private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
+    private static final Duration MAX_TTL_JITTER = Duration.ofMinutes(5);
+    private static final Duration MIN_TTL = Duration.ofSeconds(1);
 
     @Override
     public V get(String key, Function<String, V> loader, Class<V> type) {
@@ -48,7 +51,12 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             if (NULL_MARKER.equals(l1Value)) {
                 return null;
             }
-            return (V) l1Value;
+            if (type.isInstance(l1Value)) {
+                return type.cast(l1Value);
+            }
+            log.warn("L1 cache type mismatch for key: {}, expected: {}, actual: {}",
+                    key, type.getName(), l1Value.getClass().getName());
+            l1Cache.invalidate(key);
         }
 
         // L2 查询 + 击穿保护
@@ -103,11 +111,9 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             redisTemplate.opsForValue().set(key, NULL_MARKER, Duration.ofSeconds(60));
         } else {
             String serialized = serialize(value);
-            // TTL 加随机抖动防雪崩
-            long ttlMs = ttl.toMillis();
-            long jitterMs = RANDOM.nextLong(10 * 60 * 1000); // ±5min
-            long finalTtlMs = ttlMs + jitterMs - (5 * 60 * 1000);
-            redisTemplate.opsForValue().set(key, serialized, Duration.ofMillis(finalTtlMs));
+            if (serialized != null) {
+                redisTemplate.opsForValue().set(key, serialized, withJitter(ttl));
+            }
         }
     }
 
@@ -125,13 +131,21 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             // 缓存到 L1 和 L2
             l1Cache.put(key, value);
             String serialized = serialize(value);
-            // 默认 TTL 30 分钟 ± 5 分钟
-            long ttlMs = 30 * 60 * 1000;
-            long jitterMs = RANDOM.nextLong(10 * 60 * 1000);
-            long finalTtlMs = ttlMs + jitterMs - (5 * 60 * 1000);
-            redisTemplate.opsForValue().set(key, serialized, Duration.ofMillis(finalTtlMs));
+            if (serialized != null) {
+                redisTemplate.opsForValue().set(key, serialized, withJitter(DEFAULT_TTL));
+            }
         }
         return value;
+    }
+
+    private Duration withJitter(Duration ttl) {
+        long ttlMs = Math.max(MIN_TTL.toMillis(), ttl == null ? DEFAULT_TTL.toMillis() : ttl.toMillis());
+        long jitterCapMs = Math.min(MAX_TTL_JITTER.toMillis(), Math.max(0, ttlMs / 2));
+        if (jitterCapMs == 0) {
+            return Duration.ofMillis(ttlMs);
+        }
+        long jitterMs = RANDOM.nextLong(jitterCapMs * 2 + 1) - jitterCapMs;
+        return Duration.ofMillis(Math.max(MIN_TTL.toMillis(), ttlMs + jitterMs));
     }
 
     /**
