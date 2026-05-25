@@ -5,6 +5,7 @@ import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.infra.web.config.WebMvcConfig;
 import com.offerlab.community.user.controller.AuthController;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
@@ -24,6 +25,22 @@ class ProductionSecurityGuardTest {
     void publicAuthMutationEndpointsAreRateLimited() throws Exception {
         assertRateLimited("register", AuthController.RegisterReq.class, jakarta.servlet.http.HttpServletRequest.class);
         assertRateLimited("login", AuthController.LoginReq.class, jakarta.servlet.http.HttpServletRequest.class);
+    }
+
+    @Test
+    void prodProfileRejectsLocalCorsOrigins() throws Exception {
+        WebMvcConfig config = new WebMvcConfig(null, prodEnvironment());
+        setField(config, "allowedOrigins", "http://localhost:5173,http://127.0.0.1:5174");
+
+        assertThrows(IllegalStateException.class, () -> invokeValidateCorsOrigins(config));
+    }
+
+    @Test
+    void prodProfileAllowsExplicitCorsOrigins() throws Exception {
+        WebMvcConfig config = new WebMvcConfig(null, prodEnvironment());
+        setField(config, "allowedOrigins", "https://app.offerlab.example");
+
+        invokeValidateCorsOrigins(config);
     }
 
     @Test
@@ -149,5 +166,18 @@ class ProductionSecurityGuardTest {
         RateLimit rateLimit = method.getAnnotation(RateLimit.class);
         org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, methodName + " must be rate limited");
         org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), methodName + " rate limit key must not be blank");
+    }
+
+    private static void invokeValidateCorsOrigins(WebMvcConfig config) throws Exception {
+        Method method = WebMvcConfig.class.getDeclaredMethod("validateCorsOrigins");
+        method.setAccessible(true);
+        try {
+            method.invoke(config);
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof Exception cause) {
+                throw cause;
+            }
+            throw e;
+        }
     }
 }
