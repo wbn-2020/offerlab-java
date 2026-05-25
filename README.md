@@ -2,6 +2,8 @@
 
 Local middleware notes: [docs/middleware-local-runbook.md](docs/middleware-local-runbook.md)
 
+Database script guidance: [db/README.md](db/README.md)
+
 OfferLab 是一个面向求职者的面经与技术内容社区。后端采用 Java 17、Spring Boot 3、MyBatis-Plus、Redis、Kafka、Elasticsearch 和模块化单体架构，当前开发分支为 `dev-v1`。
 
 ## 当前状态
