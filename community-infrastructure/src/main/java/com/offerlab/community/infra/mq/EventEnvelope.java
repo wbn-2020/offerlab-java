@@ -27,9 +27,11 @@ public class EventEnvelope<T> {
     private String traceId;
 
     /** 消息版本，便于后续升级 */
+    @Builder.Default
     private String version = "v1";
 
     /** 重试次数 */
+    @Builder.Default
     private Integer retryCount = 0;
 
     /** 业务负载 */
