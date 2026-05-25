@@ -63,6 +63,22 @@ public class OpsController {
         return Result.ok(data);
     }
 
+    @GetMapping("/me/permissions")
+    public Result<Map<String, Object>> myPermissions() {
+        Long uid = UserContext.require();
+        boolean localOpen = adminPermissionService.isLocalOpenMode();
+        boolean admin = adminPermissionService.isAdmin(uid) || localOpen;
+        Map<String, Object> permissions = new LinkedHashMap<>();
+        permissions.put("uid", uid);
+        permissions.put("adminMode", adminPermissionService.mode());
+        permissions.put("admin", admin);
+        permissions.put("ops", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS));
+        permissions.put("contentModerator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR));
+        permissions.put("questionOperator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR));
+        permissions.put("localOpen", localOpen);
+        return Result.ok(permissions);
+    }
+
     @GetMapping("/outbox")
     public Result<List<OutboxMessage>> listOutbox(@RequestParam(required = false) Integer status,
                                                   @RequestParam(defaultValue = "20") int limit) {

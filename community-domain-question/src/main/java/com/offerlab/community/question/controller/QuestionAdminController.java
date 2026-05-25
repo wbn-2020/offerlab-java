@@ -1,6 +1,8 @@
 package com.offerlab.community.question.controller;
 
+import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.Result;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.security.AdminPermissionService;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @RestController
 @RequestMapping("/api/v1/admin")
@@ -103,6 +106,33 @@ public class QuestionAdminController {
         return Result.ok(result);
     }
 
+    @PostMapping("/questions/batch-review")
+    public Result<Map<String, Object>> batchReviewQuestions(@RequestBody QuestionBatchReviewRequest request) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .limit(100)
+                .toList();
+        if (ids.isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int status = request.status();
+        List<Map<String, Object>> reviewed = ids.stream()
+                .map(id -> questionFacade.reviewQuestion(id, status))
+                .toList();
+        Map<String, Object> result = Map.of(
+                "requested", ids.size(),
+                "reviewed", reviewed.size(),
+                "status", status
+        );
+        adminAuditService.record(uid, "QUESTION_REVIEW_BATCH", "QUESTION", null,
+                Map.of("ids", ids, "status", status), result, null);
+        return Result.ok(result);
+    }
+
     @GetMapping("/questions")
     public Result<List<QuestionDTO>> listQuestions(@RequestParam(required = false) Integer status,
                                                   @RequestParam(defaultValue = "30") int limit) {
@@ -165,5 +195,8 @@ public class QuestionAdminController {
         Map<String, Object> result = questionFacade.updateCompanyAliasStatus(id, status);
         adminAuditService.record(uid, "COMPANY_ALIAS_STATUS", "COMPANY_ALIAS", id, null, result, null);
         return Result.ok(result);
+    }
+
+    public record QuestionBatchReviewRequest(List<Long> ids, int status) {
     }
 }
