@@ -7,6 +7,8 @@ import com.offerlab.community.feed.api.dto.FeedFeedbackCmd;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -51,7 +53,8 @@ public class FeedController {
     }
 
     @PostMapping("/feedback")
-    public Result<Void> feedback(@RequestBody FeedFeedbackCmd cmd) {
+    @RateLimit(key = "'feed:feedback:' + #uid", rate = 60, per = 60)
+    public Result<Void> feedback(@Valid @RequestBody FeedFeedbackCmd cmd) {
         Long uid = UserContext.require();
         feedFacade.recordFeedback(uid,
                 cmd == null ? null : cmd.getPostId(),

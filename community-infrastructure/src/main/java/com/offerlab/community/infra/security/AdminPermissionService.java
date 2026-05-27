@@ -13,6 +13,10 @@ import java.util.stream.Collectors;
 
 @Service
 public class AdminPermissionService {
+    public static final String ROLE_ADMIN = "ADMIN";
+    public static final String ROLE_CONTENT_MODERATOR = "CONTENT_MODERATOR";
+    public static final String ROLE_QUESTION_OPERATOR = "QUESTION_OPERATOR";
+    public static final String ROLE_OPS = "OPS";
 
     private final Set<Long> adminUids;
     private final AdminRoleMapper adminRoleMapper;
@@ -113,6 +117,36 @@ public class AdminPermissionService {
     public void requireStrictAdmin(Long uid) {
         if (!isAdmin(uid)) {
             throw new BizException(ErrorCode.FORBIDDEN);
+        }
+    }
+
+    public void requireScope(Long uid, String roleCode) {
+        if (uid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        if (isAdmin(uid) || hasRole(uid, roleCode)) {
+            return;
+        }
+        if (isLocalOpenMode()) {
+            return;
+        }
+        throw new BizException(ErrorCode.FORBIDDEN);
+    }
+
+    public boolean hasRole(Long uid, String roleCode) {
+        if (uid == null || !StringUtils.hasText(roleCode)) {
+            return false;
+        }
+        if (adminUids.contains(uid)) {
+            return true;
+        }
+        if (!adminTableExists()) {
+            return false;
+        }
+        try {
+            return adminRoleMapper.countActiveRole(uid, roleCode.trim().toUpperCase()) > 0;
+        } catch (Exception e) {
+            return false;
         }
     }
 

@@ -8,6 +8,7 @@ import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.user.application.UserApplicationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -68,6 +69,7 @@ public class UserController {
     }
 
     @PatchMapping("/me")
+    @RateLimit(key = "'user:profile:update:' + #uid", rate = 30, per = 60)
     public Result<Void> updateMe(@Valid @RequestBody UpdateProfileReq req) {
         Long uid = UserContext.require();
         userService.updateProfile(uid, req.getNickname(), req.getAvatarUrl(), req.effectiveBio());
@@ -75,18 +77,21 @@ public class UserController {
     }
 
     @PutMapping("/me/password")
+    @RateLimit(key = "'user:password:' + #uid", rate = 5, per = 3600)
     public Result<Void> changePassword(@Valid @RequestBody ChangePasswordReq req) {
         userService.changePassword(UserContext.require(), req.getOldPassword(), req.getNewPassword());
         return Result.ok();
     }
 
     @PostMapping("/me/logout-all")
+    @RateLimit(key = "'user:logout-all:' + #uid", rate = 5, per = 300)
     public Result<Void> logoutAll() {
         userService.logoutAll(UserContext.require());
         return Result.ok();
     }
 
     @PutMapping("/me/intent")
+    @RateLimit(key = "'user:intent:update:' + #uid", rate = 30, per = 60)
     public Result<Void> updateIntent(@RequestBody UserIntentDTO intent) {
         Long uid = UserContext.require();
         // UserIntentDTO 同时兼容 targetCity/expectedCity，避免旧前端保存后丢城市字段。
@@ -114,18 +119,21 @@ public class UserController {
     }
 
     @PutMapping("/me/privacy-settings")
+    @RateLimit(key = "'user:privacy:update:' + #uid", rate = 30, per = 60)
     public Result<UserPrivacySettingDTO> updatePrivacySettings(@RequestBody UserPrivacySettingDTO setting) {
         Long uid = UserContext.require();
         return Result.ok(userService.updatePrivacySetting(uid, setting));
     }
 
     @PostMapping("/{uid}/follow")
+    @RateLimit(key = "'user:follow:' + #uid", rate = 60, per = 60)
     public Result<Void> follow(@PathVariable Long uid) {
         userService.follow(UserContext.require(), uid);
         return Result.ok();
     }
 
     @DeleteMapping("/{uid}/follow")
+    @RateLimit(key = "'user:unfollow:' + #uid", rate = 60, per = 60)
     public Result<Void> unfollow(@PathVariable Long uid) {
         userService.unfollow(UserContext.require(), uid);
         return Result.ok();

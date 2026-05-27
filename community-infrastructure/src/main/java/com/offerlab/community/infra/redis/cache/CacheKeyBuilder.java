@@ -38,6 +38,30 @@ public final class CacheKeyBuilder {
     }
 
     /**
+     * 问题题库列表缓存
+     * question:list:{hash}
+     */
+    public static String questionList(String hash) {
+        return "question:list:" + hash;
+    }
+
+    /**
+     * 问题详情缓存
+     * question:detail:{questionId}
+     */
+    public static String questionDetail(Long questionId) {
+        return "question:detail:" + questionId;
+    }
+
+    /**
+     * 公司准备包缓存
+     * question:company-prep:{company}
+     */
+    public static String companyPrep(String company) {
+        return "question:company-prep:" + company;
+    }
+
+    /**
      * 帖子计数器（Hash）
      * post:counter:{postId}
      */

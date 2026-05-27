@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
@@ -36,6 +37,36 @@ public interface CommentReportMapper extends BaseMapper<CommentReportPO> {
             </script>
             """)
     List<CommentReportPO> selectRecent(@Param("status") Integer status, @Param("limit") int limit);
+
+    @Select("""
+            SELECT id,
+                   comment_id AS commentId,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   reviewer_uid AS reviewerUid,
+                   review_note AS reviewNote,
+                   create_time AS createTime,
+                   review_time AS reviewTime,
+                   update_time AS updateTime
+            FROM t_comment_report
+            WHERE comment_id = #{commentId}
+              AND reporter_uid = #{reporterUid}
+              AND report_status = 0
+            ORDER BY create_time DESC
+            LIMIT 1
+            """)
+    CommentReportPO findPendingByReporter(@Param("commentId") Long commentId, @Param("reporterUid") Long reporterUid);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_comment_report
+            WHERE reporter_uid = #{reporterUid}
+              AND create_time >= #{since}
+            """)
+    long countRecentByReporter(@Param("reporterUid") Long reporterUid, @Param("since") LocalDateTime since);
 
     @Update("""
             UPDATE t_comment_report

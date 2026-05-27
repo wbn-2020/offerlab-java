@@ -27,6 +27,10 @@ public class ElasticsearchHttpClient {
         return properties.getPostIndex();
     }
 
+    public String questionIndex() {
+        return properties.getQuestionIndex();
+    }
+
     public boolean enabled() {
         return properties.isEnabled();
     }
@@ -84,6 +88,16 @@ public class ElasticsearchHttpClient {
             return response.success();
         } catch (Exception e) {
             log.warn("elasticsearch index document failed: index={} id={} error={}", index, id, e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean deleteDocument(String index, String id) {
+        try {
+            EsResponse response = send("DELETE", "/" + index + "/_doc/" + id, null);
+            return response.success() || response.statusCode() == 404;
+        } catch (Exception e) {
+            log.debug("elasticsearch delete document failed: index={} id={} error={}", index, id, e.getMessage());
             return false;
         }
     }

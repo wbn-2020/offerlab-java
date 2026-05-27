@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class SearchIndexTaskService {
+    private static final int MAX_RETAINED_TASKS = 100;
 
     private final PostSearchIndexer indexer;
     private final Map<String, SearchIndexTask> tasks = new ConcurrentHashMap<>();
@@ -37,6 +38,7 @@ public class SearchIndexTaskService {
                 .updatedAt(LocalDateTime.now())
                 .build();
         tasks.put(taskId, task);
+        pruneOldTasks();
 
         CompletableFuture.runAsync(() -> runRebuild(taskId));
         return snapshot(task);
@@ -79,6 +81,18 @@ public class SearchIndexTaskService {
         } finally {
             task.setUpdatedAt(LocalDateTime.now());
         }
+    }
+
+    private void pruneOldTasks() {
+        int overflow = tasks.size() - MAX_RETAINED_TASKS;
+        if (overflow <= 0) {
+            return;
+        }
+        tasks.values().stream()
+                .sorted(Comparator.comparing(SearchIndexTask::getCreatedAt))
+                .limit(overflow)
+                .map(SearchIndexTask::getTaskId)
+                .forEach(tasks::remove);
     }
 
     private static SearchIndexTask snapshot(SearchIndexTask task) {

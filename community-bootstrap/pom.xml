@@ -44,6 +44,10 @@
         </dependency>
         <dependency>
             <groupId>com.offerlab</groupId>
+            <artifactId>community-domain-question</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.offerlab</groupId>
             <artifactId>community-domain-notification</artifactId>
         </dependency>
         <dependency>

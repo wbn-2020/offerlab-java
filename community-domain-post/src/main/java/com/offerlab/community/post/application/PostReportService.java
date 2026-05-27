@@ -5,6 +5,8 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.audit.AdminAuditService;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.domain.model.Post;
@@ -17,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.time.LocalDateTime;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -29,11 +33,14 @@ public class PostReportService {
     private static final int MAX_REASON_LEN = 64;
     private static final int MAX_DETAIL_LEN = 1000;
     private static final int MAX_LIMIT = 100;
+    private static final int MAX_REPORTS_PER_DAY = 50;
 
     private final PostRepository postRepo;
     private final PostReportMapper reportMapper;
     private final SnowflakeIdGenerator idGen;
     private final MultiLevelCache<PostDTO> postDetailCache;
+    private final ContentModerationService contentModerationService;
+    private final AdminAuditService adminAuditService;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
@@ -44,6 +51,14 @@ public class PostReportService {
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         if (!post.isVisibleTo(null, false)) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        contentModerationService.requireUserCanPublish(reporterUid);
+        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_REPORT, reason, detail);
+        if (reportMapper.findPendingByReporter(postId, reporterUid) != null) {
+            throw new BizException(ErrorCode.DUPLICATE_OPERATION);
+        }
+        if (reportMapper.countRecentByReporter(reporterUid, LocalDateTime.now().minusDays(1)) >= MAX_REPORTS_PER_DAY) {
+            throw new BizException(ErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
         long reportId = idGen.nextId();
@@ -91,7 +106,10 @@ public class PostReportService {
             takeDownPost(report.getPostId());
         }
 
-        return toDto(reportMapper.selectById(reportId));
+        PostReportDTO dto = toDto(reportMapper.selectById(reportId));
+        adminAuditService.record(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
+                "POST_REPORT", reportId, report, Map.of("approved", approved, "postId", report.getPostId()), note);
+        return dto;
     }
 
     private void takeDownPost(Long postId) {

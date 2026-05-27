@@ -1,9 +1,12 @@
 package com.offerlab.community.post.controller;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.PostFacade;
@@ -42,11 +45,14 @@ public class PostController {
     private final PostApplicationService postService;
     private final PostReportService reportService;
     private final AdminPermissionService adminPermissionService;
+    private final ContentModerationService contentModerationService;
 
     @PostMapping
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
     public Result<Map<String, Long>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
+        contentModerationService.requireUserCanPublish(uid);
+        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
         Long id = postFacade.publishPost(PostCreateCmd.builder()
                 .authorId(uid)
                 .postType(req.getPostType())
@@ -62,8 +68,14 @@ public class PostController {
     }
 
     @PutMapping("/{postId}")
-    public Result<Void> update(@PathVariable Long postId, @RequestBody UpdateReq req) {
+    @RateLimit(key = "'post:update:' + #uid", rate = 30, per = 300)
+    public Result<Void> update(@PathVariable Long postId, @Valid @RequestBody UpdateReq req) {
+        if (req == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
         Long uid = UserContext.require();
+        contentModerationService.requireUserCanPublish(uid);
+        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
         // 更新后只返回成功状态；详情接口会按可见性重新拉取，避免私密帖被匿名视角误判为空。
         postFacade.updatePost(PostUpdateCmd.builder()
                 .postId(postId)
@@ -80,6 +92,7 @@ public class PostController {
     }
 
     @DeleteMapping("/{postId}")
+    @RateLimit(key = "'post:delete:' + #uid", rate = 20, per = 300)
     public Result<Void> delete(@PathVariable Long postId) {
         postFacade.deletePost(postId, UserContext.require());
         return Result.ok();
@@ -119,14 +132,14 @@ public class PostController {
     @GetMapping("/admin/reports")
     public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
                                                    @RequestParam(defaultValue = "20") int limit) {
-        adminPermissionService.requireAdmin(UserContext.require());
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
         return Result.ok(reportService.listRecent(status, limit));
     }
 
     @PostMapping("/admin/reports/{reportId}/review")
     public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireAdmin(uid);
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
@@ -155,10 +168,14 @@ public class PostController {
 
     @Data
     public static class UpdateReq {
+        @Size(max = 255)
         private String title;
+        @Size(max = 20000)
         private String content;
+        @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
+        @Size(max = 20000)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;
