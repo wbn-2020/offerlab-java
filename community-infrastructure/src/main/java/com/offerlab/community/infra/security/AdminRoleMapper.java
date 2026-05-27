@@ -32,6 +32,15 @@ public interface AdminRoleMapper {
     @Select("""
             SELECT COUNT(*)
             FROM t_user_admin
+            WHERE uid = #{uid}
+              AND role_code = #{roleCode}
+              AND enabled = 1
+            """)
+    int countActiveRole(@Param("uid") Long uid, @Param("roleCode") String roleCode);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_user_admin
             WHERE role_code = 'ADMIN'
               AND enabled = 1
             """)
@@ -53,7 +62,6 @@ public interface AdminRoleMapper {
                    create_time AS createTime,
                    update_time AS updateTime
             FROM t_user_admin
-            WHERE role_code = 'ADMIN'
             ORDER BY enabled DESC, update_time DESC, uid ASC
             LIMIT #{limit}
             """)
@@ -61,14 +69,17 @@ public interface AdminRoleMapper {
 
     @Insert("""
             INSERT INTO t_user_admin(uid, role_code, enabled, remark, operator_uid)
-            VALUES (#{uid}, 'ADMIN', 1, #{remark}, #{operatorUid})
+            VALUES (#{uid}, #{roleCode}, 1, #{remark}, #{operatorUid})
             ON DUPLICATE KEY UPDATE
                 enabled = 1,
                 remark = VALUES(remark),
                 operator_uid = VALUES(operator_uid),
                 update_time = NOW(3)
             """)
-    int upsertAdmin(@Param("uid") Long uid, @Param("remark") String remark, @Param("operatorUid") Long operatorUid);
+    int upsertAdmin(@Param("uid") Long uid,
+                    @Param("roleCode") String roleCode,
+                    @Param("remark") String remark,
+                    @Param("operatorUid") Long operatorUid);
 
     @Update("""
             UPDATE t_user_admin
@@ -77,9 +88,10 @@ public interface AdminRoleMapper {
                 operator_uid = #{operatorUid},
                 update_time = NOW(3)
             WHERE uid = #{uid}
-              AND role_code = 'ADMIN'
+              AND role_code = #{roleCode}
             """)
     int updateAdminStatus(@Param("uid") Long uid,
+                          @Param("roleCode") String roleCode,
                           @Param("enabled") int enabled,
                           @Param("remark") String remark,
                           @Param("operatorUid") Long operatorUid);

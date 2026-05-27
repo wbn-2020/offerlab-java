@@ -20,6 +20,7 @@
         <module>community-domain-interaction</module>
         <module>community-domain-feed</module>
         <module>community-domain-search</module>
+        <module>community-domain-question</module>
         <module>community-domain-notification</module>
         <module>community-domain-analytics</module>
         <module>community-archtest</module>
@@ -206,6 +207,11 @@
             <dependency>
                 <groupId>com.offerlab</groupId>
                 <artifactId>community-domain-search</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.offerlab</groupId>
+                <artifactId>community-domain-question</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

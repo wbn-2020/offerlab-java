@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.audit.AdminAuditService;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
@@ -17,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.time.LocalDateTime;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -31,12 +35,15 @@ public class CommentReportService {
     private static final int MAX_REASON_LEN = 64;
     private static final int MAX_DETAIL_LEN = 1000;
     private static final int MAX_LIMIT = 100;
+    private static final int MAX_REPORTS_PER_DAY = 50;
 
     private final CommentMapper commentMapper;
     private final CommentReportMapper reportMapper;
     private final PostCounterMapper postCounterMapper;
     private final PostCounterRedis postCounterRedis;
     private final SnowflakeIdGenerator idGen;
+    private final ContentModerationService contentModerationService;
+    private final AdminAuditService adminAuditService;
 
     @Transactional
     public Long reportComment(Long commentId, Long reporterUid, String reason, String detail) {
@@ -44,6 +51,14 @@ public class CommentReportService {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
         CommentPO comment = requireVisibleComment(commentId);
+        contentModerationService.requireUserCanPublish(reporterUid);
+        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_REPORT, reason, detail);
+        if (reportMapper.findPendingByReporter(commentId, reporterUid) != null) {
+            throw new BizException(ErrorCode.DUPLICATE_OPERATION);
+        }
+        if (reportMapper.countRecentByReporter(reporterUid, LocalDateTime.now().minusDays(1)) >= MAX_REPORTS_PER_DAY) {
+            throw new BizException(ErrorCode.RATE_LIMIT_EXCEEDED);
+        }
 
         long reportId = idGen.nextId();
         CommentReportPO po = new CommentReportPO();
@@ -89,7 +104,11 @@ public class CommentReportService {
         if (approved) {
             hideCommentBranch(report.getCommentId(), report.getPostId());
         }
-        return toDto(reportMapper.selectById(reportId));
+        CommentReportDTO dto = toDto(reportMapper.selectById(reportId));
+        adminAuditService.record(reviewerUid, approved ? "COMMENT_REPORT_APPROVE" : "COMMENT_REPORT_REJECT",
+                "COMMENT_REPORT", reportId, report,
+                Map.of("approved", approved, "commentId", report.getCommentId(), "postId", report.getPostId()), note);
+        return dto;
     }
 
     private CommentPO requireVisibleComment(Long commentId) {

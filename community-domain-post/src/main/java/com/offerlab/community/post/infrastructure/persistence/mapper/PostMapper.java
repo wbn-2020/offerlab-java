@@ -109,4 +109,30 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             """)
     List<PostPO> selectHotPosts(@Param("cursorTime") LocalDateTime cursorTime, @Param("limit") int limit);
+
+    @Select("""
+            SELECT p.*
+            FROM t_post_main p
+            JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.post_type = 1
+              AND e.company = #{company}
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            """)
+    List<PostPO> selectRecentInterviewPostsByCompany(@Param("company") String company, @Param("limit") int limit);
+
+    @Select("""
+            SELECT id
+            FROM t_post_main
+            WHERE is_deleted = 0
+              AND post_status = 1
+              AND visibility = 1
+              AND post_type = 1
+            ORDER BY create_time DESC, id DESC
+            LIMIT #{limit}
+            """)
+    List<Long> selectRecentPublicInterviewPostIds(@Param("limit") int limit);
 }

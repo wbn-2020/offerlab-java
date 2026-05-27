@@ -1,9 +1,11 @@
 package com.offerlab.community.infra.web.config;
 
 import com.offerlab.community.infra.web.interceptor.AuthInterceptor;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -15,9 +17,26 @@ import java.util.Arrays;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final AuthInterceptor authInterceptor;
+    private final Environment environment;
 
     @Value("${offerlab.web.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174}")
     private String allowedOrigins;
+
+    @PostConstruct
+    void validateCorsOrigins() {
+        if (!environment.matchesProfiles("prod")) {
+            return;
+        }
+        for (String origin : parseAllowedOrigins()) {
+            String normalized = origin.toLowerCase();
+            if ("*".equals(normalized)
+                    || normalized.contains("localhost")
+                    || normalized.contains("127.0.0.1")
+                    || normalized.contains("0.0.0.0")) {
+                throw new IllegalStateException("Production CORS origins must be explicitly configured and must not use local or wildcard origins");
+            }
+        }
+    }
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
