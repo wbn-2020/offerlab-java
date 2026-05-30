@@ -48,6 +48,8 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     private static final int TARGET_POST = 1;
     private static final int TARGET_COMMENT = 2;
+    private static final int COMMENT_STATUS_NORMAL = 1;
+    private static final int COMMENT_STATUS_REVIEWING = 2;
 
     private final LikeMapper likeMapper;
     private final FavoriteMapper favoriteMapper;
@@ -128,7 +130,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     @Transactional
     public void likeComment(Long uid, Long commentId) {
         CommentPO comment = commentMapper.selectById(commentId);
-        if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != 1) {
+        if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != COMMENT_STATUS_NORMAL) {
             throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
         }
         LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_COMMENT, commentId);
@@ -229,11 +231,12 @@ public class InteractionFacadeImpl implements InteractionFacade {
         po.setAuthorId(cmd.getAuthorUid());
         po.setContent(cmd.getContent());
         po.setLikeCount(0);
-        po.setCommentStatus(1);
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired());
+        po.setCommentStatus(reviewRequired ? COMMENT_STATUS_REVIEWING : COMMENT_STATUS_NORMAL);
 
         if (cmd.getParentId() != null && cmd.getParentId() > 0) {
             CommentPO parent = commentMapper.selectById(cmd.getParentId());
-            if (parent == null || parent.getCommentStatus() == null || parent.getCommentStatus() != 1
+            if (parent == null || parent.getCommentStatus() == null || parent.getCommentStatus() != COMMENT_STATUS_NORMAL
                     || !Objects.equals(parent.getPostId(), cmd.getPostId())) {
                 throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
             }
@@ -246,19 +249,21 @@ public class InteractionFacadeImpl implements InteractionFacade {
         }
 
         commentMapper.insert(po);
-        // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrComment(cmd.getPostId(), 1);
-        postCounterMapper.incrComment(cmd.getPostId(), 1);
-        events.publish(CommentCreatedEvent.builder()
-                .uid(cmd.getAuthorUid())
-                .postId(cmd.getPostId())
-                .postAuthorId(post.getAuthorId())
-                .commentId(id)
-                .parentId(po.getParentId())
-                .replyToUid(po.getReplyToUid())
-                .content(cmd.getContent())
-                .timestamp(Instant.now().toEpochMilli())
-                .build());
+        if (!reviewRequired) {
+            // 双写：Redis 写主 + MySQL 兜底
+            postCounterRedis.incrComment(cmd.getPostId(), 1);
+            postCounterMapper.incrComment(cmd.getPostId(), 1);
+            events.publish(CommentCreatedEvent.builder()
+                    .uid(cmd.getAuthorUid())
+                    .postId(cmd.getPostId())
+                    .postAuthorId(post.getAuthorId())
+                    .commentId(id)
+                    .parentId(po.getParentId())
+                    .replyToUid(po.getReplyToUid())
+                    .content(cmd.getContent())
+                    .timestamp(Instant.now().toEpochMilli())
+                    .build());
+        }
         return id;
     }
 
@@ -268,7 +273,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         LambdaQueryWrapper<CommentPO> q = new LambdaQueryWrapper<CommentPO>()
                 .eq(CommentPO::getPostId, postId)
                 .eq(CommentPO::getRootId, 0L)             // 仅一级
-                .eq(CommentPO::getCommentStatus, 1)
+                .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
                 .orderByDesc(CommentPO::getCreateTime)
                 .last("LIMIT " + (limit + 1));
         if (cursor > 0) {
@@ -285,7 +290,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         List<CommentPO> replies = commentMapper.selectList(new LambdaQueryWrapper<CommentPO>()
                 .eq(CommentPO::getPostId, postId)
                 .in(CommentPO::getRootId, rootIds)
-                .eq(CommentPO::getCommentStatus, 1)
+                .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
                 .orderByAsc(CommentPO::getCreateTime));
         List<CommentPO> all = new java.util.ArrayList<>(roots.size() + replies.size());
         all.addAll(roots);
@@ -318,7 +323,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         }
         LambdaQueryWrapper<CommentPO> deleteQuery = new LambdaQueryWrapper<CommentPO>()
                 .eq(CommentPO::getPostId, po.getPostId())
-                .eq(CommentPO::getCommentStatus, 1);
+                .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL);
         if (po.getRootId() == null || po.getRootId() == 0L) {
             deleteQuery.and(q -> q.eq(CommentPO::getId, po.getId()).or().eq(CommentPO::getRootId, po.getId()));
         } else {

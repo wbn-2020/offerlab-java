@@ -20,6 +20,8 @@ public class PostBriefDTO {
     private Integer postType;
     private String title;
     private String summary;
+    private String highlightTitle;
+    private String highlightSummary;
     private String coverUrl;
     private String extJson;
     private List<TagDTO> tags;

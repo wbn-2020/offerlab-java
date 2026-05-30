@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Data
@@ -16,5 +17,8 @@ public class PrepTargetDTO {
     private Long uid;
     private String targetType;
     private String targetValue;
+    private LocalDate interviewDate;
+    private String priority;
+    private String note;
     private LocalDateTime createTime;
 }

@@ -71,7 +71,7 @@ public class PostRepositoryImpl implements PostRepository {
     @Transactional
     public void update(Post post) {
         PostPO po = toPO(post);
-        po.setVersion(null);
+        po.setVersion(post.getVersion() == null ? 1 : post.getVersion() + 1);
         postMapper.updateById(po);
         if (post.getExtJson() != null) {
             PostExtensionPO existing = extMapper.selectById(post.getId());
@@ -165,6 +165,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .extJson(ext == null ? null : ext.getExtJson())
+                .version(po.getVersion())
                 .build();
     }
 }

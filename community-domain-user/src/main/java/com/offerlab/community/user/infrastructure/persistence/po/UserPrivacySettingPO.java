@@ -17,6 +17,11 @@ public class UserPrivacySettingPO {
     private Integer searchable;
     private Integer interactionNotification;
     private Integer systemNotification;
+    private Integer likeNotification;
+    private Integer commentNotification;
+    private Integer followNotification;
+    private Integer favoriteNotification;
+    private Integer mentionNotification;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

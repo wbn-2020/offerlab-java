@@ -55,19 +55,26 @@ public class SearchFacadeImpl implements SearchFacade {
     private final PostSearchIndexer postSearchIndexer;
     private final PostFacade postFacade;
     private final UserFacade userFacade;
+    private final SearchAnalyticsService searchAnalyticsService;
 
     @Override
     public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
                                                 Integer type, String sort, String cursor, int size) {
         int limit = Math.min(size <= 0 ? 20 : size, 50);
         String normalizedSort = normalizeSort(sort);
+        boolean firstPage = parseCursor(cursor) <= 0;
+        PageResult<PostBriefDTO> result;
         if (!"hot".equals(normalizedSort) && postSearchIndexer.ensurePostIndex()) {
             Optional<PageResult<PostBriefDTO>> esResult = searchByElasticsearch(keyword, company, position, type, normalizedSort, cursor, limit);
             if (esResult.isPresent()) {
-                return esResult.get();
+                result = esResult.get();
+                searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
+                return result;
             }
         }
-        return searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit);
+        result = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit);
+        searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
+        return result;
     }
 
     @Override
@@ -179,12 +186,15 @@ public class SearchFacadeImpl implements SearchFacade {
         List<PostBriefDTO> items = new ArrayList<>();
         for (JsonNode hit : hits) {
             JsonNode source = hit.path("_source");
+            String summary = source.path("summary").asText("");
             items.add(PostBriefDTO.builder()
                     .id(source.path("id").asLong())
                     .authorId(source.path("authorId").asLong())
                     .postType(source.path("type").asInt())
-                    .title(firstHighlight(hit, "title").orElse(source.path("title").asText("")))
-                    .summary(firstHighlight(hit, "content").orElse(source.path("summary").asText("")))
+                    .title(source.path("title").asText(""))
+                    .summary(summary)
+                    .highlightTitle(firstHighlight(hit, "title").orElse(null))
+                    .highlightSummary(firstHighlight(hit, "content").orElse(null))
                     .coverUrl(source.path("coverUrl").asText(null))
                     .extJson(source.path("extJson").asText(null))
                     .tags(toTags(source.path("tags")))

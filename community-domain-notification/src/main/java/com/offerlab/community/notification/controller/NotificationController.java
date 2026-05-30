@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.notification.api.NotificationFacade;
+import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,6 +34,11 @@ public class NotificationController {
     @GetMapping("/unread-count")
     public Result<Map<String, Long>> unreadCount() {
         return Result.ok(facade.getUnreadCountByType(UserContext.require()));
+    }
+
+    @GetMapping("/realtime-status")
+    public Result<NotificationRealtimeStatusDTO> realtimeStatus() {
+        return Result.ok(facade.getRealtimeStatus(UserContext.require()));
     }
 
     @PostMapping("/read")

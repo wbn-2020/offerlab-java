@@ -37,6 +37,7 @@ public class QuestionSearchIndexer {
             return true;
         }
         if (elasticsearch.indexExists(elasticsearch.questionIndex())) {
+            ensureStructuredFieldMapping();
             indexReady.set(true);
             return true;
         }
@@ -80,7 +81,7 @@ public class QuestionSearchIndexer {
         return Map.of("accepted", true, "indexed", indexed, "failed", failed, "total", rows.size(), "indexName", elasticsearch.questionIndex());
     }
 
-    public Optional<List<Long>> search(QuestionQuery query, int offset, int limit) {
+    public Optional<List<QuestionSearchHit>> search(QuestionQuery query, int offset, int limit) {
         if (!ensureQuestionIndex()) {
             return Optional.empty();
         }
@@ -89,7 +90,18 @@ public class QuestionSearchIndexer {
         body.put("sort", buildSort(query == null ? null : query.getSort()));
         body.put("from", offset);
         body.put("size", limit);
-        return elasticsearch.search(elasticsearch.questionIndex(), body).map(this::extractIds);
+        if (!clean(query == null ? null : query.getKeyword()).isBlank()) {
+            body.put("highlight", Map.of(
+                    "pre_tags", List.of("<em>"),
+                    "post_tags", List.of("</em>"),
+                    "fields", Map.of(
+                            "questionText", Map.of("number_of_fragments", 0),
+                            "examPoint", Map.of("number_of_fragments", 0),
+                            "answerHint", Map.of("fragment_size", 120, "number_of_fragments", 1)
+                    )
+            ));
+        }
+        return elasticsearch.search(elasticsearch.questionIndex(), body).map(this::extractHits);
     }
 
     private Map<String, Object> toDocument(InterviewQuestionPO row) {
@@ -108,6 +120,10 @@ public class QuestionSearchIndexer {
         doc.put("canonicalId", row.getCanonicalId());
         doc.put("questionText", nullToEmpty(row.getQuestionText()));
         doc.put("answerHint", nullToEmpty(row.getAnswerHint()));
+        doc.put("examPoint", nullToEmpty(row.getExamPoint()));
+        doc.put("referenceAnswer", nullToEmpty(row.getReferenceAnswer()));
+        doc.put("sourceSnippet", nullToEmpty(row.getSourceSnippet()));
+        doc.put("qualityReason", nullToEmpty(row.getQualityReason()));
         doc.put("company", nullToEmpty(row.getCompany()));
         doc.put("position", nullToEmpty(row.getPosition()));
         doc.put("interviewRound", nullToEmpty(row.getInterviewRound()));
@@ -134,7 +150,7 @@ public class QuestionSearchIndexer {
         } else {
             must.add(Map.of("multi_match", Map.of(
                     "query", keyword,
-                    "fields", List.of("questionText^3", "answerHint", "company^2", "position", "tagNames"),
+                    "fields", List.of("questionText^3", "examPoint^2", "answerHint", "referenceAnswer", "sourceSnippet", "company^2", "position", "tagNames"),
                     "type", "best_fields",
                     "operator", "or"
             )));
@@ -177,22 +193,53 @@ public class QuestionSearchIndexer {
         return List.of(Map.of("createTime", Map.of("order", "desc")), Map.of("questionId", Map.of("order", "desc")));
     }
 
-    private List<Long> extractIds(JsonNode root) {
-        List<Long> ids = new ArrayList<>();
+    private List<QuestionSearchHit> extractHits(JsonNode root) {
+        List<QuestionSearchHit> hitsResult = new ArrayList<>();
         JsonNode hits = root.path("hits").path("hits");
         if (!hits.isArray()) {
-            return ids;
+            return hitsResult;
         }
         for (JsonNode hit : hits) {
             long id = hit.path("_source").path("questionId").asLong(0L);
             if (id > 0) {
-                ids.add(id);
+                hitsResult.add(new QuestionSearchHit(
+                        id,
+                        firstHighlight(hit, "questionText").orElse(null),
+                        firstHighlight(hit, "examPoint").orElse(null),
+                        firstHighlight(hit, "answerHint").orElse(null)
+                ));
             }
         }
-        return ids;
+        return hitsResult;
+    }
+
+    private Optional<String> firstHighlight(JsonNode hit, String field) {
+        JsonNode values = hit.path("highlight").path(field);
+        if (!values.isArray() || values.isEmpty()) {
+            return Optional.empty();
+        }
+        String value = values.get(0).asText("");
+        return value.isBlank() ? Optional.empty() : Optional.of(value);
     }
 
     private Map<String, Object> questionIndexMapping() {
+        Map<String, Object> props = baseQuestionProperties();
+        props.put("tags", Map.of("type", "nested", "properties", Map.of(
+                "id", Map.of("type", "long"),
+                "name", Map.of("type", "keyword"),
+                "tagType", Map.of("type", "integer")
+        )));
+        return Map.of(
+                "settings", Map.of("number_of_shards", 1, "number_of_replicas", 0, "refresh_interval", "1s"),
+                "mappings", Map.of("dynamic", "strict", "properties", props)
+        );
+    }
+
+    private boolean ensureStructuredFieldMapping() {
+        return elasticsearch.updateMapping(elasticsearch.questionIndex(), structuredFieldProperties());
+    }
+
+    private Map<String, Object> baseQuestionProperties() {
         Map<String, Object> keyword = Map.of("type", "keyword");
         Map<String, Object> text = Map.of("type", "text", "fields", Map.of("keyword", keyword));
         Map<String, Object> props = new LinkedHashMap<>();
@@ -201,6 +248,10 @@ public class QuestionSearchIndexer {
         props.put("canonicalId", Map.of("type", "long"));
         props.put("questionText", text);
         props.put("answerHint", Map.of("type", "text"));
+        props.put("examPoint", text);
+        props.put("referenceAnswer", Map.of("type", "text"));
+        props.put("sourceSnippet", Map.of("type", "text"));
+        props.put("qualityReason", Map.of("type", "text"));
         props.put("company", text);
         props.put("position", keyword);
         props.put("interviewRound", keyword);
@@ -213,15 +264,18 @@ public class QuestionSearchIndexer {
         props.put("tagNames", keyword);
         props.put("createTime", Map.of("type", "date", "format", "epoch_millis"));
         props.put("updateTime", Map.of("type", "date", "format", "epoch_millis"));
-        props.put("tags", Map.of("type", "nested", "properties", Map.of(
-                "id", Map.of("type", "long"),
-                "name", keyword,
-                "tagType", Map.of("type", "integer")
-        )));
-        return Map.of(
-                "settings", Map.of("number_of_shards", 1, "number_of_replicas", 0, "refresh_interval", "1s"),
-                "mappings", Map.of("dynamic", "strict", "properties", props)
-        );
+        return props;
+    }
+
+    private Map<String, Object> structuredFieldProperties() {
+        Map<String, Object> keyword = Map.of("type", "keyword");
+        Map<String, Object> text = Map.of("type", "text", "fields", Map.of("keyword", keyword));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("examPoint", text);
+        props.put("referenceAnswer", Map.of("type", "text"));
+        props.put("sourceSnippet", Map.of("type", "text"));
+        props.put("qualityReason", Map.of("type", "text"));
+        return props;
     }
 
     private void addMatchFilter(List<Object> filter, String field, String value) {
@@ -242,5 +296,11 @@ public class QuestionSearchIndexer {
 
     private String clean(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    public record QuestionSearchHit(Long questionId,
+                                    String highlightQuestionText,
+                                    String highlightExamPoint,
+                                    String highlightAnswerHint) {
     }
 }

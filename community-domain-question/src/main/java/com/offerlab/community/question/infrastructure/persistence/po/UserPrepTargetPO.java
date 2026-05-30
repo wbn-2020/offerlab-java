@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Data
@@ -15,5 +16,8 @@ public class UserPrepTargetPO {
     private Long uid;
     private String targetType;
     private String targetValue;
+    private LocalDate interviewDate;
+    private String priority;
+    private String note;
     private LocalDateTime createTime;
 }

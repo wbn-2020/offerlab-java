@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -22,6 +24,11 @@ public class ModerationAdminService {
     public List<ModerationKeyword> listKeywords(String keyword, String scope, int limit) {
         ensureTable("t_moderation_keyword");
         return mapper.listKeywords(clean(keyword), clean(scope), Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+    }
+
+    public List<ModerationKeywordHit> listKeywordHits(String scope, String action, Long uid, String keyword, int limit) {
+        ensureTable("t_moderation_keyword_hit");
+        return mapper.listKeywordHits(clean(scope), clean(action), uid, clean(keyword), Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
     }
 
     @Transactional
@@ -63,7 +70,9 @@ public class ModerationAdminService {
 
     public List<UserModerationState> listUserStates(int limit) {
         ensureTable("t_user_moderation_state");
-        return mapper.listUserStates(Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+        List<UserModerationState> states = mapper.listUserStates(Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+        enrichRecentViolations(states);
+        return states;
     }
 
     @Transactional
@@ -76,7 +85,73 @@ public class ModerationAdminService {
         LocalDateTime mutedUntil = hoursFromNow(now, cmd.getMuteHours());
         LocalDateTime bannedUntil = hoursFromNow(now, cmd.getBanHours());
         mapper.upsertUserState(cmd.getUid(), mutedUntil, bannedUntil, limit(cmd.getReason(), 500), operatorUid);
-        return mapper.findUserState(cmd.getUid());
+        UserModerationState state = mapper.findUserState(cmd.getUid());
+        if (state == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        enrichRecentViolations(List.of(state));
+        return state;
+    }
+
+    @Transactional
+    public UserModerationState clearUserMute(Long uid, Long operatorUid) {
+        ensureTable("t_user_moderation_state");
+        if (uid == null || uid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (mapper.clearMute(uid, "解除禁言", operatorUid) == 0) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        UserModerationState state = mapper.findUserState(uid);
+        if (state == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        enrichRecentViolations(List.of(state));
+        return state;
+    }
+
+    @Transactional
+    public UserModerationState clearUserBan(Long uid, Long operatorUid) {
+        ensureTable("t_user_moderation_state");
+        if (uid == null || uid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (mapper.clearBan(uid, "解除封禁", operatorUid) == 0) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        UserModerationState state = mapper.findUserState(uid);
+        if (state == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        enrichRecentViolations(List.of(state));
+        return state;
+    }
+
+    private void enrichRecentViolations(List<UserModerationState> states) {
+        if (states == null || states.isEmpty() || mapper.tableExists("t_moderation_keyword_hit") <= 0) {
+            return;
+        }
+        List<Long> uids = states.stream()
+                .filter(Objects::nonNull)
+                .map(UserModerationState::getUid)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (uids.isEmpty()) {
+            return;
+        }
+        Map<Long, UserModerationState> latest = mapper.listLatestUserViolations(uids).stream()
+                .filter(item -> item.getUid() != null)
+                .collect(Collectors.toMap(UserModerationState::getUid, item -> item, (a, b) -> a));
+        states.stream().filter(Objects::nonNull).forEach(state -> {
+            UserModerationState hit = latest.get(state.getUid());
+            if (hit != null) {
+                state.setRecentViolationKeyword(hit.getRecentViolationKeyword());
+                state.setRecentViolationAction(hit.getRecentViolationAction());
+                state.setRecentViolationSummary(hit.getRecentViolationSummary());
+                state.setRecentViolationTime(hit.getRecentViolationTime());
+            }
+        });
     }
 
     private LocalDateTime hoursFromNow(LocalDateTime now, Integer hours) {

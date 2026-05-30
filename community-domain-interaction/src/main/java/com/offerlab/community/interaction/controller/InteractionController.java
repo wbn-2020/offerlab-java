@@ -97,10 +97,11 @@ public class InteractionController {
 
     @PostMapping("/posts/{postId}/comments")
     @RateLimit(key = "'comment:' + #uid", rate = 30, per = 60)
-    public Result<Map<String, Long>> comment(@PathVariable Long postId, @Valid @RequestBody CommentReq req) {
+    public Result<Map<String, Object>> comment(@PathVariable Long postId, @Valid @RequestBody CommentReq req) {
         Long uid = UserContext.require();
         contentModerationService.requireUserCanPublish(uid);
-        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_COMMENT, req.getContent());
+        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
+                uid, ContentModerationService.SCOPE_COMMENT, req.getContent());
         // parentId/replyToUid 同时传入时表示楼中楼回复，领域层负责归并根评论关系。
         Long id = facade.addComment(CommentCreateCmd.builder()
                 .postId(postId)
@@ -108,8 +109,9 @@ public class InteractionController {
                 .parentId(req.getParentId())
                 .replyToUid(req.getReplyToUid())
                 .content(req.getContent())
+                .reviewRequired(moderationDecision.reviewRequired())
                 .build());
-        return Result.ok(Map.of("commentId", id));
+        return Result.ok(Map.of("commentId", id, "reviewRequired", moderationDecision.reviewRequired()));
     }
 
     @PublicApi

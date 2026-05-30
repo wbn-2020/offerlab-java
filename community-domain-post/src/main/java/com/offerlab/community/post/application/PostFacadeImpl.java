@@ -1,5 +1,7 @@
 package com.offerlab.community.post.application;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
@@ -10,6 +12,7 @@ import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
@@ -45,6 +48,7 @@ public class PostFacadeImpl implements PostFacade {
     private final PostCounterMapper counterMapper;
     private final TagMapper tagMapper;
     private final PostCounterRedis postCounterRedis;
+    private final PostVersionHistoryService versionHistoryService;
     private final MultiLevelCache<PostDTO> multiLevelCache;
     private final PostApplicationService postService;
     private final UserFacade userFacade;
@@ -123,6 +127,8 @@ public class PostFacadeImpl implements PostFacade {
     public void updatePost(PostUpdateCmd cmd) {
         postService.update(cmd);
         // 帖子正文、可见性和标签都可能变化，更新成功后必须清理详情缓存。
+
+
         multiLevelCache.evict(CacheKeyBuilder.postDetail(cmd.getPostId()));
     }
 
@@ -137,6 +143,19 @@ public class PostFacadeImpl implements PostFacade {
     public PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size) {
         return listPosts(authorId, null, null, cursor, size);
     }
+
+    @Override
+    public List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit) {
+        if (postId == null || postId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        Post post = postRepo.findById(postId).orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        if (!moderator && !post.getAuthorId().equals(viewerUid)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
+        return versionHistoryService.listRecent(postId, limit);
+    }
+
 
     @Override
     public PageResult<PostBriefDTO> getLatest(long cursor, int size) {

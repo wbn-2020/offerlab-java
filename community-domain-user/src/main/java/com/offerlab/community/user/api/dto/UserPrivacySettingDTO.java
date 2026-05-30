@@ -15,4 +15,9 @@ public class UserPrivacySettingDTO {
     private Boolean searchable;
     private Boolean interactionNotification;
     private Boolean systemNotification;
+    private Boolean likeNotification;
+    private Boolean commentNotification;
+    private Boolean followNotification;
+    private Boolean favoriteNotification;
+    private Boolean mentionNotification;
 }

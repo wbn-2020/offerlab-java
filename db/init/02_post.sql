@@ -71,3 +71,45 @@ CREATE TABLE t_post_counter (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     version         INT          NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子计数器';
+
+DROP TABLE IF EXISTS t_post_draft;
+CREATE TABLE t_post_draft (
+    id              BIGINT       NOT NULL PRIMARY KEY,
+    uid             BIGINT       NOT NULL,
+    source_post_id  BIGINT       NULL COMMENT '编辑已有帖子时关联的帖子 ID',
+    post_type       TINYINT      NOT NULL DEFAULT 1 COMMENT '1面经 2技术博客 3题解 4求职问答',
+    title           VARCHAR(255) NULL,
+    content         LONGTEXT     NULL,
+    cover_url       VARCHAR(512) NULL,
+    visibility      TINYINT      NOT NULL DEFAULT 1,
+    ext_json        JSON         NULL,
+    tag_ids_json    JSON         NULL,
+    tag_names_json  JSON         NULL,
+    create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    is_deleted      TINYINT      NOT NULL DEFAULT 0,
+    KEY idx_uid_update_time (uid, update_time),
+    KEY idx_uid_source_post (uid, source_post_id, update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子服务端草稿';
+
+DROP TABLE IF EXISTS t_post_version_history;
+CREATE TABLE t_post_version_history (
+    id                BIGINT       NOT NULL PRIMARY KEY,
+    post_id           BIGINT       NOT NULL,
+    author_id         BIGINT       NOT NULL,
+    editor_uid        BIGINT       NOT NULL,
+    base_version      INT          NOT NULL DEFAULT 0,
+    post_type         TINYINT      NOT NULL,
+    title             VARCHAR(255) NOT NULL,
+    content           LONGTEXT     NOT NULL,
+    cover_url         VARCHAR(512) NULL,
+    visibility        TINYINT      NOT NULL DEFAULT 1,
+    post_status       TINYINT      NOT NULL DEFAULT 1,
+    ext_json          JSON         NULL,
+    tag_snapshot_json JSON         NULL,
+    change_summary    VARCHAR(255) NULL,
+    create_time       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    KEY idx_post_time (post_id, create_time),
+    KEY idx_author_time (author_id, create_time),
+    KEY idx_editor_time (editor_uid, create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Post version history';

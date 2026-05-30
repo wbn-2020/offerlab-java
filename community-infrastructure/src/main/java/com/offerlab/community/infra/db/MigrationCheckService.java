@@ -18,6 +18,7 @@ public class MigrationCheckService {
         for (String table : List.of(
                 "t_admin_audit_log",
                 "t_moderation_keyword",
+                "t_moderation_keyword_hit",
                 "t_user_moderation_state",
                 "t_user_prep_target",
                 "t_interview_question",

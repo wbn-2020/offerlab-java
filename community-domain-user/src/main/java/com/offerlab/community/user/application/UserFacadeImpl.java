@@ -143,6 +143,36 @@ public class UserFacadeImpl implements UserFacade {
     }
 
     @Override
+    public boolean allowsLikeNotification(Long uid) {
+        UserPrivacySettingPO setting = setting(uid);
+        return allowsInteraction(setting) && enabled(setting.getLikeNotification());
+    }
+
+    @Override
+    public boolean allowsCommentNotification(Long uid) {
+        UserPrivacySettingPO setting = setting(uid);
+        return allowsInteraction(setting) && enabled(setting.getCommentNotification());
+    }
+
+    @Override
+    public boolean allowsFollowNotification(Long uid) {
+        UserPrivacySettingPO setting = setting(uid);
+        return allowsInteraction(setting) && enabled(setting.getFollowNotification());
+    }
+
+    @Override
+    public boolean allowsFavoriteNotification(Long uid) {
+        UserPrivacySettingPO setting = setting(uid);
+        return allowsInteraction(setting) && enabled(setting.getFavoriteNotification());
+    }
+
+    @Override
+    public boolean allowsMentionNotification(Long uid) {
+        UserPrivacySettingPO setting = setting(uid);
+        return allowsInteraction(setting) && enabled(setting.getMentionNotification());
+    }
+
+    @Override
     public boolean allowsSystemNotification(Long uid) {
         return enabled(setting(uid).getSystemNotification());
     }
@@ -184,7 +214,16 @@ public class UserFacadeImpl implements UserFacade {
         defaults.setSearchable(1);
         defaults.setInteractionNotification(1);
         defaults.setSystemNotification(1);
+        defaults.setLikeNotification(1);
+        defaults.setCommentNotification(1);
+        defaults.setFollowNotification(1);
+        defaults.setFavoriteNotification(1);
+        defaults.setMentionNotification(1);
         return defaults;
+    }
+
+    private boolean allowsInteraction(UserPrivacySettingPO setting) {
+        return enabled(setting.getInteractionNotification());
     }
 
     private boolean visible(Long viewerUid, Long targetUid, String visibility) {

@@ -1,12 +1,14 @@
 package com.offerlab.community.infra.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -42,6 +44,25 @@ public class AdminAuditService {
     public List<AdminAuditLog> listRecent(String action, String resourceType, int limit) {
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100));
         return mapper.listRecent(clean(action), clean(resourceType), safeLimit);
+    }
+
+    public PageResult<AdminAuditLog> page(String action, String resourceType, Long operatorUid,
+                                          LocalDateTime startTime, LocalDateTime endTime,
+                                          int page, int pageSize) {
+        int safePage = Math.max(1, page);
+        int safePageSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        int offset = (safePage - 1) * safePageSize;
+        String cleanAction = clean(action);
+        String cleanResourceType = clean(resourceType);
+        List<AdminAuditLog> items = mapper.page(cleanAction, cleanResourceType, operatorUid, startTime, endTime, offset, safePageSize);
+        long total = mapper.count(cleanAction, cleanResourceType, operatorUid, startTime, endTime);
+        boolean hasMore = offset + items.size() < total;
+        return PageResult.<AdminAuditLog>builder()
+                .items(items)
+                .total(total)
+                .hasMore(hasMore)
+                .nextCursor(hasMore ? String.valueOf(safePage + 1) : null)
+                .build();
     }
 
     private String toJson(Object value) throws Exception {

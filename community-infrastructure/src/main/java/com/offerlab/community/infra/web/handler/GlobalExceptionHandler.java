@@ -23,7 +23,9 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BizException.class)
     public ResponseEntity<Result<?>> handleBiz(BizException e) {
         log.warn("[biz] code={} msg={}", e.getCode(), e.getMessage());
-        Result<?> r = Result.fail(e.getCode(), e.getMessage());
+        Result<?> r = e.getData() == null
+                ? Result.fail(e.getCode(), e.getMessage())
+                : Result.builder().code(e.getCode()).message(e.getMessage()).data(e.getData()).build();
         r.setTraceId(TraceContext.get());
         HttpStatus status = e.getCode() == ErrorCode.UNAUTHORIZED.getCode()
                 ? HttpStatus.UNAUTHORIZED

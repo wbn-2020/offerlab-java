@@ -7,11 +7,15 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.question.api.dto.AiTaskDetailDTO;
 import com.offerlab.community.question.api.dto.AiTaskDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasCmd;
+import com.offerlab.community.question.api.dto.CompanyAliasCandidateDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasDTO;
 import com.offerlab.community.question.api.dto.QuestionAdminUpdateCmd;
+import com.offerlab.community.question.api.dto.QuestionAdminQuery;
 import com.offerlab.community.question.api.dto.QuestionDTO;
+import com.offerlab.community.question.api.dto.QuestionDuplicateGroupDTO;
 import com.offerlab.community.question.application.QuestionFacade;
 import com.offerlab.community.question.application.QuestionIndexTaskService;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +51,12 @@ public class QuestionAdminController {
                                              @RequestParam(defaultValue = "20") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
         return Result.ok(questionFacade.listTasks(status, limit));
+    }
+
+    @GetMapping("/ai-tasks/{id}")
+    public Result<AiTaskDetailDTO> getTaskDetail(@PathVariable Long id) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        return Result.ok(questionFacade.getTaskDetail(id));
     }
 
     @PostMapping("/ai-tasks/{id}/retry")
@@ -142,10 +152,28 @@ public class QuestionAdminController {
 
     @GetMapping("/questions/page")
     public Result<PageResult<QuestionDTO>> pageQuestions(@RequestParam(required = false) Integer status,
+                                                        @RequestParam(required = false) String keyword,
+                                                        @RequestParam(required = false) String company,
+                                                        @RequestParam(required = false) String position,
+                                                        @RequestParam(required = false) Integer minQualityScore,
+                                                        @RequestParam(required = false) Integer maxQualityScore,
+                                                        @RequestParam(required = false) Long sourcePostId,
+                                                        @RequestParam(required = false) Integer taskStatus,
                                                         @RequestParam(defaultValue = "1") int page,
                                                         @RequestParam(defaultValue = "30") int pageSize) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
-        return Result.ok(questionFacade.pageAdminQuestions(status, page, pageSize));
+        QuestionAdminQuery query = new QuestionAdminQuery();
+        query.setStatus(status);
+        query.setKeyword(keyword);
+        query.setCompany(company);
+        query.setPosition(position);
+        query.setMinQualityScore(minQualityScore);
+        query.setMaxQualityScore(maxQualityScore);
+        query.setSourcePostId(sourcePostId);
+        query.setTaskStatus(taskStatus);
+        query.setPage(page);
+        query.setPageSize(pageSize);
+        return Result.ok(questionFacade.pageAdminQuestions(query));
     }
 
     @GetMapping("/questions/summary")
@@ -163,11 +191,58 @@ public class QuestionAdminController {
         return Result.ok(dto);
     }
 
+    @GetMapping("/questions/{id}/duplicates")
+    public Result<QuestionDuplicateGroupDTO> getQuestionDuplicateGroup(@PathVariable Long id) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        return Result.ok(questionFacade.getDuplicateGroup(id));
+    }
+
+    @PostMapping("/questions/{id}/duplicates/canonical")
+    public Result<QuestionDuplicateGroupDTO> setQuestionDuplicateCanonical(@PathVariable Long id,
+                                                                           @RequestBody QuestionCanonicalRequest request) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        Long canonicalQuestionId = request == null ? null : request.canonicalQuestionId();
+        QuestionDuplicateGroupDTO dto = questionFacade.setDuplicateCanonical(id, canonicalQuestionId);
+        adminAuditService.record(uid, "QUESTION_DUPLICATE_CANONICAL", "QUESTION", id, null,
+                Map.of("canonicalQuestionId", canonicalQuestionId, "group", dto), null);
+        return Result.ok(dto);
+    }
+
+    @PostMapping("/questions/{id}/duplicates/merge-candidate")
+    public Result<QuestionDuplicateGroupDTO> mergeQuestionDuplicateCandidate(@PathVariable Long id,
+                                                                             @RequestBody QuestionDuplicateCandidateMergeRequest request) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        Long candidateQuestionId = request == null ? null : request.candidateQuestionId();
+        QuestionDuplicateGroupDTO dto = questionFacade.mergeDuplicateCandidate(id, candidateQuestionId);
+        adminAuditService.record(uid, "QUESTION_DUPLICATE_MERGE_CANDIDATE", "QUESTION", id, null,
+                Map.of("candidateQuestionId", candidateQuestionId, "group", dto), null);
+        return Result.ok(dto);
+    }
+
+    @PostMapping("/questions/{id}/duplicates/hide")
+    public Result<QuestionDuplicateGroupDTO> hideQuestionDuplicates(@PathVariable Long id,
+                                                                   @RequestBody QuestionDuplicateHideRequest request) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids();
+        QuestionDuplicateGroupDTO dto = questionFacade.hideDuplicateQuestions(id, ids);
+        adminAuditService.record(uid, "QUESTION_DUPLICATE_HIDE", "QUESTION", id, Map.of("ids", ids), dto, null);
+        return Result.ok(dto);
+    }
+
     @GetMapping("/company-aliases")
     public Result<List<CompanyAliasDTO>> listCompanyAliases(@RequestParam(required = false) String keyword,
                                                             @RequestParam(defaultValue = "50") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
         return Result.ok(questionFacade.listCompanyAliases(keyword, limit));
+    }
+
+    @GetMapping("/company-aliases/candidates")
+    public Result<List<CompanyAliasCandidateDTO>> listCompanyAliasCandidates(@RequestParam(defaultValue = "20") int limit) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        return Result.ok(questionFacade.listCompanyAliasCandidates(limit));
     }
 
     @PostMapping("/company-aliases")
@@ -198,5 +273,14 @@ public class QuestionAdminController {
     }
 
     public record QuestionBatchReviewRequest(List<Long> ids, int status) {
+    }
+
+    public record QuestionCanonicalRequest(Long canonicalQuestionId) {
+    }
+
+    public record QuestionDuplicateCandidateMergeRequest(Long candidateQuestionId) {
+    }
+
+    public record QuestionDuplicateHideRequest(List<Long> ids) {
     }
 }

@@ -21,4 +21,5 @@ public class PostUpdateCmd {
     private String extJson;
     private List<Long> tagIds;
     private List<String> tagNames;
+    private Boolean reviewRequired;
 }

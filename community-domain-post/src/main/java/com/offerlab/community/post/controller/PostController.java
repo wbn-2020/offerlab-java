@@ -15,7 +15,9 @@ import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.application.PostApplicationService;
+import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostReportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -44,15 +46,17 @@ public class PostController {
     private final PostFacade postFacade;
     private final PostApplicationService postService;
     private final PostReportService reportService;
+    private final PostDraftService draftService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
 
     @PostMapping
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
-    public Result<Map<String, Long>> publish(@Valid @RequestBody PublishReq req) {
+    public Result<Map<String, Object>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
         contentModerationService.requireUserCanPublish(uid);
-        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
+        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
+                uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
         Long id = postFacade.publishPost(PostCreateCmd.builder()
                 .authorId(uid)
                 .postType(req.getPostType())
@@ -63,19 +67,22 @@ public class PostController {
                 .extJson(req.getExtJson())
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
+                .reviewRequired(moderationDecision.reviewRequired())
                 .build());
-        return Result.ok(Map.of("postId", id));
+        draftService.deleteIfOwned(uid, req.getDraftId());
+        return Result.ok(Map.of("postId", id, "reviewRequired", moderationDecision.reviewRequired()));
     }
 
     @PutMapping("/{postId}")
     @RateLimit(key = "'post:update:' + #uid", rate = 30, per = 300)
-    public Result<Void> update(@PathVariable Long postId, @Valid @RequestBody UpdateReq req) {
+    public Result<Map<String, Object>> update(@PathVariable Long postId, @Valid @RequestBody UpdateReq req) {
         if (req == null) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         Long uid = UserContext.require();
         contentModerationService.requireUserCanPublish(uid);
-        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
+        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
+                uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
         // 更新后只返回成功状态；详情接口会按可见性重新拉取，避免私密帖被匿名视角误判为空。
         postFacade.updatePost(PostUpdateCmd.builder()
                 .postId(postId)
@@ -87,8 +94,10 @@ public class PostController {
                 .extJson(req.getExtJson())
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
+                .reviewRequired(moderationDecision.reviewRequired())
                 .build());
-        return Result.ok();
+        draftService.deleteIfOwned(uid, req.getDraftId());
+        return Result.ok(Map.of("postId", postId, "reviewRequired", moderationDecision.reviewRequired()));
     }
 
     @DeleteMapping("/{postId}")
@@ -113,12 +122,21 @@ public class PostController {
     @GetMapping
     public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) Long authorId,
                                                  @RequestParam(required = false) Long tagId,
+
                                                  @RequestParam(required = false, name = "tag") Long tag,
                                                  @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
         Long effectiveTagId = tagId != null ? tagId : tag;
         return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, cursor, size));
+    }
+
+    @GetMapping("/{postId}/versions")
+    public Result<List<PostVersionHistoryDTO>> listVersions(@PathVariable Long postId,
+                                                           @RequestParam(defaultValue = "10") int limit) {
+        Long uid = UserContext.require();
+        boolean moderator = adminPermissionService.isAdmin(uid) || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        return Result.ok(postFacade.listPostVersions(postId, uid, moderator, limit));
     }
 
     @PostMapping("/{postId}/reports")
@@ -152,13 +170,17 @@ public class PostController {
         @Size(max = 255)
         private String title;
         @NotBlank
+        @Size(max = 20000)
         private String content;
+        @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
+        @Size(max = 20000)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
+        private Long draftId;
 
         private List<Long> effectiveTagIds() {
             // tags 是早期请求字段，tagIds 是当前字段；保留兼容避免旧草稿发布失败。
@@ -180,6 +202,7 @@ public class PostController {
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
+        private Long draftId;
 
         private List<Long> effectiveTagIds() {
             // tags 是早期请求字段，tagIds 是当前字段；保留兼容避免旧编辑页提交失败。
