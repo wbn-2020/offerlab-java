@@ -69,6 +69,44 @@ public interface ContentModerationMapper {
     ModerationKeyword findKeywordById(@Param("id") Long id);
 
     @Insert("""
+            INSERT INTO t_moderation_keyword_hit (
+                id, scope, uid, keyword_id, keyword, action, content_summary
+            )
+            VALUES (
+                #{id}, #{scope}, #{uid}, #{keywordId}, #{keyword}, #{action}, #{contentSummary}
+            )
+            """)
+    int insertKeywordHit(ModerationKeywordHit hit);
+
+    @Select("""
+            <script>
+            SELECT id, scope, uid, keyword_id AS keywordId, keyword, action,
+                   content_summary AS contentSummary, create_time AS createTime
+            FROM t_moderation_keyword_hit
+            WHERE 1 = 1
+              <if test="scope != null and scope != ''">
+                AND scope = #{scope}
+              </if>
+              <if test="action != null and action != ''">
+                AND action = #{action}
+              </if>
+              <if test="uid != null">
+                AND uid = #{uid}
+              </if>
+              <if test="keyword != null and keyword != ''">
+                AND keyword LIKE CONCAT('%', #{keyword}, '%')
+              </if>
+            ORDER BY create_time DESC, id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<ModerationKeywordHit> listKeywordHits(@Param("scope") String scope,
+                                               @Param("action") String action,
+                                               @Param("uid") Long uid,
+                                               @Param("keyword") String keyword,
+                                               @Param("limit") int limit);
+
+    @Insert("""
             INSERT INTO t_moderation_keyword (
                 id, keyword, match_type, action, scope, enabled, remark, operator_uid
             )
@@ -115,6 +153,27 @@ public interface ContentModerationMapper {
             """)
     List<UserModerationState> listUserStates(@Param("limit") int limit);
 
+    @Select("""
+            <script>
+            SELECT x.uid,
+                   x.keyword AS recentViolationKeyword,
+                   x.action AS recentViolationAction,
+                   x.content_summary AS recentViolationSummary,
+                   x.create_time AS recentViolationTime
+            FROM (
+                SELECT h.*,
+                       ROW_NUMBER() OVER (PARTITION BY h.uid ORDER BY h.create_time DESC, h.id DESC) AS rn
+                FROM t_moderation_keyword_hit h
+                WHERE h.uid IN
+                <foreach collection="uids" item="uid" open="(" separator="," close=")">
+                  #{uid}
+                </foreach>
+            ) x
+            WHERE x.rn = 1
+            </script>
+            """)
+    List<UserModerationState> listLatestUserViolations(@Param("uids") List<Long> uids);
+
     @Insert("""
             INSERT INTO t_user_moderation_state (
                 uid, muted_until, banned_until, reason, operator_uid
@@ -134,4 +193,28 @@ public interface ContentModerationMapper {
                         @Param("bannedUntil") LocalDateTime bannedUntil,
                         @Param("reason") String reason,
                         @Param("operatorUid") Long operatorUid);
+
+    @Update("""
+            UPDATE t_user_moderation_state
+            SET muted_until = NULL,
+                reason = #{reason},
+                operator_uid = #{operatorUid},
+                update_time = NOW(3)
+            WHERE uid = #{uid}
+            """)
+    int clearMute(@Param("uid") Long uid,
+                  @Param("reason") String reason,
+                  @Param("operatorUid") Long operatorUid);
+
+    @Update("""
+            UPDATE t_user_moderation_state
+            SET banned_until = NULL,
+                reason = #{reason},
+                operator_uid = #{operatorUid},
+                update_time = NOW(3)
+            WHERE uid = #{uid}
+            """)
+    int clearBan(@Param("uid") Long uid,
+                 @Param("reason") String reason,
+                 @Param("operatorUid") Long operatorUid);
 }

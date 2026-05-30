@@ -12,11 +12,17 @@ import com.offerlab.community.question.api.dto.QuestionDTO;
 import com.offerlab.community.question.api.dto.QuestionDetailDTO;
 import com.offerlab.community.question.api.dto.QuestionQuery;
 import com.offerlab.community.question.api.dto.UserPrepOverviewDTO;
+import com.offerlab.community.question.api.dto.UserWeeklyPrepReportDTO;
 import com.offerlab.community.question.application.QuestionFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,30 +40,41 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1")
 @RequiredArgsConstructor
+@Validated
 public class QuestionController {
     private final QuestionFacade questionFacade;
 
     @PublicApi
     @GetMapping("/questions")
-    public Result<PageResult<QuestionDTO>> list(@RequestParam(required = false) String keyword,
-                                                @RequestParam(required = false) String company,
-                                                @RequestParam(required = false) String position,
-                                                @RequestParam(required = false) String difficulty,
-                                                @RequestParam(required = false) String round,
+    public Result<PageResult<QuestionDTO>> list(@RequestParam(required = false) @Size(max = 100) String keyword,
+                                                @RequestParam(required = false) @Size(max = 128) String company,
+                                                @RequestParam(required = false) @Size(max = 128) String position,
+                                                @RequestParam(required = false) @Size(max = 16) String difficulty,
+                                                @RequestParam(required = false) @Size(max = 64) String round,
+                                                @RequestParam(required = false) @Size(max = 32) String mistakeReason,
+                                                @RequestParam(required = false) @Size(max = 32) String progressStatus,
+                                                @RequestParam(required = false) Boolean hasNote,
+                                                @RequestParam(required = false) Boolean hasAnswerDraft,
+                                                @RequestParam(required = false) Boolean hasStarStory,
                                                 @RequestParam(required = false) List<Long> tagIds,
                                                 @RequestParam(required = false)
                                                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
                                                 @RequestParam(required = false)
                                                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
-                                                @RequestParam(required = false) String sort,
-                                                @RequestParam(defaultValue = "1") Integer page,
-                                                @RequestParam(defaultValue = "20") Integer pageSize) {
+                                                @RequestParam(required = false) @Size(max = 16) String sort,
+                                                @RequestParam(defaultValue = "1") @Min(1) Integer page,
+                                                @RequestParam(defaultValue = "20") @Min(1) @Max(50) Integer pageSize) {
         QuestionQuery query = new QuestionQuery();
         query.setKeyword(keyword);
         query.setCompany(company);
         query.setPosition(position);
         query.setDifficulty(difficulty);
         query.setRound(round);
+        query.setMistakeReason(mistakeReason);
+        query.setProgressStatus(progressStatus);
+        query.setHasNote(hasNote);
+        query.setHasAnswerDraft(hasAnswerDraft);
+        query.setHasStarStory(hasStarStory);
         query.setTagIds(tagIds);
         query.setStartTime(startTime);
         query.setEndTime(endTime);
@@ -87,8 +104,14 @@ public class QuestionController {
 
     @PutMapping("/questions/{id}/progress")
     @RateLimit(key = "'question:progress:' + #uid", rate = 120, per = 60)
-    public Result<Map<String, Object>> progress(@PathVariable Long id, @RequestBody ProgressReq req) {
+    public Result<Map<String, Object>> progress(@PathVariable Long id, @Valid @RequestBody ProgressReq req) {
         return Result.ok(questionFacade.updateProgress(id, UserContext.require(), req.getStatus()));
+    }
+
+    @PutMapping("/questions/{id}/note")
+    @RateLimit(key = "'question:note:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> note(@PathVariable Long id, @Valid @RequestBody NoteReq req) {
+        return Result.ok(questionFacade.updateNote(id, UserContext.require(), req.getNote(), req.getMistakeReason(), req.getAnswerDraft(), req.getStarStory()));
     }
 
     @PublicApi
@@ -115,6 +138,11 @@ public class QuestionController {
         return Result.ok(questionFacade.getMyPrepOverview(UserContext.require()));
     }
 
+    @GetMapping("/me/prep/weekly-report")
+    public Result<UserWeeklyPrepReportDTO> myWeeklyPrepReport() {
+        return Result.ok(questionFacade.getMyWeeklyPrepReport(UserContext.require()));
+    }
+
     @GetMapping("/me/prep/targets")
     public Result<List<PrepTargetDTO>> myPrepTargets() {
         return Result.ok(questionFacade.listPrepTargets(UserContext.require()));
@@ -122,7 +150,7 @@ public class QuestionController {
 
     @PostMapping("/me/prep/targets")
     @RateLimit(key = "'prep:target:add:' + #uid", rate = 30, per = 60)
-    public Result<PrepTargetDTO> addPrepTarget(@RequestBody PrepTargetCmd cmd) {
+    public Result<PrepTargetDTO> addPrepTarget(@Valid @RequestBody PrepTargetCmd cmd) {
         return Result.ok(questionFacade.addPrepTarget(UserContext.require(), cmd));
     }
 
@@ -134,6 +162,22 @@ public class QuestionController {
 
     @Data
     public static class ProgressReq {
+        @Size(max = 16)
         private String status;
+    }
+
+    @Data
+    public static class NoteReq {
+        @Size(max = 4000)
+        private String note;
+
+        @Size(max = 32)
+        private String mistakeReason;
+
+        @Size(max = 4000)
+        private String answerDraft;
+
+        @Size(max = 2000)
+        private String starStory;
     }
 }

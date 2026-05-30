@@ -15,6 +15,10 @@ import java.util.List;
 public class ExtractedQuestion {
     private String questionText;
     private String answerHint;
+    private String examPoint;
+    private String referenceAnswer;
+    private String sourceSnippet;
+    private String qualityReason;
     private String company;
     private String position;
     private String interviewRound;

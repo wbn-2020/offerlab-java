@@ -12,6 +12,11 @@ public class QuestionQuery {
     private String position;
     private String difficulty;
     private String round;
+    private String mistakeReason;
+    private String progressStatus;
+    private Boolean hasNote;
+    private Boolean hasAnswerDraft;
+    private Boolean hasStarStory;
     private List<Long> tagIds;
     private LocalDateTime startTime;
     private LocalDateTime endTime;

@@ -12,6 +12,8 @@ import com.offerlab.community.interaction.infrastructure.persistence.mapper.Comm
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentReportMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentPO;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentReportPO;
+import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -41,6 +43,7 @@ public class CommentReportService {
     private final CommentReportMapper reportMapper;
     private final PostCounterMapper postCounterMapper;
     private final PostCounterRedis postCounterRedis;
+    private final PostRepository postRepo;
     private final SnowflakeIdGenerator idGen;
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
@@ -52,7 +55,7 @@ public class CommentReportService {
         }
         CommentPO comment = requireVisibleComment(commentId);
         contentModerationService.requireUserCanPublish(reporterUid);
-        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_REPORT, reason, detail);
+        contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT, reason, detail);
         if (reportMapper.findPendingByReporter(commentId, reporterUid) != null) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
@@ -88,6 +91,10 @@ public class CommentReportService {
         if (approved == null) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        String reviewNote = clean(note, MAX_DETAIL_LEN, null);
+        if (!StringUtils.hasText(reviewNote)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "审核备注不能为空");
+        }
         CommentReportPO report = reportMapper.selectById(reportId);
         if (report == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -97,7 +104,7 @@ public class CommentReportService {
         }
 
         int nextStatus = approved ? STATUS_APPROVED : STATUS_REJECTED;
-        int updated = reportMapper.reviewPending(reportId, nextStatus, reviewerUid, clean(note, MAX_DETAIL_LEN, null));
+        int updated = reportMapper.reviewPending(reportId, nextStatus, reviewerUid, reviewNote);
         if (updated <= 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -107,7 +114,7 @@ public class CommentReportService {
         CommentReportDTO dto = toDto(reportMapper.selectById(reportId));
         adminAuditService.record(reviewerUid, approved ? "COMMENT_REPORT_APPROVE" : "COMMENT_REPORT_REJECT",
                 "COMMENT_REPORT", reportId, report,
-                Map.of("approved", approved, "commentId", report.getCommentId(), "postId", report.getPostId()), note);
+                Map.of("approved", approved, "commentId", report.getCommentId(), "postId", report.getPostId()), reviewNote);
         return dto;
     }
 
@@ -168,10 +175,14 @@ public class CommentReportService {
         if (po == null) {
             return null;
         }
+        CommentPO comment = commentMapper.selectById(po.getCommentId());
+        Post post = postRepo.findById(po.getPostId()).orElse(null);
         return CommentReportDTO.builder()
                 .id(po.getId())
                 .commentId(po.getCommentId())
                 .postId(po.getPostId())
+                .postTitle(post == null ? null : post.getTitle())
+                .commentSummary(comment == null ? null : summary(comment.getContent()))
                 .reporterUid(po.getReporterUid())
                 .reason(po.getReason())
                 .detail(po.getDetail())
@@ -182,5 +193,13 @@ public class CommentReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private String summary(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String text = value.replaceAll("[#>*`_\\[\\]()-]", " ").replaceAll("\\s+", " ").trim();
+        return text.length() <= 140 ? text : text.substring(0, 140);
     }
 }

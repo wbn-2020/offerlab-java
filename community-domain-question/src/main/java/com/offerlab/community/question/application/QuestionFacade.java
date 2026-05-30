@@ -1,18 +1,23 @@
 package com.offerlab.community.question.application;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.question.api.dto.AiTaskDetailDTO;
 import com.offerlab.community.question.api.dto.AiTaskDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasCmd;
+import com.offerlab.community.question.api.dto.CompanyAliasCandidateDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasDTO;
 import com.offerlab.community.question.api.dto.CompanyPrepDTO;
 import com.offerlab.community.question.api.dto.PostQuestionBlockDTO;
 import com.offerlab.community.question.api.dto.PrepTargetCmd;
 import com.offerlab.community.question.api.dto.PrepTargetDTO;
 import com.offerlab.community.question.api.dto.QuestionAdminUpdateCmd;
+import com.offerlab.community.question.api.dto.QuestionAdminQuery;
 import com.offerlab.community.question.api.dto.QuestionDTO;
 import com.offerlab.community.question.api.dto.QuestionDetailDTO;
+import com.offerlab.community.question.api.dto.QuestionDuplicateGroupDTO;
 import com.offerlab.community.question.api.dto.QuestionQuery;
 import com.offerlab.community.question.api.dto.UserPrepOverviewDTO;
+import com.offerlab.community.question.api.dto.UserWeeklyPrepReportDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 
@@ -30,6 +35,8 @@ public interface QuestionFacade {
 
     List<AiTaskDTO> listTasks(Integer status, int limit);
 
+    AiTaskDetailDTO getTaskDetail(Long taskId);
+
     AiTaskDTO retryTask(Long taskId);
 
     PostQuestionBlockDTO getPostQuestionBlock(Long postId, Long viewerUid, boolean admin);
@@ -44,11 +51,15 @@ public interface QuestionFacade {
 
     Map<String, Object> updateProgress(Long questionId, Long uid, String status);
 
+    Map<String, Object> updateNote(Long questionId, Long uid, String note, String mistakeReason, String answerDraft, String starStory);
+
     List<String> suggestCompanies(String prefix, int size);
 
     CompanyPrepDTO getCompanyPrep(String company, Long viewerUid);
 
     UserPrepOverviewDTO getMyPrepOverview(Long uid);
+
+    UserWeeklyPrepReportDTO getMyWeeklyPrepReport(Long uid);
 
     List<PrepTargetDTO> listPrepTargets(Long uid);
 
@@ -60,13 +71,25 @@ public interface QuestionFacade {
 
     PageResult<QuestionDTO> pageAdminQuestions(Integer status, int page, int pageSize);
 
+    PageResult<QuestionDTO> pageAdminQuestions(QuestionAdminQuery query);
+
     Map<String, Long> questionAdminSummary();
 
     QuestionDTO updateQuestionAdmin(Long questionId, QuestionAdminUpdateCmd cmd);
 
     Map<String, Object> reviewQuestion(Long questionId, int status);
 
+    QuestionDuplicateGroupDTO getDuplicateGroup(Long questionId);
+
+    QuestionDuplicateGroupDTO setDuplicateCanonical(Long questionId, Long canonicalQuestionId);
+
+    QuestionDuplicateGroupDTO mergeDuplicateCandidate(Long questionId, Long candidateQuestionId);
+
+    QuestionDuplicateGroupDTO hideDuplicateQuestions(Long questionId, List<Long> duplicateQuestionIds);
+
     List<CompanyAliasDTO> listCompanyAliases(String keyword, int limit);
+
+    List<CompanyAliasCandidateDTO> listCompanyAliasCandidates(int limit);
 
     CompanyAliasDTO saveCompanyAlias(Long id, CompanyAliasCmd cmd);
 

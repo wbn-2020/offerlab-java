@@ -15,15 +15,19 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounter
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostTagRefMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
+import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -37,33 +41,42 @@ public class PostApplicationService {
     private final PostCounterRedis postCounterRedis;
     private final SnowflakeIdGenerator idGen;
     private final EventPublisher events;
+    private final PostVersionHistoryService versionHistoryService;
+    private final PostPublishQualityValidator qualityValidator;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
+        PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
+                cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
         long id = idGen.nextId();
+        List<Long> resolvedTagIds = resolveTagIds(input.tagIds(), input.tagNames());
+        requireResolvedTagCount(input.postType(), resolvedTagIds);
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired());
         Post post = Post.builder()
                 .id(id)
                 .authorId(cmd.getAuthorId())
-                .postType(cmd.getPostType())
-                .title(cmd.getTitle())
-                .content(cmd.getContent())
+                .postType(input.postType())
+                .title(input.title())
+                .content(input.content())
                 .coverUrl(cmd.getCoverUrl())
                 .visibility(cmd.getVisibility() == null ? Post.VIS_PUBLIC : cmd.getVisibility())
-                .postStatus(Post.STATUS_PUBLISHED)
-                .extJson(cmd.getExtJson())
-                .tagIds(resolveTagIds(cmd.getTagIds(), cmd.getTagNames()))
+                .postStatus(reviewRequired ? Post.STATUS_REVIEWING : Post.STATUS_PUBLISHED)
+                .extJson(input.extJson())
+                .tagIds(resolvedTagIds)
                 .build();
         postRepo.save(post);
         counterMapper.initIfAbsent(id);
         syncTags(id, post.getTagIds());
 
-        events.publish(PostPublishedEvent.builder()
-                .postId(id)
-                .authorId(cmd.getAuthorId())
-                .title(cmd.getTitle())
-                .content(cmd.getContent())
-                .timestamp(Instant.now().toEpochMilli())
-                .build());
+        if (!reviewRequired) {
+            events.publish(PostPublishedEvent.builder()
+                    .postId(id)
+                    .authorId(cmd.getAuthorId())
+                    .title(input.title())
+                    .content(input.content())
+                    .timestamp(Instant.now().toEpochMilli())
+                    .build());
+        }
         return id;
     }
 
@@ -74,23 +87,47 @@ public class PostApplicationService {
         if (!post.getAuthorId().equals(cmd.getOperatorUid())) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
-        if (cmd.getTitle() != null) post.setTitle(cmd.getTitle());
-        if (cmd.getContent() != null) post.setContent(cmd.getContent());
-        if (cmd.getCoverUrl() != null) post.setCoverUrl(cmd.getCoverUrl());
-        if (cmd.getVisibility() != null) post.setVisibility(cmd.getVisibility());
-        if (cmd.getExtJson() != null) post.setExtJson(cmd.getExtJson());
-        postRepo.update(post);
-        List<Long> tagIds = resolveTagIds(cmd.getTagIds(), cmd.getTagNames());
-        if (tagIds != null) {
-            syncTags(post.getId(), tagIds);
+        boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
+        List<Long> existingTagIds = currentTagIds(post.getId());
+        List<Long> validationTagIds = tagsProvided ? cmd.getTagIds() : existingTagIds;
+        List<String> validationTagNames = tagsProvided ? cmd.getTagNames() : List.of();
+        PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
+                post.getPostType(),
+                cmd.getTitle() == null ? post.getTitle() : cmd.getTitle(),
+                cmd.getContent() == null ? post.getContent() : cmd.getContent(),
+                cmd.getExtJson() == null ? post.getExtJson() : cmd.getExtJson(),
+                validationTagIds,
+                validationTagNames);
+        List<Long> resolvedTagIds = tagsProvided ? resolveTagIds(input.tagIds(), input.tagNames()) : validationTagIds;
+        if (tagsProvided) {
+            requireResolvedTagCount(input.postType(), resolvedTagIds);
         }
-        events.publish(PostUpdatedEvent.builder()
-                .postId(post.getId())
-                .authorId(post.getAuthorId())
-                .title(post.getTitle())
-                .content(post.getContent())
-                .timestamp(Instant.now().toEpochMilli())
-                .build());
+        String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
+        Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
+        versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
+                input.title(), input.content(), nextCoverUrl, nextVisibility, input.extJson(), resolvedTagIds, tagsProvided);
+
+        post.setVisibility(nextVisibility);
+        post.setExtJson(input.extJson());
+        post.setTitle(input.title());
+        post.setContent(input.content());
+        post.setCoverUrl(nextCoverUrl);
+        if (Boolean.TRUE.equals(cmd.getReviewRequired())) {
+            post.setPostStatus(Post.STATUS_REVIEWING);
+        }
+        postRepo.update(post);
+        if (tagsProvided) {
+            syncTags(post.getId(), resolvedTagIds);
+        }
+        if (post.getPostStatus() != null && post.getPostStatus() == Post.STATUS_PUBLISHED) {
+            events.publish(PostUpdatedEvent.builder()
+                    .postId(post.getId())
+                    .authorId(post.getAuthorId())
+                    .title(post.getTitle())
+                    .content(post.getContent())
+                    .timestamp(Instant.now().toEpochMilli())
+                    .build());
+        }
     }
 
     @Transactional
@@ -117,10 +154,21 @@ public class PostApplicationService {
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {
         Set<Long> ids = new LinkedHashSet<>();
         if (tagIds != null) {
-            tagIds.stream()
+            List<Long> requestedIds = tagIds.stream()
                     .filter(id -> id != null && id > 0)
                     .limit(20)
-                    .forEach(ids::add);
+                    .toList();
+            if (!requestedIds.isEmpty()) {
+                Set<Long> existingIds = tagMapper.selectBatchIds(requestedIds).stream()
+                        .map(TagPO::getId)
+                        .collect(Collectors.toCollection(HashSet::new));
+                for (Long id : requestedIds) {
+                    if (!existingIds.contains(id)) {
+                        throw PostPublishQualityValidator.fieldError("tags", "标签不存在或已被删除");
+                    }
+                    ids.add(id);
+                }
+            }
         }
         if (tagNames != null && !tagNames.isEmpty()) {
             List<String> names = tagNames.stream()
@@ -130,6 +178,15 @@ public class PostApplicationService {
                     .limit(20)
                     .toList();
             if (!names.isEmpty()) {
+                Set<String> existingNames = tagMapper.selectByNames(names).stream()
+                        .map(TagPO::getTagName)
+                        .map(String::toLowerCase)
+                        .collect(Collectors.toSet());
+                for (String name : names) {
+                    if (!existingNames.contains(name.toLowerCase())) {
+                        tagMapper.insertIgnoreName(idGen.nextId(), name, 4);
+                    }
+                }
                 tagMapper.selectByNames(names).stream()
                         .map(TagPO::getId)
                         .forEach(ids::add);
@@ -139,6 +196,42 @@ public class PostApplicationService {
             return null;
         }
         return ids.stream().limit(20).toList();
+    }
+
+    private void requireResolvedTagCount(Integer postType, List<Long> tagIds) {
+        int min = Post.TYPE_INTERVIEW == (postType == null ? 0 : postType) ? 2 : 1;
+        if (tagIds == null || tagIds.size() < min) {
+            throw PostPublishQualityValidator.fieldError("tags", Post.TYPE_INTERVIEW == (postType == null ? 0 : postType)
+                    ? "面经至少需要 2 个有效技术标签"
+                    : "至少需要 1 个有效标签");
+        }
+    }
+
+    private List<Long> currentTagIds(Long postId) {
+        return tagMapper.selectTagsByPostIds(List.of(postId)).stream()
+                .map(PostTagView::getId)
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .toList();
+    }
+
+    private List<com.offerlab.community.post.api.dto.TagDTO> tagsByIds(List<Long> tagIds) {
+        if (tagIds == null || tagIds.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, TagPO> tags = tagMapper.selectBatchIds(tagIds).stream()
+                .collect(Collectors.toMap(TagPO::getId, tag -> tag));
+        return tagIds.stream()
+                .map(tags::get)
+                .filter(java.util.Objects::nonNull)
+                .map(tag -> com.offerlab.community.post.api.dto.TagDTO.builder()
+                        .id(tag.getId())
+                        .name(tag.getTagName())
+                        .tagType(tag.getTagType())
+                        .useCount(tag.getUseCount())
+                        .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
+                        .build())
+                .toList();
     }
 
     private void syncTags(Long postId, List<Long> tagIds) {

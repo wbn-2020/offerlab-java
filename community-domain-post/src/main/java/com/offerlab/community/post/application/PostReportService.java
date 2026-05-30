@@ -53,7 +53,7 @@ public class PostReportService {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
         contentModerationService.requireUserCanPublish(reporterUid);
-        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_REPORT, reason, detail);
+        contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT, reason, detail);
         if (reportMapper.findPendingByReporter(postId, reporterUid) != null) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
@@ -88,6 +88,10 @@ public class PostReportService {
         if (approved == null) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        String reviewNote = clean(note, MAX_DETAIL_LEN, null);
+        if (!StringUtils.hasText(reviewNote)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "审核备注不能为空");
+        }
         PostReportPO report = reportMapper.selectById(reportId);
         if (report == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -97,7 +101,7 @@ public class PostReportService {
         }
 
         int nextStatus = approved ? STATUS_APPROVED : STATUS_REJECTED;
-        int updated = reportMapper.reviewPending(reportId, nextStatus, reviewerUid, clean(note, MAX_DETAIL_LEN, null));
+        int updated = reportMapper.reviewPending(reportId, nextStatus, reviewerUid, reviewNote);
         if (updated <= 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -108,7 +112,7 @@ public class PostReportService {
 
         PostReportDTO dto = toDto(reportMapper.selectById(reportId));
         adminAuditService.record(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
-                "POST_REPORT", reportId, report, Map.of("approved", approved, "postId", report.getPostId()), note);
+                "POST_REPORT", reportId, report, Map.of("approved", approved, "postId", report.getPostId()), reviewNote);
         return dto;
     }
 
@@ -145,9 +149,12 @@ public class PostReportService {
         if (po == null) {
             return null;
         }
+        Post post = postRepo.findById(po.getPostId()).orElse(null);
         return PostReportDTO.builder()
                 .id(po.getId())
                 .postId(po.getPostId())
+                .postTitle(post == null ? null : post.getTitle())
+                .postSummary(post == null ? null : summary(post.getContent()))
                 .reporterUid(po.getReporterUid())
                 .reason(po.getReason())
                 .detail(po.getDetail())
@@ -158,5 +165,13 @@ public class PostReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private String summary(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String text = value.replaceAll("[#>*`_\\[\\]()-]", " ").replaceAll("\\s+", " ").trim();
+        return text.length() <= 140 ? text : text.substring(0, 140);
     }
 }

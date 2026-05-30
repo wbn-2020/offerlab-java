@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.notification.api.NotificationFacade;
+import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationMessagePO;
 import com.offerlab.community.user.api.UserFacade;
@@ -29,6 +30,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class NotificationFacadeImpl implements NotificationFacade {
+
+    private static final int REALTIME_POLL_INTERVAL_SECONDS = 20;
 
     private static final int TYPE_LIKE = 1;
     private static final int TYPE_COMMENT = 2;
@@ -96,6 +99,18 @@ public class NotificationFacadeImpl implements NotificationFacade {
         result.put("mention", countByType(uid, TYPE_MENTION));
         result.put("system", countByType(uid, TYPE_SYSTEM));
         return result;
+    }
+
+    @Override
+    public NotificationRealtimeStatusDTO getRealtimeStatus(Long uid) {
+        NotificationMessagePO latestUnread = mapper.selectLatestUnread(uid);
+        return NotificationRealtimeStatusDTO.builder()
+                .unread(getUnreadCountByType(uid))
+                .latestUnreadId(latestUnread == null ? null : latestUnread.getId())
+                .latestUnreadAt(latestUnread == null ? null : latestUnread.getCreateTime())
+                .serverTime(System.currentTimeMillis())
+                .pollIntervalSeconds(REALTIME_POLL_INTERVAL_SECONDS)
+                .build();
     }
 
     @Override
@@ -167,6 +182,13 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 commentId == null ? postId : commentId, content);
     }
 
+    @Override
+    @Transactional
+    public void notifySystem(Long receiverUid, Long targetType, Long targetId, Map<String, Object> content) {
+        create(receiverUid, 0L, TYPE_SYSTEM, targetType == null ? null : targetType.intValue(), targetId,
+                content == null ? Map.of() : content);
+    }
+
     private void create(Long receiverUid, Long senderUid, Integer notifType,
                         Integer targetType, Long targetId, Map<String, Object> content) {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
@@ -176,7 +198,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
             if (!userFacade.allowsSystemNotification(receiverUid)) {
                 return;
             }
-        } else if (!userFacade.allowsInteractionNotification(receiverUid)) {
+        } else if (!allowsNotificationType(receiverUid, notifType)) {
             return;
         }
         NotificationMessagePO po = new NotificationMessagePO();
@@ -190,6 +212,20 @@ public class NotificationFacadeImpl implements NotificationFacade {
         po.setIsRead(0);
         po.setIsDeleted(0);
         mapper.insert(po);
+    }
+
+    private boolean allowsNotificationType(Long receiverUid, Integer notifType) {
+        if (notifType == null) {
+            return userFacade.allowsInteractionNotification(receiverUid);
+        }
+        return switch (notifType) {
+            case TYPE_LIKE -> userFacade.allowsLikeNotification(receiverUid);
+            case TYPE_COMMENT -> userFacade.allowsCommentNotification(receiverUid);
+            case TYPE_FOLLOWER -> userFacade.allowsFollowNotification(receiverUid);
+            case TYPE_FAVORITE -> userFacade.allowsFavoriteNotification(receiverUid);
+            case TYPE_MENTION -> userFacade.allowsMentionNotification(receiverUid);
+            default -> userFacade.allowsInteractionNotification(receiverUid);
+        };
     }
 
     private LambdaQueryWrapper<NotificationMessagePO> baseUnread(Long uid) {

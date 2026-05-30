@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Data
@@ -18,11 +19,22 @@ public class CompanyPrepDTO {
     private Integer relatedPositionCount;
     private List<PostBriefDTO> recentPosts;
     private List<QuestionDTO> topQuestions;
+    private List<QuestionDTO> recommendedQuestions;
     private List<NameCountDTO> topTags;
     private List<NameCountDTO> hotPositions;
     private List<NameCountDTO> trend30Days;
     private List<NameCountDTO> trend90Days;
+    private List<NameCountDTO> interviewResultDistribution;
+    private List<NameCountDTO> recentResultDistribution;
+    private Long questionSampleCount;
+    private Long postSampleCount;
+    private Long resultSampleCount;
+    private Long recentResultSampleCount;
+    private LocalDateTime dataUpdatedAt;
     private UserPrepSummaryDTO myProgress;
+    private Integer prepScore;
+    private List<ChecklistItemDTO> checklist;
+    private List<String> nextActions;
 
     @Data
     @Builder
@@ -42,5 +54,19 @@ public class CompanyPrepDTO {
         private Long learningCount;
         private Long masteredCount;
         private Long reviewCount;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ChecklistItemDTO {
+        private String key;
+        private String title;
+        private String description;
+        private Boolean done;
+        private Integer current;
+        private Integer target;
+        private String actionHref;
     }
 }

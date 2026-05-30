@@ -15,6 +15,8 @@ public class CommentReportDTO {
     private Long id;
     private Long commentId;
     private Long postId;
+    private String postTitle;
+    private String commentSummary;
     private Long reporterUid;
     private String reason;
     private String detail;

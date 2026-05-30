@@ -17,6 +17,10 @@ public class InterviewQuestionPO {
     private String questionText;
     private String normalizedHash;
     private String answerHint;
+    private String examPoint;
+    private String referenceAnswer;
+    private String sourceSnippet;
+    private String qualityReason;
     private String company;
     private String position;
     private String interviewRound;

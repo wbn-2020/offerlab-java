@@ -40,6 +40,7 @@ public class Post {
     private LocalDateTime updateTime;
     /** 扩展字段 JSON（公司/岗位/年限/结果 等） */
     private String extJson;
+    private Integer version;
     private List<Long> tagIds;
 
     public boolean isVisibleTo(Long viewerUid, boolean isFollowing) {

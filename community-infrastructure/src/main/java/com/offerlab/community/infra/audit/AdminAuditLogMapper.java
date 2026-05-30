@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
@@ -38,7 +39,8 @@ public interface AdminAuditLogMapper {
                    resource_id AS resourceId,
                    CAST(before_json AS CHAR) AS beforeJson,
                    CAST(after_json AS CHAR) AS afterJson,
-                   remark
+                   remark,
+                   create_time AS createTime
             FROM t_admin_audit_log
             WHERE 1 = 1
               <if test="action != null and action != ''">
@@ -54,4 +56,72 @@ public interface AdminAuditLogMapper {
     List<AdminAuditLog> listRecent(@Param("action") String action,
                                    @Param("resourceType") String resourceType,
                                    @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT id,
+                   operator_uid AS operatorUid,
+                   action,
+                   resource_type AS resourceType,
+                   resource_id AS resourceId,
+                   CAST(before_json AS CHAR) AS beforeJson,
+                   CAST(after_json AS CHAR) AS afterJson,
+                   remark,
+                   create_time AS createTime
+            FROM t_admin_audit_log
+            WHERE 1 = 1
+              <if test="action != null and action != ''">
+                AND action = #{action}
+              </if>
+              <if test="resourceType != null and resourceType != ''">
+                AND resource_type = #{resourceType}
+              </if>
+              <if test="operatorUid != null">
+                AND operator_uid = #{operatorUid}
+              </if>
+              <if test="startTime != null">
+                AND create_time &gt;= #{startTime}
+              </if>
+              <if test="endTime != null">
+                AND create_time &lt;= #{endTime}
+              </if>
+            ORDER BY create_time DESC, id DESC
+            LIMIT #{offset}, #{limit}
+            </script>
+            """)
+    List<AdminAuditLog> page(@Param("action") String action,
+                             @Param("resourceType") String resourceType,
+                             @Param("operatorUid") Long operatorUid,
+                             @Param("startTime") LocalDateTime startTime,
+                             @Param("endTime") LocalDateTime endTime,
+                             @Param("offset") int offset,
+                             @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_admin_audit_log
+            WHERE 1 = 1
+              <if test="action != null and action != ''">
+                AND action = #{action}
+              </if>
+              <if test="resourceType != null and resourceType != ''">
+                AND resource_type = #{resourceType}
+              </if>
+              <if test="operatorUid != null">
+                AND operator_uid = #{operatorUid}
+              </if>
+              <if test="startTime != null">
+                AND create_time &gt;= #{startTime}
+              </if>
+              <if test="endTime != null">
+                AND create_time &lt;= #{endTime}
+              </if>
+            </script>
+            """)
+    long count(@Param("action") String action,
+               @Param("resourceType") String resourceType,
+               @Param("operatorUid") Long operatorUid,
+               @Param("startTime") LocalDateTime startTime,
+               @Param("endTime") LocalDateTime endTime);
 }

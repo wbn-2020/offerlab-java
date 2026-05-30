@@ -23,11 +23,15 @@ public class PostCreateCmd {
     @Size(max = 255)
     private String title;
     @NotBlank
+    @Size(max = 20000)
     private String content;
+    @Size(max = 512)
     private String coverUrl;
     private Integer visibility;
     /** 扩展字段 JSON：公司/岗位/年限/结果 等 */
+    @Size(max = 20000)
     private String extJson;
     private List<Long> tagIds;
     private List<String> tagNames;
+    private Boolean reviewRequired;
 }

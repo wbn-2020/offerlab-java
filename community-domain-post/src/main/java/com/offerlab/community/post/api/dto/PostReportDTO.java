@@ -14,6 +14,8 @@ import java.time.LocalDateTime;
 public class PostReportDTO {
     private Long id;
     private Long postId;
+    private String postTitle;
+    private String postSummary;
     private Long reporterUid;
     private String reason;
     private String detail;

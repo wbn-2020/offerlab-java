@@ -78,6 +78,20 @@ public class ElasticsearchHttpClient {
         }
     }
 
+    public boolean updateMapping(String index, Map<String, Object> properties) {
+        try {
+            EsResponse response = sendJson("PUT", "/" + index + "/_mapping", Map.of("properties", properties));
+            if (!response.success()) {
+                log.warn("elasticsearch update mapping failed: index={} status={} body={}",
+                        index, response.statusCode(), response.body());
+            }
+            return response.success();
+        } catch (Exception e) {
+            log.warn("elasticsearch update mapping failed: index={} error={}", index, e.getMessage());
+            return false;
+        }
+    }
+
     public boolean indexDocument(String index, String id, Map<String, Object> document) {
         try {
             EsResponse response = sendJson("PUT", "/" + index + "/_doc/" + id, document);

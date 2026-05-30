@@ -25,7 +25,13 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.post_status = 1
               AND p.visibility = 1
               <if test="keyword != null and keyword != ''">
-                AND q.question_text LIKE CONCAT('%', #{keyword}, '%')
+                AND (
+                    q.question_text LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.answer_hint LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.exam_point LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.reference_answer LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.source_snippet LIKE CONCAT('%', #{keyword}, '%')
+                )
               </if>
               <if test="company != null and company != ''">
                 AND q.company LIKE CONCAT('%', #{company}, '%')
@@ -54,6 +60,39 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
                     </foreach>
                 )
               </if>
+              <if test='usePersonalFilter'>
+                AND EXISTS (
+                    SELECT 1
+                    FROM t_user_question_progress up
+                    WHERE up.uid = #{viewerUid}
+                      AND up.question_id = q.id
+                      <if test="mistakeReason != null and mistakeReason != ''">
+                        <choose>
+                          <when test="mistakeReason == 'any'">
+                            AND up.mistake_reason IS NOT NULL
+                            AND up.mistake_reason &lt;&gt; ''
+                          </when>
+                          <otherwise>
+                            AND up.mistake_reason = #{mistakeReason}
+                          </otherwise>
+                        </choose>
+                      </if>
+                      <if test="progressStatus != null and progressStatus != ''">
+                        AND up.progress_status = #{progressStatus}
+                      </if>
+                      <if test='hasNote'>
+                        AND up.note IS NOT NULL
+                        AND up.note != ''
+                      </if>
+                      <if test='hasAnswerDraft'>
+                        AND ((up.answer_draft IS NOT NULL AND up.answer_draft != '') OR (up.star_story IS NOT NULL AND up.star_story != ''))
+                      </if>
+                      <if test='hasStarStory'>
+                        AND up.star_story IS NOT NULL
+                        AND up.star_story != ''
+                      </if>
+                )
+              </if>
             ORDER BY
               <choose>
                 <when test="sort == 'appear'">q.appear_count DESC,</when>
@@ -72,9 +111,16 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
                                            @Param("tagIds") Collection<Long> tagIds,
                                            @Param("startTime") LocalDateTime startTime,
                                            @Param("endTime") LocalDateTime endTime,
-                                           @Param("sort") String sort,
-                                           @Param("offset") int offset,
-                                           @Param("limit") int limit);
+                                            @Param("sort") String sort,
+                                            @Param("viewerUid") Long viewerUid,
+                                            @Param("mistakeReason") String mistakeReason,
+                                            @Param("progressStatus") String progressStatus,
+                                            @Param("usePersonalFilter") boolean usePersonalFilter,
+                                            @Param("hasNote") boolean hasNote,
+                                             @Param("hasAnswerDraft") boolean hasAnswerDraft,
+                                             @Param("hasStarStory") boolean hasStarStory,
+                                             @Param("offset") int offset,
+                                            @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -109,6 +155,118 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
     List<InterviewQuestionPO> selectVisibleByIds(@Param("ids") Collection<Long> ids, @Param("admin") boolean admin);
 
     @Select("""
+            SELECT q.id
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND q.normalized_hash = #{normalizedHash}
+            ORDER BY (q.canonical_id IS NULL) DESC, q.appear_count DESC, q.create_time ASC, q.id ASC
+            LIMIT 1
+            """)
+    Long selectCanonicalIdByHash(@Param("normalizedHash") String normalizedHash);
+
+    @Select("""
+            SELECT COUNT(DISTINCT q.source_post_id)
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND q.normalized_hash = #{normalizedHash}
+            """)
+    int countVisibleSourcesByHash(@Param("normalizedHash") String normalizedHash);
+
+    @Update("""
+            UPDATE t_interview_question
+            SET canonical_id = CASE WHEN id = #{canonicalId} THEN NULL ELSE #{canonicalId} END,
+                appear_count = #{appearCount},
+                update_time = NOW(3)
+            WHERE normalized_hash = #{normalizedHash}
+              AND status = 1
+            """)
+    int updateCanonicalGroup(@Param("normalizedHash") String normalizedHash,
+                             @Param("canonicalId") Long canonicalId,
+                             @Param("appearCount") int appearCount);
+
+    @Select("""
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND q.normalized_hash = #{normalizedHash}
+            ORDER BY q.appear_count DESC, q.create_time ASC, q.id ASC
+            """)
+    List<InterviewQuestionPO> selectVisibleByHash(@Param("normalizedHash") String normalizedHash);
+
+    @Select("""
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (q.normalized_hash = #{normalizedHash}
+                   OR (#{canonicalId} IS NOT NULL AND (q.canonical_id = #{canonicalId} OR q.id = #{canonicalId})))
+            ORDER BY (q.id = #{canonicalId}) DESC, q.status ASC, q.appear_count DESC, q.create_time ASC, q.id ASC
+            """)
+    List<InterviewQuestionPO> selectAdminByHash(@Param("normalizedHash") String normalizedHash,
+                                                @Param("canonicalId") Long canonicalId);
+
+    @Select("""
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND q.id <> #{questionId}
+              AND q.status IN (0, 1)
+              AND q.normalized_hash <> #{normalizedHash}
+              AND (
+                (#{company} IS NOT NULL AND #{company} <> '' AND q.company = #{company})
+                OR (#{position} IS NOT NULL AND #{position} <> '' AND q.position = #{position})
+                OR q.appear_count >= 2
+              )
+            ORDER BY (q.company = #{company}) DESC,
+                     (q.position = #{position}) DESC,
+                     q.appear_count DESC,
+                     q.quality_score DESC,
+                     q.create_time DESC
+            LIMIT #{limit}
+            """)
+    List<InterviewQuestionPO> selectSemanticDuplicateCandidates(@Param("questionId") Long questionId,
+                                                                @Param("normalizedHash") String normalizedHash,
+                                                                @Param("company") String company,
+                                                                @Param("position") String position,
+                                                                @Param("limit") int limit);
+
+    @Update("""
+            UPDATE t_interview_question
+            SET canonical_id = #{canonicalId},
+                update_time = NOW(3)
+            WHERE id = #{questionId}
+            """)
+    int updateCanonicalId(@Param("questionId") Long questionId, @Param("canonicalId") Long canonicalId);
+
+    @Update("""
+            UPDATE t_interview_question
+            SET canonical_id = CASE WHEN id = #{canonicalId} THEN NULL ELSE #{canonicalId} END,
+                appear_count = #{appearCount},
+                update_time = NOW(3)
+            WHERE normalized_hash = #{normalizedHash}
+            """)
+    int updateAdminCanonicalGroup(@Param("normalizedHash") String normalizedHash,
+                                  @Param("canonicalId") Long canonicalId,
+                                  @Param("appearCount") int appearCount);
+
+    @Select("""
             SELECT q.*
             FROM t_interview_question q
             JOIN t_post_main p ON p.id = q.source_post_id
@@ -118,7 +276,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.visibility = 1
               AND q.id <> #{questionId}
               AND (
-                (#{canonicalId} IS NOT NULL AND q.canonical_id = #{canonicalId})
+                (#{canonicalId} IS NOT NULL AND (q.canonical_id = #{canonicalId} OR q.id = #{canonicalId}))
                 OR (#{company} IS NOT NULL AND #{company} <> '' AND q.company = #{company})
                 OR (#{position} IS NOT NULL AND #{position} <> '' AND q.position = #{position})
               )
@@ -155,6 +313,22 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
     List<Map<String, Object>> suggestCompanies(@Param("limit") int limit);
 
     @Select("""
+            SELECT company AS name, COUNT(*) AS count
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND q.company IS NOT NULL
+              AND q.company <> ''
+            GROUP BY company
+            ORDER BY COUNT(*) DESC, company ASC
+            LIMIT #{limit}
+            """)
+    List<Map<String, Object>> countCompaniesForAliasCandidates(@Param("limit") int limit);
+
+    @Select("""
             SELECT q.*
             FROM t_interview_question q
             JOIN t_post_main p ON p.id = q.source_post_id
@@ -169,6 +343,19 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
     List<InterviewQuestionPO> selectTopByCompany(@Param("company") String company, @Param("limit") int limit);
 
     @Select("""
+            SELECT COUNT(*) AS sampleCount,
+                   MAX(q.update_time) AS updatedAt
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND q.company = #{company}
+            """)
+    Map<String, Object> summarizeCompanyQuestions(@Param("company") String company);
+
+    @Select("""
             SELECT q.*
             FROM t_interview_question q
             JOIN t_post_main p ON p.id = q.source_post_id
@@ -180,6 +367,100 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             LIMIT #{limit}
             """)
     List<InterviewQuestionPO> selectRecommended(@Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="company != null and company != ''">
+                AND q.company LIKE CONCAT('%', #{company}, '%')
+              </if>
+              <if test="position != null and position != ''">
+                AND q.position LIKE CONCAT('%', #{position}, '%')
+              </if>
+              <if test="difficulty != null and difficulty != ''">
+                AND q.difficulty = #{difficulty}
+              </if>
+            ORDER BY (q.appear_count * 5 + q.quality_score) DESC, q.create_time DESC, q.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<InterviewQuestionPO> selectMockInterviewQuestions(@Param("company") String company,
+                                                           @Param("position") String position,
+                                                           @Param("difficulty") String difficulty,
+                                                           @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            JOIN t_interview_question_tag qt ON qt.question_id = q.id
+            JOIN t_tag t ON t.id = qt.tag_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND t.name = #{tagName}
+              <if test="difficulty != null and difficulty != ''">
+                AND q.difficulty = #{difficulty}
+              </if>
+            ORDER BY (q.appear_count * 5 + q.quality_score) DESC, q.create_time DESC, q.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<InterviewQuestionPO> selectMockInterviewQuestionsByTag(@Param("tagName") String tagName,
+                                                                @Param("difficulty") String difficulty,
+                                                                @Param("limit") int limit);
+
+    @Select("""
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            JOIN t_interview_question_tag qt ON qt.question_id = q.id
+            JOIN t_tag t ON t.id = qt.tag_id
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND t.name = #{tagName}
+            ORDER BY (q.appear_count * 5 + q.quality_score) DESC, q.create_time DESC
+            LIMIT #{limit}
+            """)
+    List<InterviewQuestionPO> selectTopByTagName(@Param("tagName") String tagName, @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT COUNT(DISTINCT q.id)
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            <if test="tagName != null and tagName != ''">
+              JOIN t_interview_question_tag qt ON qt.question_id = q.id
+              JOIN t_tag t ON t.id = qt.tag_id
+            </if>
+            WHERE q.status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="company != null and company != ''">
+                AND q.company LIKE CONCAT('%', #{company}, '%')
+              </if>
+              <if test="position != null and position != ''">
+                AND q.position LIKE CONCAT('%', #{position}, '%')
+              </if>
+              <if test="tagName != null and tagName != ''">
+                AND t.name = #{tagName}
+              </if>
+            </script>
+            """)
+    int countPublicByTarget(@Param("company") String company,
+                            @Param("position") String position,
+                            @Param("tagName") String tagName);
 
     @Select("""
             SELECT q.*
@@ -204,11 +485,53 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               <if test="status != null">
                 AND q.status = #{status}
               </if>
+              <if test="keyword != null and keyword != ''">
+                AND (
+                    q.question_text LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.answer_hint LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.exam_point LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.reference_answer LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.source_snippet LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.quality_reason LIKE CONCAT('%', #{keyword}, '%')
+                )
+              </if>
+              <if test="company != null and company != ''">
+                AND q.company LIKE CONCAT('%', #{company}, '%')
+              </if>
+              <if test="position != null and position != ''">
+                AND q.position LIKE CONCAT('%', #{position}, '%')
+              </if>
+              <if test="minQualityScore != null">
+                AND q.quality_score &gt;= #{minQualityScore}
+              </if>
+              <if test="maxQualityScore != null">
+                AND q.quality_score &lt;= #{maxQualityScore}
+              </if>
+              <if test="sourcePostId != null">
+                AND q.source_post_id = #{sourcePostId}
+              </if>
+              <if test="taskStatus != null">
+                AND q.source_post_id IN (
+                    SELECT t.post_id
+                    FROM t_ai_extract_task t
+                    WHERE t.task_type = 'question_extract'
+                      AND t.task_status = #{taskStatus}
+                )
+              </if>
             ORDER BY q.update_time DESC, q.id DESC
-            LIMIT #{limit}
+            LIMIT #{offset}, #{limit}
             </script>
             """)
-    List<InterviewQuestionPO> selectAdminRecent(@Param("status") Integer status, @Param("limit") int limit);
+    List<InterviewQuestionPO> selectAdminRecent(@Param("status") Integer status,
+                                                @Param("keyword") String keyword,
+                                                @Param("company") String company,
+                                                @Param("position") String position,
+                                                @Param("minQualityScore") Integer minQualityScore,
+                                                @Param("maxQualityScore") Integer maxQualityScore,
+                                                @Param("sourcePostId") Long sourcePostId,
+                                                @Param("taskStatus") Integer taskStatus,
+                                                @Param("offset") int offset,
+                                                @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -221,9 +544,49 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               <if test="status != null">
                 AND q.status = #{status}
               </if>
+              <if test="keyword != null and keyword != ''">
+                AND (
+                    q.question_text LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.answer_hint LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.exam_point LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.reference_answer LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.source_snippet LIKE CONCAT('%', #{keyword}, '%')
+                    OR q.quality_reason LIKE CONCAT('%', #{keyword}, '%')
+                )
+              </if>
+              <if test="company != null and company != ''">
+                AND q.company LIKE CONCAT('%', #{company}, '%')
+              </if>
+              <if test="position != null and position != ''">
+                AND q.position LIKE CONCAT('%', #{position}, '%')
+              </if>
+              <if test="minQualityScore != null">
+                AND q.quality_score &gt;= #{minQualityScore}
+              </if>
+              <if test="maxQualityScore != null">
+                AND q.quality_score &lt;= #{maxQualityScore}
+              </if>
+              <if test="sourcePostId != null">
+                AND q.source_post_id = #{sourcePostId}
+              </if>
+              <if test="taskStatus != null">
+                AND q.source_post_id IN (
+                    SELECT t.post_id
+                    FROM t_ai_extract_task t
+                    WHERE t.task_type = 'question_extract'
+                      AND t.task_status = #{taskStatus}
+                )
+              </if>
             </script>
             """)
-    long countAdminRecent(@Param("status") Integer status);
+    long countAdminRecent(@Param("status") Integer status,
+                          @Param("keyword") String keyword,
+                          @Param("company") String company,
+                          @Param("position") String position,
+                          @Param("minQualityScore") Integer minQualityScore,
+                          @Param("maxQualityScore") Integer maxQualityScore,
+                          @Param("sourcePostId") Long sourcePostId,
+                          @Param("taskStatus") Integer taskStatus);
 
     @Select("""
             SELECT q.status AS name, COUNT(*) AS count
@@ -281,6 +644,10 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               <if test="questionText != null">, question_text = #{questionText}</if>
               <if test="normalizedHash != null">, normalized_hash = #{normalizedHash}</if>
               <if test="answerHint != null">, answer_hint = #{answerHint}</if>
+              <if test="examPoint != null">, exam_point = #{examPoint}</if>
+              <if test="referenceAnswer != null">, reference_answer = #{referenceAnswer}</if>
+              <if test="sourceSnippet != null">, source_snippet = #{sourceSnippet}</if>
+              <if test="qualityReason != null">, quality_reason = #{qualityReason}</if>
               <if test="company != null">, company = #{company}</if>
               <if test="position != null">, position = #{position}</if>
               <if test="interviewRound != null">, interview_round = #{interviewRound}</if>

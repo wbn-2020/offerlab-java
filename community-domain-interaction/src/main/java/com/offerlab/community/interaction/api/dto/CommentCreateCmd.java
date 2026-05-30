@@ -22,4 +22,5 @@ public class CommentCreateCmd {
     @NotBlank
     @Size(max = 2000)
     private String content;
+    private Boolean reviewRequired;
 }

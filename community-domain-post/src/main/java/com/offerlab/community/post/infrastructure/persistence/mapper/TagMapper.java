@@ -6,6 +6,7 @@ import com.offerlab.community.post.infrastructure.persistence.projection.PostTag
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Insert;
 
 import java.util.Collection;
 import java.util.List;
@@ -52,6 +53,12 @@ public interface TagMapper extends BaseMapper<TagPO> {
             </script>
             """)
     List<TagPO> selectByNames(@Param("names") Collection<String> names);
+
+    @Insert("""
+            INSERT IGNORE INTO t_tag(id, tag_name, tag_type, use_count, is_official, is_deleted)
+            VALUES (#{id}, #{name}, #{tagType}, 0, 0, 0)
+            """)
+    int insertIgnoreName(@Param("id") Long id, @Param("name") String name, @Param("tagType") int tagType);
 
     @Select("""
             SELECT t.tag_name AS name, COUNT(*) AS count

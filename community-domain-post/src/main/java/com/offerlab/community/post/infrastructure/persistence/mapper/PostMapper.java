@@ -44,6 +44,24 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<Map<String, Object>> countCompanies(@Param("since") LocalDateTime since, @Param("limit") int limit);
 
     @Select("""
+            SELECT x.company AS name, COUNT(*) AS count
+            FROM (
+                SELECT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.company')), '') AS company
+                FROM t_post_main p
+                JOIN t_post_extension e ON e.post_id = p.id
+                WHERE p.is_deleted = 0
+                  AND p.post_status = 1
+                  AND p.visibility = 1
+                  AND p.post_type = 1
+            ) x
+            WHERE x.company IS NOT NULL
+            GROUP BY x.company
+            ORDER BY COUNT(*) DESC, x.company ASC
+            LIMIT #{limit}
+            """)
+    List<Map<String, Object>> countInterviewCompaniesForAliasCandidates(@Param("limit") int limit);
+
+    @Select("""
             SELECT x.position AS name, COUNT(*) AS count
             FROM (
                 SELECT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.position')), '') AS position
@@ -78,6 +96,25 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             """)
     List<Map<String, Object>> countInterviewResults(@Param("since") LocalDateTime since, @Param("limit") int limit);
+
+    @Select("""
+            SELECT x.result AS name, COUNT(*) AS count
+            FROM (
+                SELECT COALESCE(e.interview_result, 0) AS result
+                FROM t_post_main p
+                JOIN t_post_extension e ON e.post_id = p.id
+                WHERE p.is_deleted = 0
+                  AND p.post_status = 1
+                  AND p.visibility = 1
+                  AND p.post_type = 1
+                  AND e.company = #{company}
+                  AND (#{since} IS NULL OR p.create_time >= #{since})
+            ) x
+            GROUP BY x.result
+            ORDER BY COUNT(*) DESC, x.result ASC
+            """)
+    List<Map<String, Object>> countInterviewResultsByCompany(@Param("company") String company,
+                                                             @Param("since") LocalDateTime since);
 
     @Select("""
             SELECT COUNT(*)
@@ -123,6 +160,19 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             """)
     List<PostPO> selectRecentInterviewPostsByCompany(@Param("company") String company, @Param("limit") int limit);
+
+    @Select("""
+            SELECT COUNT(*) AS sampleCount,
+                   MAX(p.update_time) AS updatedAt
+            FROM t_post_main p
+            JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.post_type = 1
+              AND e.company = #{company}
+            """)
+    Map<String, Object> summarizeInterviewPostsByCompany(@Param("company") String company);
 
     @Select("""
             SELECT id

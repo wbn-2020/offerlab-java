@@ -41,4 +41,14 @@ public interface UserFacade {
     boolean allowsInteractionNotification(Long uid);
 
     boolean allowsSystemNotification(Long uid);
+
+    boolean allowsLikeNotification(Long uid);
+
+    boolean allowsCommentNotification(Long uid);
+
+    boolean allowsFollowNotification(Long uid);
+
+    boolean allowsFavoriteNotification(Long uid);
+
+    boolean allowsMentionNotification(Long uid);
 }

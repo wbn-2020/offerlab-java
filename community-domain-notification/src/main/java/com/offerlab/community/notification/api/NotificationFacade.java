@@ -1,6 +1,7 @@
 package com.offerlab.community.notification.api;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
 
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,8 @@ public interface NotificationFacade {
     long getUnreadCount(Long uid);
 
     Map<String, Long> getUnreadCountByType(Long uid);
+
+    NotificationRealtimeStatusDTO getRealtimeStatus(Long uid);
 
     void markAsRead(Long uid, List<Long> notifIds);
 
@@ -31,4 +34,6 @@ public interface NotificationFacade {
     void notifyFavorite(Long receiverUid, Long senderUid, Long postId);
 
     void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId);
+
+    void notifySystem(Long receiverUid, Long targetType, Long targetId, Map<String, Object> content);
 }

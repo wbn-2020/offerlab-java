@@ -17,6 +17,13 @@ public class UserQuestionProgressPO {
     private String progressStatus;
     private Integer favorite;
     private String note;
+    private String mistakeReason;
+    private String answerDraft;
+    private String starStory;
+    private LocalDateTime nextReviewAt;
+    private LocalDateTime lastReviewedAt;
+    private Integer reviewCount;
+    private Integer reviewIntervalDays;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

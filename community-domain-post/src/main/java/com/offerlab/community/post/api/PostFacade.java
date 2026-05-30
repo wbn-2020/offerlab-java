@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
+import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.TagDTO;
@@ -32,6 +33,8 @@ public interface PostFacade {
 
     PageResult<PostBriefDTO> getHot(long cursor, int size);
 
+
+    List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit);
     PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size);
 
     List<TagDTO> listTags();

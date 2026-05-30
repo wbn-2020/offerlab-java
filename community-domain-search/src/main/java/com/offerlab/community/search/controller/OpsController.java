@@ -3,10 +3,12 @@ package com.offerlab.community.search.controller;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.audit.AdminAuditLog;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.moderation.ModerationAdminService;
+import com.offerlab.community.infra.moderation.ModerationKeywordHit;
 import com.offerlab.community.infra.moderation.ModerationKeyword;
 import com.offerlab.community.infra.moderation.ModerationKeywordAdminCmd;
 import com.offerlab.community.infra.moderation.UserModerationState;
@@ -16,7 +18,11 @@ import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
 import com.offerlab.community.search.application.PostSearchIndexer;
+import com.offerlab.community.search.application.SearchAnalyticsService;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,6 +33,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -38,12 +46,14 @@ import java.util.Objects;
 public class OpsController {
 
     private final PostSearchIndexer indexer;
+    private final SearchAnalyticsService searchAnalyticsService;
     private final OutboxMessageMapper outboxMessageMapper;
     private final AdminRoleMapper adminRoleMapper;
     private final AdminPermissionService adminPermissionService;
     private final AdminAuditService adminAuditService;
     private final ModerationAdminService moderationAdminService;
     private final MigrationCheckService migrationCheckService;
+    private final UserFacade userFacade;
 
     @GetMapping("/status")
     public Result<Map<String, Object>> status() {
@@ -179,10 +189,30 @@ public class OpsController {
         return Result.ok(adminAuditService.listRecent(action, resourceType, clamp(limit)));
     }
 
+    @GetMapping("/audit-logs/page")
+    public Result<PageResult<AdminAuditLog>> pageAuditLogs(@RequestParam(required = false) String action,
+                                                           @RequestParam(required = false) String resourceType,
+                                                           @RequestParam(required = false) Long operatorUid,
+                                                           @RequestParam(required = false) String startDate,
+                                                           @RequestParam(required = false) String endDate,
+                                                           @RequestParam(defaultValue = "1") int page,
+                                                           @RequestParam(defaultValue = "20") int pageSize) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(adminAuditService.page(action, resourceType, normalizeUid(operatorUid),
+                parseStartDate(startDate), parseEndDate(endDate), page, pageSize));
+    }
+
     @GetMapping("/migration/status")
     public Result<Map<String, Object>> migrationStatus() {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         return Result.ok(migrationCheckService.governanceStatus());
+    }
+
+    @GetMapping("/search/analytics")
+    public Result<SearchAnalyticsDTO> searchAnalytics(@RequestParam(defaultValue = "30") int days,
+                                                      @RequestParam(defaultValue = "10") int limit) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(searchAnalyticsService.summary(days, limit));
     }
 
     @GetMapping("/moderation/keywords")
@@ -191,6 +221,16 @@ public class OpsController {
                                                                   @RequestParam(defaultValue = "50") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
         return Result.ok(moderationAdminService.listKeywords(keyword, scope, clamp(limit)));
+    }
+
+    @GetMapping("/moderation/hits")
+    public Result<List<ModerationKeywordHit>> listModerationKeywordHits(@RequestParam(required = false) String scope,
+                                                                        @RequestParam(required = false) String action,
+                                                                        @RequestParam(required = false) Long uid,
+                                                                        @RequestParam(required = false) String keyword,
+                                                                        @RequestParam(defaultValue = "50") int limit) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        return Result.ok(moderationAdminService.listKeywordHits(scope, action, uid, keyword, clamp(limit)));
     }
 
     @PostMapping("/moderation/keywords")
@@ -225,7 +265,7 @@ public class OpsController {
     @GetMapping("/moderation/users")
     public Result<List<UserModerationState>> listModerationUsers(@RequestParam(defaultValue = "50") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        return Result.ok(moderationAdminService.listUserStates(clamp(limit)));
+        return Result.ok(enrichUserBriefs(moderationAdminService.listUserStates(clamp(limit))));
     }
 
     @PostMapping("/moderation/users")
@@ -233,8 +273,62 @@ public class OpsController {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         UserModerationState state = moderationAdminService.saveUserState(cmd, uid);
+        enrichUserBrief(state);
         adminAuditService.record(uid, "USER_MODERATION_STATE", "USER", state.getUid(), null, state, cmd == null ? null : cmd.getReason());
         return Result.ok(state);
+    }
+
+    @PostMapping("/moderation/users/{targetUid}/clear-mute")
+    public Result<UserModerationState> clearModerationUserMute(@PathVariable Long targetUid) {
+        Long operatorUid = UserContext.require();
+        adminPermissionService.requireScope(operatorUid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        UserModerationState state = moderationAdminService.clearUserMute(targetUid, operatorUid);
+        enrichUserBrief(state);
+        adminAuditService.record(operatorUid, "USER_MODERATION_CLEAR_MUTE", "USER", targetUid, null, state, "解除禁言");
+        return Result.ok(state);
+    }
+
+    @PostMapping("/moderation/users/{targetUid}/clear-ban")
+    public Result<UserModerationState> clearModerationUserBan(@PathVariable Long targetUid) {
+        Long operatorUid = UserContext.require();
+        adminPermissionService.requireScope(operatorUid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        UserModerationState state = moderationAdminService.clearUserBan(targetUid, operatorUid);
+        enrichUserBrief(state);
+        adminAuditService.record(operatorUid, "USER_MODERATION_CLEAR_BAN", "USER", targetUid, null, state, "解除封禁");
+        return Result.ok(state);
+    }
+
+    private List<UserModerationState> enrichUserBriefs(List<UserModerationState> states) {
+        if (states == null || states.isEmpty()) {
+            return states;
+        }
+        List<Long> uids = states.stream()
+                .filter(Objects::nonNull)
+                .map(UserModerationState::getUid)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (uids.isEmpty()) {
+            return states;
+        }
+        Map<Long, UserBriefDTO> briefs = userFacade.batchGetUserBriefs(uids);
+        states.stream().filter(Objects::nonNull).forEach(state -> applyUserBrief(state, briefs.get(state.getUid())));
+        return states;
+    }
+
+    private void enrichUserBrief(UserModerationState state) {
+        if (state == null || state.getUid() == null) {
+            return;
+        }
+        applyUserBrief(state, userFacade.getUserBrief(state.getUid()));
+    }
+
+    private void applyUserBrief(UserModerationState state, UserBriefDTO brief) {
+        if (state == null || brief == null) {
+            return;
+        }
+        state.setNickname(brief.getNickname());
+        state.setAvatarUrl(brief.getAvatarUrl());
     }
 
     private Map<String, Long> outboxCounts() {
@@ -271,6 +365,38 @@ public class OpsController {
             return 20;
         }
         return Math.min(limit, 100);
+    }
+
+    private static Long normalizeUid(Long uid) {
+        return uid == null || uid <= 0 ? null : uid;
+    }
+
+    private static String clean(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private static LocalDateTime parseStartDate(String value) {
+        String clean = clean(value);
+        if (clean == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(clean).atStartOfDay();
+        } catch (RuntimeException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+    }
+
+    private static LocalDateTime parseEndDate(String value) {
+        String clean = clean(value);
+        if (clean == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(clean).plusDays(1).atStartOfDay().minusNanos(1);
+        } catch (RuntimeException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
     }
 
     private static Long requireTargetUid(AdminRequest request) {

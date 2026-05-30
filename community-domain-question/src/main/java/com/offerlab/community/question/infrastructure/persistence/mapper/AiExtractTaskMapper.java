@@ -35,6 +35,18 @@ public interface AiExtractTaskMapper extends BaseMapper<AiExtractTaskPO> {
             """)
     List<AiExtractTaskPO> listRecent(@Param("status") Integer status, @Param("limit") int limit);
 
+    @Select("""
+            SELECT *
+            FROM t_ai_extract_task
+            WHERE post_id = #{postId}
+              AND task_type = #{taskType}
+            ORDER BY create_time DESC, id DESC
+            LIMIT #{limit}
+            """)
+    List<AiExtractTaskPO> listRecentByPost(@Param("postId") Long postId,
+                                           @Param("taskType") String taskType,
+                                           @Param("limit") int limit);
+
     @Update("""
             UPDATE t_ai_extract_task
             SET task_status = 0,

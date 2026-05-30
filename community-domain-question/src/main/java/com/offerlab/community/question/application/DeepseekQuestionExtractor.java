@@ -60,7 +60,8 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
         body.put("messages", List.of(
                 Map.of("role", "system", "content", """
                         You extract interview questions from Chinese interview-experience posts.
-                        Return strict JSON only: {"questions":[{"questionText":"","answerHint":"","company":"","position":"","interviewRound":"","difficulty":"easy|medium|hard","confidence":0.0}]}
+                        Return strict JSON only: {"questions":[{"questionText":"","answerHint":"","examPoint":"","referenceAnswer":"","sourceSnippet":"","qualityReason":"","company":"","position":"","interviewRound":"","difficulty":"easy|medium|hard","confidence":0.0}]}
+                        examPoint is the core knowledge or ability being assessed. referenceAnswer should be concise and useful, not longer than 500 Chinese characters. sourceSnippet must quote or summarize the source sentence from the post. qualityReason explains why the question is useful or low confidence.
                         Do not invent company or position when absent. Limit to 20 questions.
                         """),
                 Map.of("role", "user", "content", prompt(post))
@@ -92,6 +93,10 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
             result.add(ExtractedQuestion.builder()
                     .questionText(text)
                     .answerHint(blankToNull(node.path("answerHint").asText(null)))
+                    .examPoint(blankToNull(node.path("examPoint").asText(null)))
+                    .referenceAnswer(blankToNull(node.path("referenceAnswer").asText(null)))
+                    .sourceSnippet(blankToNull(node.path("sourceSnippet").asText(null)))
+                    .qualityReason(blankToNull(node.path("qualityReason").asText(null)))
                     .company(blankToNull(node.path("company").asText(null)))
                     .position(blankToNull(node.path("position").asText(null)))
                     .interviewRound(blankToNull(node.path("interviewRound").asText(null)))

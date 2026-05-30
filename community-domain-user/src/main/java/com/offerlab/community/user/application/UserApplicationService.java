@@ -184,6 +184,11 @@ public class UserApplicationService {
         po.setSearchable(toFlag(setting.getSearchable()));
         po.setInteractionNotification(toFlag(setting.getInteractionNotification()));
         po.setSystemNotification(toFlag(setting.getSystemNotification()));
+        po.setLikeNotification(toFlag(setting.getLikeNotification(), po.getLikeNotification()));
+        po.setCommentNotification(toFlag(setting.getCommentNotification(), po.getCommentNotification()));
+        po.setFollowNotification(toFlag(setting.getFollowNotification(), po.getFollowNotification()));
+        po.setFavoriteNotification(toFlag(setting.getFavoriteNotification(), po.getFavoriteNotification()));
+        po.setMentionNotification(toFlag(setting.getMentionNotification(), po.getMentionNotification()));
         if (exists) {
             privacySettingMapper.updateById(po);
         } else {
@@ -220,6 +225,11 @@ public class UserApplicationService {
         po.setSearchable(1);
         po.setInteractionNotification(1);
         po.setSystemNotification(1);
+        po.setLikeNotification(1);
+        po.setCommentNotification(1);
+        po.setFollowNotification(1);
+        po.setFavoriteNotification(1);
+        po.setMentionNotification(1);
         return po;
     }
 
@@ -230,6 +240,11 @@ public class UserApplicationService {
                 .searchable(isEnabled(po.getSearchable()))
                 .interactionNotification(isEnabled(po.getInteractionNotification()))
                 .systemNotification(isEnabled(po.getSystemNotification()))
+                .likeNotification(isEnabled(po.getLikeNotification()))
+                .commentNotification(isEnabled(po.getCommentNotification()))
+                .followNotification(isEnabled(po.getFollowNotification()))
+                .favoriteNotification(isEnabled(po.getFavoriteNotification()))
+                .mentionNotification(isEnabled(po.getMentionNotification()))
                 .build();
     }
 
@@ -239,6 +254,10 @@ public class UserApplicationService {
 
     private static int toFlag(Boolean value) {
         return Boolean.FALSE.equals(value) ? 0 : 1;
+    }
+
+    private static int toFlag(Boolean value, Integer fallback) {
+        return value == null ? (fallback == null ? 1 : fallback) : toFlag(value);
     }
 
     private static String normalizeVisibility(String value) {
