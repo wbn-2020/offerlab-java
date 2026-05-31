@@ -117,6 +117,8 @@ class MockInterviewSafetyGuardTest {
         assertTrue(statsDto.contains("weakAnswers"), "stats DTO must expose recent weak answers");
         assertTrue(questionMapper.contains("selectMockInterviewQuestions"), "mock interview should select questions from the approved question bank");
         assertTrue(questionMapper.contains("selectMockInterviewQuestionsByTag"), "mock interview should select focused questions by tag");
+        assertTrue(questionMapper.contains("t.tag_name"), "mock interview focused tag SQL must use the real t_tag.tag_name column");
+        assertFalse(questionMapper.contains("t.name"), "mock interview focused tag SQL must not reference the nonexistent t_tag.name column");
     }
 
     private static int countOccurrences(String source, String needle) {

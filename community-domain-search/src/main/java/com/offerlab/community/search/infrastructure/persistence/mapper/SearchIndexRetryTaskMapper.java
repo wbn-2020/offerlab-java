@@ -20,6 +20,14 @@ public interface SearchIndexRetryTaskMapper extends BaseMapper<SearchIndexRetryT
     int STATUS_FAILED = 2;
     int STATUS_RUNNING = 3;
 
+    @Select("""
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 't_search_index_retry_task'
+            """)
+    int tableExists();
+
     @Insert("""
             INSERT INTO t_search_index_retry_task (
                 id, dedup_key, post_id, operation, task_status, retry_count, next_retry_time, last_error

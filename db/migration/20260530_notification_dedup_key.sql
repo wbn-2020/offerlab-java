@@ -52,7 +52,7 @@ CALL v20260530_notif_dedup_add_column_if_missing('t_notif_message', 'dedup_key',
     'ALTER TABLE t_notif_message ADD COLUMN dedup_key VARCHAR(255) NULL AFTER content_json');
 
 UPDATE t_notif_message
-SET dedup_key = CONCAT_WS('':'', receiver_uid, COALESCE(sender_uid, 0), notif_type, COALESCE(target_type, 0), COALESCE(target_id, id), id)
+SET dedup_key = CONCAT_WS(':', receiver_uid, COALESCE(sender_uid, 0), notif_type, COALESCE(target_type, 0), COALESCE(target_id, id), id)
 WHERE dedup_key IS NULL OR dedup_key = '';
 
 ALTER TABLE t_notif_message MODIFY COLUMN dedup_key VARCHAR(255) NOT NULL;

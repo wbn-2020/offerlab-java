@@ -42,20 +42,48 @@ public class AdminAuditService {
     }
 
     public List<AdminAuditLog> listRecent(String action, String resourceType, int limit) {
+        if (!tableReady()) {
+            return List.of();
+        }
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100));
-        return mapper.listRecent(clean(action), clean(resourceType), safeLimit);
+        try {
+            return mapper.listRecent(clean(action), clean(resourceType), safeLimit);
+        } catch (RuntimeException e) {
+            log.warn("admin audit list unavailable, returning empty audit view: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     public PageResult<AdminAuditLog> page(String action, String resourceType, Long operatorUid,
                                           LocalDateTime startTime, LocalDateTime endTime,
                                           int page, int pageSize) {
+        if (!tableReady()) {
+            return PageResult.<AdminAuditLog>builder()
+                    .items(List.of())
+                    .total(0L)
+                    .hasMore(false)
+                    .nextCursor(null)
+                    .build();
+        }
         int safePage = Math.max(1, page);
         int safePageSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
         int offset = (safePage - 1) * safePageSize;
         String cleanAction = clean(action);
         String cleanResourceType = clean(resourceType);
-        List<AdminAuditLog> items = mapper.page(cleanAction, cleanResourceType, operatorUid, startTime, endTime, offset, safePageSize);
-        long total = mapper.count(cleanAction, cleanResourceType, operatorUid, startTime, endTime);
+        List<AdminAuditLog> items;
+        long total;
+        try {
+            items = mapper.page(cleanAction, cleanResourceType, operatorUid, startTime, endTime, offset, safePageSize);
+            total = mapper.count(cleanAction, cleanResourceType, operatorUid, startTime, endTime);
+        } catch (RuntimeException e) {
+            log.warn("admin audit page unavailable, returning empty audit view: {}", e.getMessage());
+            return PageResult.<AdminAuditLog>builder()
+                    .items(List.of())
+                    .total(0L)
+                    .hasMore(false)
+                    .nextCursor(null)
+                    .build();
+        }
         boolean hasMore = offset + items.size() < total;
         return PageResult.<AdminAuditLog>builder()
                 .items(items)
@@ -63,6 +91,15 @@ public class AdminAuditService {
                 .hasMore(hasMore)
                 .nextCursor(hasMore ? String.valueOf(safePage + 1) : null)
                 .build();
+    }
+
+    private boolean tableReady() {
+        try {
+            return mapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            log.warn("admin audit table check failed, returning empty audit view: {}", e.getMessage());
+            return false;
+        }
     }
 
     private String toJson(Object value) throws Exception {

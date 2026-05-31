@@ -16,8 +16,9 @@ Effective local defaults:
 | Dependency | App setting | Default |
 | --- | --- | --- |
 | Redis | `spring.data.redis.host`, `spring.data.redis.port` | `localhost:6379` |
-| Kafka | `spring.kafka.bootstrap-servers` / `KAFKA_BROKERS` | `localhost:9092` |
-| Elasticsearch | `offerlab.elasticsearch.url` / `ELASTICSEARCH_URL` | `http://127.0.0.1:9200` |
+| Kafka | `offerlab.kafka.enabled`, `spring.kafka.bootstrap-servers` / `KAFKA_BROKERS` | disabled in `dev`; `localhost:9092` when enabled |
+| Elasticsearch | `offerlab.elasticsearch.enabled`, `offerlab.elasticsearch.url` / `ELASTICSEARCH_URL` | disabled in `dev`; `http://127.0.0.1:9200` when enabled |
+| Realtime WebSocket | `offerlab.realtime.websocket-enabled` | disabled in `dev` |
 | MySQL | `spring.datasource.url` | `jdbc:mysql://localhost:3306/offerlab` |
 
 ## Local paths
@@ -62,8 +63,13 @@ OfferLab backend:
 
 ```powershell
 Set-Location C:\project\offerlab-java
-mvn -pl community-bootstrap spring-boot:run
+mvn -pl community-bootstrap -am spring-boot:run
 ```
+
+Use `-am` so Maven builds the current reactor modules that `community-bootstrap`
+depends on. Running only `-pl community-bootstrap` can reuse older local
+`*-SNAPSHOT.jar` files and make routes that exist in source disappear at
+runtime.
 
 ## Health checks
 

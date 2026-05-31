@@ -40,6 +40,9 @@ public class NotificationRetryService {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
             return;
         }
+        if (!tableReady()) {
+            return;
+        }
         NotificationRetryTaskPO task = new NotificationRetryTaskPO();
         task.setId(idGen.nextId());
         task.setDedupKey(NotificationDedupKey.of(receiverUid, senderUid, notifType, targetType, targetId, content));
@@ -61,6 +64,9 @@ public class NotificationRetryService {
 
     @Scheduled(fixedDelay = 5000)
     public void retryDueTasks() {
+        if (!tableReady()) {
+            return;
+        }
         LocalDateTime lockUntil = LocalDateTime.now().plusSeconds(CLAIM_LEASE_SECONDS);
         int claimed = taskMapper.claimDue(owner, lockUntil, BATCH_SIZE);
         if (claimed <= 0) {
@@ -72,14 +78,23 @@ public class NotificationRetryService {
     }
 
     public List<NotificationRetryTaskPO> listRecent(Integer status, int limit) {
+        if (!tableReady()) {
+            return List.of();
+        }
         return taskMapper.listRecent(status, clampLimit(limit));
     }
 
     public NotificationRetryTaskPO findById(Long id) {
+        if (!tableReady()) {
+            return null;
+        }
         return id == null || id <= 0 ? null : taskMapper.findById(id);
     }
 
     public Map<String, Object> status() {
+        if (!tableReady()) {
+            return emptyStatus();
+        }
         Map<String, Long> byStatus = new LinkedHashMap<>();
         byStatus.put("pending", 0L);
         byStatus.put("done", 0L);
@@ -95,10 +110,16 @@ public class NotificationRetryService {
     }
 
     public boolean replayFailed(Long id) {
+        if (!tableReady()) {
+            return false;
+        }
         return id != null && id > 0 && taskMapper.markFailedForRetry(id) > 0;
     }
 
     public int replayFailedBatch(List<Long> ids) {
+        if (!tableReady()) {
+            return 0;
+        }
         List<Long> safeIds = ids == null ? List.of() : ids.stream()
                 .filter(id -> id != null && id > 0)
                 .distinct()
@@ -172,6 +193,26 @@ public class NotificationRetryService {
             return 20;
         }
         return Math.min(limit, 100);
+    }
+
+    private boolean tableReady() {
+        try {
+            return taskMapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static Map<String, Object> emptyStatus() {
+        Map<String, Long> byStatus = new LinkedHashMap<>();
+        byStatus.put("pending", 0L);
+        byStatus.put("done", 0L);
+        byStatus.put("failed", 0L);
+        byStatus.put("running", 0L);
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("byStatus", byStatus);
+        status.put("duePending", 0L);
+        return status;
     }
 
     private static String statusName(Object status) {

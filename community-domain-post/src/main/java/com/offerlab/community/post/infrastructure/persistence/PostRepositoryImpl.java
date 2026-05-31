@@ -73,7 +73,7 @@ public class PostRepositoryImpl implements PostRepository {
     @Transactional
     public void update(Post post) {
         PostPO po = toPO(post);
-        po.setVersion(post.getVersion() == null ? 1 : post.getVersion() + 1);
+        po.setVersion(post.getVersion());
         postMapper.updateById(po);
         if (post.getExtJson() != null) {
             PostExtensionPO existing = extMapper.selectById(post.getId());

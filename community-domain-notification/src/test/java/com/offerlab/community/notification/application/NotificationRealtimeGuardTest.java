@@ -22,6 +22,7 @@ class NotificationRealtimeGuardTest {
         assertTrue(dto.contains("latestUnreadId"), "status DTO must expose the latest unread id for change detection");
         assertTrue(dto.contains("latestUnreadAt"), "status DTO must expose the latest unread timestamp");
         assertTrue(dto.contains("pollIntervalSeconds"), "status DTO must tell the frontend how often to poll");
+        assertTrue(dto.contains("websocketEnabled"), "status DTO must tell the frontend whether WebSocket should be opened");
 
         assertTrue(facadeApi.contains("NotificationRealtimeStatusDTO getRealtimeStatus(Long uid)"), "facade must expose realtime status");
         assertTrue(controller.contains("@GetMapping(\"/realtime-status\")"), "controller must expose realtime status endpoint");
@@ -29,6 +30,7 @@ class NotificationRealtimeGuardTest {
         assertTrue(facade.contains("getUnreadCountByType(uid)"), "status must reuse canonical unread counters");
         assertTrue(facade.contains("mapper.selectLatestUnread(uid)"), "status must include latest unread change marker");
         assertTrue(facade.contains("REALTIME_POLL_INTERVAL_SECONDS"), "status must return a controlled polling interval");
+        assertTrue(facade.contains("websocketEnabled(websocketEnabled)"), "status must gate WebSocket from backend configuration");
         assertTrue(mapper.contains("selectLatestUnread"), "mapper must fetch the latest unread notification");
         assertTrue(mapper.contains("AND is_read = 0"), "latest marker must only inspect unread notifications");
         assertTrue(mapper.contains("AND is_deleted = 0"), "latest marker must ignore deleted notifications");

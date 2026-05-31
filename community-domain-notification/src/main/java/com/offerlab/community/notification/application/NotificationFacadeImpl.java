@@ -14,6 +14,7 @@ import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,23 +50,20 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private final ObjectMapper objectMapper;
     private final UserFacade userFacade;
 
+    @Value("${offerlab.realtime.websocket-enabled:false}")
+    private boolean websocketEnabled;
+
     @Override
     public PageResult<Map<String, Object>> listNotifications(Long uid, String type, long cursor, int size) {
+        if (!messageTableReady()) {
+            return PageResult.empty();
+        }
         int limit = clampPageSize(size);
-        LambdaQueryWrapper<NotificationMessagePO> q = new LambdaQueryWrapper<NotificationMessagePO>()
-                .eq(NotificationMessagePO::getReceiverUid, uid)
-                .eq(NotificationMessagePO::getIsDeleted, 0)
-                .orderByDesc(NotificationMessagePO::getCreateTime)
-                .last("LIMIT " + limit);
         Integer notifType = parseType(type);
-        if (notifType != null) {
-            q.eq(NotificationMessagePO::getNotifType, notifType);
-        }
-        if (cursor > 0) {
-            q.lt(NotificationMessagePO::getCreateTime,
-                    LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
-        }
-        List<NotificationMessagePO> rows = mapper.selectList(q);
+        LocalDateTime cursorTime = cursor > 0
+                ? LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC)
+                : null;
+        List<NotificationMessagePO> rows = mapper.listByUser(uid, notifType, cursorTime, limit);
         if (rows.isEmpty()) return PageResult.empty();
         Set<Long> senderIds = rows.stream()
                 .map(NotificationMessagePO::getSenderUid)
@@ -84,6 +82,9 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     @Override
     public long getUnreadCount(Long uid) {
+        if (!messageTableReady()) {
+            return 0L;
+        }
         Long count = mapper.selectCount(baseUnread(uid));
         return count == null ? 0L : count;
     }
@@ -103,20 +104,21 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     @Override
     public NotificationRealtimeStatusDTO getRealtimeStatus(Long uid) {
-        NotificationMessagePO latestUnread = mapper.selectLatestUnread(uid);
+        NotificationMessagePO latestUnread = messageTableReady() ? mapper.selectLatestUnread(uid) : null;
         return NotificationRealtimeStatusDTO.builder()
                 .unread(getUnreadCountByType(uid))
                 .latestUnreadId(latestUnread == null ? null : latestUnread.getId())
                 .latestUnreadAt(latestUnread == null ? null : latestUnread.getCreateTime())
                 .serverTime(System.currentTimeMillis())
                 .pollIntervalSeconds(REALTIME_POLL_INTERVAL_SECONDS)
+                .websocketEnabled(websocketEnabled)
                 .build();
     }
 
     @Override
     @Transactional
     public void markAsRead(Long uid, List<Long> notifIds) {
-        if (notifIds == null || notifIds.isEmpty()) {
+        if (notifIds == null || notifIds.isEmpty() || !messageTableReady()) {
             return;
         }
         mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
@@ -129,6 +131,9 @@ public class NotificationFacadeImpl implements NotificationFacade {
     @Override
     @Transactional
     public void markAllAsRead(Long uid) {
+        if (!messageTableReady()) {
+            return;
+        }
         mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
                 .eq(NotificationMessagePO::getReceiverUid, uid)
                 .eq(NotificationMessagePO::getIsDeleted, 0)
@@ -194,6 +199,9 @@ public class NotificationFacadeImpl implements NotificationFacade {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
             return;
         }
+        if (!messageTableReady()) {
+            return;
+        }
         if (TYPE_SYSTEM == notifType) {
             if (!userFacade.allowsSystemNotification(receiverUid)) {
                 return;
@@ -212,7 +220,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
         po.setDedupKey(NotificationDedupKey.of(receiverUid, senderUid, notifType, targetType, targetId, content));
         po.setIsRead(0);
         po.setIsDeleted(0);
-        int inserted = mapper.insertIgnore(po);
+        int inserted = dedupKeyColumnReady() ? mapper.insertIgnore(po) : mapper.insertLegacy(po);
         if (inserted <= 0) {
             log.debug("duplicate notification skipped: dedupKey={}", po.getDedupKey());
         }
@@ -246,8 +254,27 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     private long countByType(Long uid, int type) {
+        if (!messageTableReady()) {
+            return 0L;
+        }
         Long count = mapper.selectCount(baseUnread(uid).eq(NotificationMessagePO::getNotifType, type));
         return count == null ? 0L : count;
+    }
+
+    private boolean messageTableReady() {
+        try {
+            return mapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private boolean dedupKeyColumnReady() {
+        try {
+            return mapper.dedupKeyColumnExists() > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private Map<String, Object> toItem(NotificationMessagePO po, UserBriefDTO sender) {

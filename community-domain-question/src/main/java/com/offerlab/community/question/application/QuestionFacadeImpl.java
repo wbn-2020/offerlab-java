@@ -371,7 +371,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
 
     @Override
     public UserPrepOverviewDTO getMyPrepOverview(Long uid) {
-        Map<String, Object> overviewCounts = progressMapper.countOverview(uid);
+        Map<String, Object> overviewCounts = Objects.requireNonNullElse(progressMapper.countOverview(uid), Map.of());
         List<QuestionDTO> favorites = questionsFromProgress(progressMapper.selectRecentFavorites(uid, 8), uid);
         List<QuestionDTO> reviews = questionsFromProgress(progressMapper.selectRecentByStatus(uid, "review", 8), uid);
         List<QuestionDTO> answerDrafts = questionsFromProgress(progressMapper.selectRecentAnswerDrafts(uid, 6), uid);
@@ -403,8 +403,8 @@ public class QuestionFacadeImpl implements QuestionFacade {
     public UserWeeklyPrepReportDTO getMyWeeklyPrepReport(Long uid) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime since = now.minusDays(7);
-        Map<String, Object> progress = progressMapper.summarizeWeeklyReport(uid, since);
-        Map<String, Object> mock = mockInterviewSessionMapper.summarizeWeeklyReport(uid, since);
+        Map<String, Object> progress = Objects.requireNonNullElse(progressMapper.summarizeWeeklyReport(uid, since), Map.of());
+        Map<String, Object> mock = Objects.requireNonNullElse(mockInterviewSessionMapper.summarizeWeeklyReport(uid, since), Map.of());
         List<QuestionDTO> touchedQuestions = questionsFromProgress(progressMapper.selectUpdatedSince(uid, since, 8), uid);
         List<UserPrepOverviewDTO.MistakeReasonCountDTO> mistakes = mistakeReasonCounts(uid).stream().limit(5).toList();
         List<UserPrepOverviewDTO.FocusTagCountDTO> focusTags = focusTagCounts(uid).stream().limit(5).toList();
@@ -695,6 +695,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
 
     @Override
     public List<CompanyAliasDTO> listCompanyAliases(String keyword, int limit) {
+        if (!companyAliasTableReady()) {
+            return List.of();
+        }
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100));
         return companyAliasMapper.listAdmin(clean(keyword), safeLimit).stream()
                 .map(this::toCompanyAliasDto)
@@ -703,6 +706,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
 
     @Override
     public List<CompanyAliasCandidateDTO> listCompanyAliasCandidates(int limit) {
+        if (!companyAliasTableReady()) {
+            return List.of();
+        }
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 50));
         Map<String, CompanyNameStat> stats = aggregateCompanyNameStats(200);
         if (stats.size() < 2) {
@@ -1336,7 +1342,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         TargetFilter filter = targetFilter(target);
         int questionCount = questionMapper.countPublicByTarget(filter.company(), filter.position(), filter.tagName());
         Map<String, Object> progress = viewerUid == null ? Map.of()
-                : progressMapper.countByTarget(viewerUid, filter.company(), filter.position(), filter.tagName());
+                : Objects.requireNonNullElse(progressMapper.countByTarget(viewerUid, filter.company(), filter.position(), filter.tagName()), Map.of());
         return UserPrepOverviewDTO.TargetPrepSummaryDTO.builder()
                 .target(target)
                 .questionCount(questionCount)
@@ -1593,9 +1599,26 @@ public class QuestionFacadeImpl implements QuestionFacade {
 
     private Map<String, CompanyNameStat> aggregateCompanyNameStats(int limit) {
         Map<String, CompanyNameStat> stats = new HashMap<>();
-        mergeCompanyNameStats(stats, questionMapper.countCompaniesForAliasCandidates(limit), true);
-        mergeCompanyNameStats(stats, postMapper.countInterviewCompaniesForAliasCandidates(limit), false);
+        try {
+            mergeCompanyNameStats(stats, questionMapper.countCompaniesForAliasCandidates(limit), true);
+        } catch (RuntimeException e) {
+            log.debug("question company alias candidate stats unavailable: {}", e.getMessage());
+        }
+        try {
+            mergeCompanyNameStats(stats, postMapper.countInterviewCompaniesForAliasCandidates(limit), false);
+        } catch (RuntimeException e) {
+            log.debug("post company alias candidate stats unavailable: {}", e.getMessage());
+        }
         return stats;
+    }
+
+    private boolean companyAliasTableReady() {
+        try {
+            return companyAliasMapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            log.debug("company alias table check failed: {}", e.getMessage());
+            return false;
+        }
     }
 
     private void mergeCompanyNameStats(Map<String, CompanyNameStat> stats, List<Map<String, Object>> rows, boolean questionSource) {

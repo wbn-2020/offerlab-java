@@ -191,7 +191,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
                 AND q.position LIKE CONCAT('%', #{position}, '%')
               </if>
               <if test="tagName != null and tagName != ''">
-                AND t.name = #{tagName}
+                AND t.tag_name = #{tagName}
               </if>
             </script>
             """)
@@ -237,7 +237,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
     List<java.util.Map<String, Object>> countMistakeReasons(@Param("uid") Long uid);
 
     @Select("""
-            SELECT t.name AS name, COUNT(DISTINCT up.question_id) AS count
+            SELECT t.tag_name AS name, COUNT(DISTINCT up.question_id) AS count
             FROM t_user_question_progress up
             JOIN t_interview_question q ON q.id = up.question_id
             JOIN t_post_main p ON p.id = q.source_post_id
@@ -254,8 +254,8 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
                 OR (up.next_review_at IS NULL AND up.progress_status = 'learning' AND up.update_time < #{learningBefore})
                 OR (up.next_review_at IS NULL AND up.mistake_reason IS NOT NULL AND up.mistake_reason <> '')
               )
-            GROUP BY t.id, t.name
-            ORDER BY COUNT(DISTINCT up.question_id) DESC, t.name ASC
+            GROUP BY t.id, t.tag_name
+            ORDER BY COUNT(DISTINCT up.question_id) DESC, t.tag_name ASC
             LIMIT #{limit}
             """)
     List<java.util.Map<String, Object>> countWeaknessTags(@Param("uid") Long uid,

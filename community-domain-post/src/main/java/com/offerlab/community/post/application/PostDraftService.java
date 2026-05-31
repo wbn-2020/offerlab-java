@@ -30,11 +30,22 @@ public class PostDraftService {
     private final ObjectMapper objectMapper;
 
     public List<PostDraftDTO> listRecent(Long uid, int limit) {
+        if (!tableReady()) {
+            return List.of();
+        }
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 10 : limit, 30));
-        return draftMapper.selectRecentByUser(uid, safeLimit).stream().map(this::toDto).toList();
+        try {
+            return draftMapper.selectRecentByUser(uid, safeLimit).stream().map(this::toDto).toList();
+        } catch (RuntimeException e) {
+            log.warn("post draft list unavailable, returning empty list: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     public PostDraftDTO get(Long uid, Long id) {
+        if (!tableReady()) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         PostDraftPO po = draftMapper.selectByUser(id, uid);
         if (po == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -45,6 +56,9 @@ public class PostDraftService {
     public PostDraftDTO latestBySourcePost(Long uid, Long sourcePostId) {
         if (sourcePostId == null || sourcePostId <= 0) {
             throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (!tableReady()) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         PostDraftPO po = draftMapper.selectLatestBySourcePost(uid, sourcePostId);
         if (po == null) {
@@ -57,6 +71,9 @@ public class PostDraftService {
     public PostDraftDTO save(PostDraftCmd cmd) {
         if (cmd == null || cmd.getUid() == null) {
             throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (!tableReady()) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR);
         }
         Long id = cmd.getId();
         PostDraftPO existing = null;
@@ -84,6 +101,9 @@ public class PostDraftService {
 
     @Transactional
     public boolean delete(Long uid, Long id) {
+        if (!tableReady()) {
+            return false;
+        }
         int updated = draftMapper.delete(new LambdaUpdateWrapper<PostDraftPO>()
                 .eq(PostDraftPO::getId, id)
                 .eq(PostDraftPO::getUid, uid));
@@ -169,5 +189,14 @@ public class PostDraftService {
         }
         String normalized = value.trim();
         return normalized.length() <= max ? normalized : normalized.substring(0, max);
+    }
+
+    private boolean tableReady() {
+        try {
+            return draftMapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            log.warn("post draft table check failed: {}", e.getMessage());
+            return false;
+        }
     }
 }

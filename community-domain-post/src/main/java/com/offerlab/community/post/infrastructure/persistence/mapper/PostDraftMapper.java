@@ -11,6 +11,14 @@ import java.util.List;
 @Mapper
 public interface PostDraftMapper extends BaseMapper<PostDraftPO> {
     @Select("""
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 't_post_draft'
+            """)
+    int tableExists();
+
+    @Select("""
             SELECT *
             FROM t_post_draft
             WHERE uid = #{uid}

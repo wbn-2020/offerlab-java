@@ -89,6 +89,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <skip>false</skip>
                     <mainClass>com.offerlab.community.CommunityApplication</mainClass>
                 </configuration>
             </plugin>
