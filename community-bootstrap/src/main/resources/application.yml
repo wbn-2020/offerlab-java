@@ -76,14 +76,17 @@ offerlab:
     inbox-capacity: 1000
     inbox-ttl-seconds: 604800
   kafka:
-    # 本地单 broker 默认 1，生产环境可按 topic 分区数调高，避免无效消费者线程反复协调。
+    enabled: ${OFFERLAB_KAFKA_ENABLED:true}
     listener-concurrency: ${OFFERLAB_KAFKA_LISTENER_CONCURRENCY:1}
+    # Keep local single-broker development at 1; production can raise this with topic partitions.
   elasticsearch:
-    enabled: true
+    enabled: ${ELASTICSEARCH_ENABLED:true}
     url: ${ELASTICSEARCH_URL:http://127.0.0.1:9200}
     post-index: post_idx
     connect-timeout-millis: 800
     request-timeout-millis: 1500
+  realtime:
+    websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}
 
 logging:
   level:

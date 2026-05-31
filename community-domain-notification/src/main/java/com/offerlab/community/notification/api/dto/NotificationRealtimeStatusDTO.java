@@ -14,4 +14,5 @@ public class NotificationRealtimeStatusDTO {
     private LocalDateTime latestUnreadAt;
     private long serverTime;
     private int pollIntervalSeconds;
+    private boolean websocketEnabled;
 }

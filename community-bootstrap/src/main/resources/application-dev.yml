@@ -1,4 +1,4 @@
-# dev profile：覆盖默认值时填这里
+# dev profile overrides.
 spring:
   data:
     redis:
@@ -14,3 +14,11 @@ springdoc:
     enabled: true
   swagger-ui:
     enabled: true
+
+offerlab:
+  kafka:
+    enabled: ${OFFERLAB_KAFKA_ENABLED:false}
+  elasticsearch:
+    enabled: ${ELASTICSEARCH_ENABLED:false}
+  realtime:
+    websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}

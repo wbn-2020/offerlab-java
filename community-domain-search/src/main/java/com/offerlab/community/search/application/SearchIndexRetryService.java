@@ -41,14 +41,23 @@ public class SearchIndexRetryService {
     }
 
     public List<SearchIndexRetryTaskPO> listRecent(Integer status, int limit) {
+        if (!tableReady()) {
+            return List.of();
+        }
         return taskMapper.listRecent(status, clampLimit(limit));
     }
 
     public SearchIndexRetryTaskPO findById(Long id) {
+        if (!tableReady()) {
+            return null;
+        }
         return id == null || id <= 0 ? null : taskMapper.findById(id);
     }
 
     public Map<String, Object> status() {
+        if (!tableReady()) {
+            return emptyStatus();
+        }
         Map<String, Long> byStatus = new LinkedHashMap<>();
         byStatus.put("pending", 0L);
         byStatus.put("done", 0L);
@@ -64,10 +73,16 @@ public class SearchIndexRetryService {
     }
 
     public boolean replayFailed(Long id) {
+        if (!tableReady()) {
+            return false;
+        }
         return id != null && id > 0 && taskMapper.markFailedForRetry(id) > 0;
     }
 
     public int replayFailedBatch(List<Long> ids) {
+        if (!tableReady()) {
+            return 0;
+        }
         List<Long> safeIds = ids == null ? List.of() : ids.stream()
                 .filter(id -> id != null && id > 0)
                 .distinct()
@@ -78,6 +93,9 @@ public class SearchIndexRetryService {
 
     @Scheduled(fixedDelay = 5000)
     public void retryDueTasks() {
+        if (!tableReady()) {
+            return;
+        }
         LocalDateTime lockUntil = LocalDateTime.now().plusSeconds(CLAIM_LEASE_SECONDS);
         int claimed = taskMapper.claimDue(owner, lockUntil, BATCH_SIZE);
         if (claimed <= 0) {
@@ -108,6 +126,9 @@ public class SearchIndexRetryService {
 
     private void enqueue(String operation, Long postId, Throwable cause) {
         if (postId == null || postId <= 0) {
+            return;
+        }
+        if (!tableReady()) {
             return;
         }
         SearchIndexRetryTaskPO task = new SearchIndexRetryTaskPO();
@@ -153,6 +174,26 @@ public class SearchIndexRetryService {
             return 20;
         }
         return Math.min(limit, 100);
+    }
+
+    private boolean tableReady() {
+        try {
+            return taskMapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static Map<String, Object> emptyStatus() {
+        Map<String, Long> byStatus = new LinkedHashMap<>();
+        byStatus.put("pending", 0L);
+        byStatus.put("done", 0L);
+        byStatus.put("failed", 0L);
+        byStatus.put("running", 0L);
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("byStatus", byStatus);
+        status.put("duePending", 0L);
+        return status;
     }
 
     private static String statusName(Object status) {

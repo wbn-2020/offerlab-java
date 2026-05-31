@@ -22,13 +22,25 @@ public class ModerationAdminService {
     private final SnowflakeIdGenerator idGen;
 
     public List<ModerationKeyword> listKeywords(String keyword, String scope, int limit) {
-        ensureTable("t_moderation_keyword");
-        return mapper.listKeywords(clean(keyword), clean(scope), Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+        if (!tableReady("t_moderation_keyword")) {
+            return List.of();
+        }
+        try {
+            return mapper.listKeywords(clean(keyword), clean(scope), Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+        } catch (RuntimeException e) {
+            return List.of();
+        }
     }
 
     public List<ModerationKeywordHit> listKeywordHits(String scope, String action, Long uid, String keyword, int limit) {
-        ensureTable("t_moderation_keyword_hit");
-        return mapper.listKeywordHits(clean(scope), clean(action), uid, clean(keyword), Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+        if (!tableReady("t_moderation_keyword_hit")) {
+            return List.of();
+        }
+        try {
+            return mapper.listKeywordHits(clean(scope), clean(action), uid, clean(keyword), Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+        } catch (RuntimeException e) {
+            return List.of();
+        }
     }
 
     @Transactional
@@ -69,10 +81,16 @@ public class ModerationAdminService {
     }
 
     public List<UserModerationState> listUserStates(int limit) {
-        ensureTable("t_user_moderation_state");
-        List<UserModerationState> states = mapper.listUserStates(Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
-        enrichRecentViolations(states);
-        return states;
+        if (!tableReady("t_user_moderation_state")) {
+            return List.of();
+        }
+        try {
+            List<UserModerationState> states = mapper.listUserStates(Math.max(1, Math.min(limit <= 0 ? 50 : limit, 100)));
+            enrichRecentViolations(states);
+            return states;
+        } catch (RuntimeException e) {
+            return List.of();
+        }
     }
 
     @Transactional
@@ -162,8 +180,16 @@ public class ModerationAdminService {
     }
 
     private void ensureTable(String tableName) {
-        if (mapper.tableExists(tableName) <= 0) {
+        if (!tableReady(tableName)) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+    }
+
+    private boolean tableReady(String tableName) {
+        try {
+            return mapper.tableExists(tableName) > 0;
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 

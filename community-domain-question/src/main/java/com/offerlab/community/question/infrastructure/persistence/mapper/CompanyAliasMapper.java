@@ -12,6 +12,14 @@ import java.util.List;
 @Mapper
 public interface CompanyAliasMapper extends BaseMapper<CompanyAliasPO> {
     @Select("""
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 't_company_alias'
+            """)
+    int tableExists();
+
+    @Select("""
             SELECT *
             FROM t_company_alias
             WHERE status = 1

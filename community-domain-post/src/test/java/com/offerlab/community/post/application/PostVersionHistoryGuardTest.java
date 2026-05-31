@@ -44,6 +44,7 @@ class PostVersionHistoryGuardTest {
         String versionService = read("src/main/java/com/offerlab/community/post/application/PostVersionHistoryService.java");
         String repo = read("src/main/java/com/offerlab/community/post/infrastructure/persistence/PostRepositoryImpl.java");
         String domain = read("src/main/java/com/offerlab/community/post/domain/model/Post.java");
+        String mybatisConfig = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/mybatis/config/MybatisPlusConfig.java");
 
         assertTrue(appService.contains("private final PostVersionHistoryService versionHistoryService"), "post application service must own snapshot orchestration");
         int snapshotCall = appService.indexOf("versionHistoryService.snapshotBeforeUpdate");
@@ -62,8 +63,11 @@ class PostVersionHistoryGuardTest {
 
         assertTrue(domain.contains("private Integer version"), "post domain must carry the DB version for snapshots");
         assertTrue(repo.contains(".version(po.getVersion())"), "repository must map the DB version into the domain object");
-        assertTrue(repo.contains("po.setVersion(post.getVersion() == null ? 1 : post.getVersion() + 1)"), "post updates must advance the persisted version shown by history snapshots");
+        assertTrue(repo.contains("po.setVersion(post.getVersion())"), "post updates must pass the base version to MyBatis-Plus optimistic locking");
+        assertFalse(repo.contains("post.getVersion() + 1"), "repository must not manually advance @Version before updateById");
         assertFalse(repo.contains("po.setVersion(null)"), "post updates must not clear the version field before saving");
+        assertTrue(mybatisConfig.contains("MybatisPlusInterceptor"), "MyBatis-Plus interceptor must be registered for @Version fields");
+        assertTrue(mybatisConfig.contains("OptimisticLockerInnerInterceptor"), "post optimistic locking must install the version interceptor");
     }
 
     @Test

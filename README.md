@@ -82,8 +82,11 @@ mvn -DskipTests clean install
 启动后端：
 
 ```powershell
-mvn -pl community-bootstrap spring-boot:run
+mvn -pl community-bootstrap -am spring-boot:run
 ```
+
+`-am` 会同时构建启动模块依赖的当前源码模块，避免只启动
+`community-bootstrap` 时复用本地仓库中过期的 `*-SNAPSHOT.jar`。
 
 访问地址：
 

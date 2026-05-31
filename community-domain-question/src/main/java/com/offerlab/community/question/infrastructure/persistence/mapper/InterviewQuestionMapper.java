@@ -406,7 +406,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
-              AND t.name = #{tagName}
+              AND t.tag_name = #{tagName}
               <if test="difficulty != null and difficulty != ''">
                 AND q.difficulty = #{difficulty}
               </if>
@@ -428,7 +428,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
-              AND t.name = #{tagName}
+              AND t.tag_name = #{tagName}
             ORDER BY (q.appear_count * 5 + q.quality_score) DESC, q.create_time DESC
             LIMIT #{limit}
             """)
@@ -454,7 +454,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
                 AND q.position LIKE CONCAT('%', #{position}, '%')
               </if>
               <if test="tagName != null and tagName != ''">
-                AND t.name = #{tagName}
+                AND t.tag_name = #{tagName}
               </if>
             </script>
             """)
