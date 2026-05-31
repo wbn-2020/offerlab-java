@@ -124,6 +124,7 @@ public class PostReportService {
             postRepo.update(post);
         }
         postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
+        postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
     }
 
     private int clampLimit(int limit) {

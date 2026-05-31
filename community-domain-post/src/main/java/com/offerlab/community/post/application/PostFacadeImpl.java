@@ -6,6 +6,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
@@ -36,6 +37,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -57,12 +59,19 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public PostDTO getPost(Long postId) {
-        String cacheKey = CacheKeyBuilder.postDetail(postId);
+        return getPost(postId, UserContext.get());
+    }
+
+    @Override
+    public PostDTO getPost(Long postId, Long viewerUid) {
+        String cacheKey = CacheKeyBuilder.postDetailRaw(postId);
         PostDTO dto = multiLevelCache.get(cacheKey, key -> {
             Post post = postRepo.findById(postId).orElse(null);
-            // 详情缓存只缓存公开可见内容，避免后续匿名访问命中受限帖子。
-            return post != null && post.isVisibleTo(null, false) ? toFullDto(post) : null;
+            return post == null ? null : toFullDto(post);
         }, PostDTO.class);
+        if (!isVisible(dto, viewerUid)) {
+            return null;
+        }
         return enrichFull(dto);
     }
 
@@ -129,14 +138,14 @@ public class PostFacadeImpl implements PostFacade {
         // 帖子正文、可见性和标签都可能变化，更新成功后必须清理详情缓存。
 
 
-        multiLevelCache.evict(CacheKeyBuilder.postDetail(cmd.getPostId()));
+        evictPostDetail(cmd.getPostId());
     }
 
     @Override
     public void deletePost(Long postId, Long operatorUid) {
         postService.delete(postId, operatorUid);
         // 删除走逻辑删除，仍需清详情缓存，避免旧内容继续对外可见。
-        multiLevelCache.evict(CacheKeyBuilder.postDetail(postId));
+        evictPostDetail(postId);
     }
 
     @Override
@@ -164,17 +173,18 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public PageResult<PostBriefDTO> getHot(long cursor, int size) {
-        int limit = Math.min(size <= 0 ? 20 : size, 50);
+        int limit = pageSize(size);
         LocalDateTime cursorTime = cursor > 0
                 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC)
                 : null;
-        return pagedPo(postMapper.selectHotPosts(cursorTime, limit), limit);
+        return pagedPo(postMapper.selectHotPosts(cursorTime, limit + 1), limit);
     }
 
     @Override
     public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
-        List<Post> list = postRepo.findPosts(authorId, tagId, postType, cursor, size);
-        return paged(list, size);
+        int limit = pageSize(size);
+        List<Post> list = postRepo.findPosts(authorId, tagId, postType, cursor, limit + 1);
+        return paged(list, limit);
     }
 
     @Override
@@ -189,25 +199,28 @@ public class PostFacadeImpl implements PostFacade {
 
     private PageResult<PostBriefDTO> paged(List<Post> list, int size) {
         if (list.isEmpty()) return PageResult.empty();
-        Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
-        List<PostBriefDTO> items = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
+        boolean hasMore = list.size() > size;
+        List<Post> pageList = hasMore ? list.subList(0, size) : list;
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(pageList.stream().map(Post::getId).toList());
+        List<PostBriefDTO> items = pageList.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
         enrichBriefs(items);
         // 普通列表使用 createTime 毫秒时间戳作为游标，前端需原样传回。
-        boolean hasMore = list.size() == size;
-        String next = hasMore
-                ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+        String next = hasMore && !pageList.isEmpty()
+                ? String.valueOf(pageList.get(pageList.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
         return PageResult.of(items, next, hasMore);
     }
 
     private PageResult<PostBriefDTO> pagedPo(List<PostPO> list, int size) {
         if (list.isEmpty()) return PageResult.empty();
-        List<Long> postIds = list.stream().map(PostPO::getId).toList();
+        boolean hasMore = list.size() > size;
+        List<PostPO> pageList = hasMore ? list.subList(0, size) : list;
+        List<Long> postIds = pageList.stream().map(PostPO::getId).toList();
         Map<Long, List<TagDTO>> tags = tagsByPostIds(postIds);
         // 热榜直接查 PO，需要额外批量取扩展字段，避免逐条查询扩展表。
         Map<Long, String> extJson = extensionMapper.selectBatchIds(postIds).stream()
                 .collect(Collectors.toMap(PostExtensionPO::getPostId, PostExtensionPO::getExtJson, (a, b) -> a));
-        List<PostBriefDTO> items = list.stream()
+        List<PostBriefDTO> items = pageList.stream()
                 .map(p -> PostBriefDTO.builder()
                         .id(p.getId())
                         .authorId(p.getAuthorId())
@@ -221,11 +234,14 @@ public class PostFacadeImpl implements PostFacade {
                         .build())
                 .toList();
         enrichBriefs(items);
-        boolean hasMore = list.size() == size;
-        String next = hasMore
-                ? String.valueOf(list.get(list.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+        String next = hasMore && !pageList.isEmpty()
+                ? String.valueOf(pageList.get(pageList.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
         return PageResult.of(items, next, hasMore);
+    }
+
+    private int pageSize(int size) {
+        return Math.max(1, Math.min(size, 100));
     }
 
     private PostBriefDTO toBrief(Post p) {
@@ -280,6 +296,28 @@ public class PostFacadeImpl implements PostFacade {
                 .createTime(dto.getCreateTime())
                 .updateTime(dto.getUpdateTime())
                 .build();
+    }
+
+    private boolean isVisible(PostDTO dto, Long viewerUid) {
+        if (dto == null || dto.getPostStatus() == null || dto.getPostStatus() != Post.STATUS_PUBLISHED) {
+            return false;
+        }
+        Integer visibility = dto.getVisibility();
+        if (visibility == null || visibility == Post.VIS_PUBLIC) {
+            return true;
+        }
+        if (viewerUid == null) {
+            return false;
+        }
+        if (Objects.equals(dto.getAuthorId(), viewerUid)) {
+            return true;
+        }
+        return visibility == Post.VIS_FOLLOWER && userFacade.isFollowing(viewerUid, dto.getAuthorId());
+    }
+
+    private void evictPostDetail(Long postId) {
+        multiLevelCache.evict(CacheKeyBuilder.postDetail(postId));
+        multiLevelCache.evict(CacheKeyBuilder.postDetailRaw(postId));
     }
 
     private PostDTO toFullDto(Post p) {

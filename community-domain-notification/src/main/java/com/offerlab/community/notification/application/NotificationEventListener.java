@@ -10,7 +10,8 @@ import com.offerlab.community.user.api.event.UserFollowedEvent;
 import com.offerlab.community.user.api.UserFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -27,41 +28,57 @@ public class NotificationEventListener {
 
     private static final int TARGET_POST = 1;
     private static final int TARGET_COMMENT = 2;
+    private static final int TARGET_USER = 3;
+    private static final int TYPE_LIKE = 1;
+    private static final int TYPE_COMMENT = 2;
+    private static final int TYPE_FAVORITE = 3;
+    private static final int TYPE_FOLLOWER = 4;
+    private static final int TYPE_MENTION = 6;
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}\\p{N}_\\-\\u4e00-\\u9fa5]{2,32})");
 
     private final NotificationFacade notificationFacade;
     private final UserFacade userFacade;
+    private final NotificationRetryService retryService;
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostPublished(PostPublishedEvent event) {
         notifyMentions(event.getAuthorId(), event.getPostId(), null,
                 textOf(event.getTitle(), event.getContent()), Set.of(event.getAuthorId()));
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostLiked(PostLikedEvent event) {
         runQuietly(() -> notificationFacade.notifyLike(
-                event.getPostAuthorId(), event.getUid(), TARGET_POST, event.getPostId()), "post like");
+                event.getPostAuthorId(), event.getUid(), TARGET_POST, event.getPostId()),
+                "post like", event.getPostAuthorId(), event.getUid(), TYPE_LIKE, TARGET_POST, event.getPostId(),
+                Map.of("action", "like", "targetType", TARGET_POST, "targetId", event.getPostId()));
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentLiked(CommentLikedEvent event) {
         runQuietly(() -> notificationFacade.notifyCommentLike(
-                event.getCommentAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()), "comment like");
+                event.getCommentAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()),
+                "comment like", event.getCommentAuthorId(), event.getUid(), TYPE_LIKE, TARGET_COMMENT, event.getCommentId(),
+                Map.of("action", "like", "targetType", TARGET_COMMENT, "targetId", event.getCommentId(),
+                        "postId", event.getPostId(), "commentId", event.getCommentId()));
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentCreated(CommentCreatedEvent event) {
         runQuietly(() -> notificationFacade.notifyComment(
-                event.getPostAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()), "post comment");
+                event.getPostAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()),
+                "post comment", event.getPostAuthorId(), event.getUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(),
+                Map.of("action", "comment", "postId", event.getPostId(), "commentId", event.getCommentId()));
         Long replyToUid = event.getReplyToUid();
         if (replyToUid != null && !replyToUid.equals(event.getPostAuthorId())) {
             runQuietly(() -> notificationFacade.notifyComment(
-                    replyToUid, event.getUid(), event.getPostId(), event.getCommentId()), "reply comment");
+                    replyToUid, event.getUid(), event.getPostId(), event.getCommentId()),
+                    "reply comment", replyToUid, event.getUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(),
+                    Map.of("action", "comment", "postId", event.getPostId(), "commentId", event.getCommentId()));
         }
         Set<Long> excluded = new HashSet<>();
         excluded.add(event.getUid());
@@ -73,24 +90,30 @@ public class NotificationEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onUserFollowed(UserFollowedEvent event) {
         runQuietly(() -> notificationFacade.notifyFollower(
-                event.getFolloweeId(), event.getFollowerId()), "user follow");
+                event.getFolloweeId(), event.getFollowerId()),
+                "user follow", event.getFolloweeId(), event.getFollowerId(), TYPE_FOLLOWER, TARGET_USER, event.getFollowerId(),
+                Map.of("action", "follow", "userId", event.getFollowerId()));
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostFavorited(PostFavoritedEvent event) {
         runQuietly(() -> notificationFacade.notifyFavorite(
-                event.getPostAuthorId(), event.getUid(), event.getPostId()), "post favorite");
+                event.getPostAuthorId(), event.getUid(), event.getPostId()),
+                "post favorite", event.getPostAuthorId(), event.getUid(), TYPE_FAVORITE, TARGET_POST, event.getPostId(),
+                Map.of("action", "favorite", "postId", event.getPostId()));
     }
 
-    private void runQuietly(Runnable runnable, String scene) {
+    private void runQuietly(Runnable runnable, String scene, Long receiverUid, Long senderUid,
+                            Integer notifType, Integer targetType, Long targetId, Map<String, Object> content) {
         try {
             runnable.run();
         } catch (Exception e) {
             log.warn("create notification failed, scene={}: {}", scene, e.getMessage());
+            retryService.enqueue(scene, receiverUid, senderUid, notifType, targetType, targetId, content, e);
         }
     }
 
@@ -99,14 +122,25 @@ public class NotificationEventListener {
         if (names.isEmpty()) {
             return;
         }
-        runQuietly(() -> {
-            Map<String, Long> matched = userFacade.findUserIdsByNicknames(names);
-            for (Long receiverUid : matched.values()) {
-                if (receiverUid != null && (excludedUids == null || !excludedUids.contains(receiverUid))) {
-                    notificationFacade.notifyMention(receiverUid, senderUid, postId, commentId);
-                }
+        Map<String, Long> matched;
+        try {
+            matched = userFacade.findUserIdsByNicknames(names);
+        } catch (Exception e) {
+            log.warn("resolve notification mentions failed: {}", e.getMessage());
+            return;
+        }
+        for (Long receiverUid : matched.values()) {
+            if (receiverUid != null && (excludedUids == null || !excludedUids.contains(receiverUid))) {
+                Map<String, Object> content = commentId == null
+                        ? Map.of("action", "mention", "postId", postId)
+                        : Map.of("action", "mention", "postId", postId, "commentId", commentId);
+                runQuietly(() -> notificationFacade.notifyMention(receiverUid, senderUid, postId, commentId),
+                        "user mention", receiverUid, senderUid, TYPE_MENTION,
+                        commentId == null ? TARGET_POST : TARGET_COMMENT,
+                        commentId == null ? postId : commentId,
+                        content);
             }
-        }, "user mention");
+        }
     }
 
     private Set<String> extractMentionNames(String text) {

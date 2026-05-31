@@ -36,7 +36,7 @@ class PostModerationReviewGuardTest {
         assertTrue(postService.contains("reviewRequired ? Post.STATUS_REVIEWING : Post.STATUS_PUBLISHED"), "new REVIEW posts must be saved as reviewing");
         assertTrue(postService.contains("post.setPostStatus(Post.STATUS_REVIEWING)"), "edited REVIEW posts must return to reviewing status");
         assertTrue(postService.contains("if (!reviewRequired)"), "reviewing posts must not publish public post events");
-        assertTrue(postService.contains("post.getPostStatus() == Post.STATUS_PUBLISHED"), "updated events must only fire for published posts");
+        assertTrue(postService.contains("events.publish(PostUpdatedEvent.builder()"), "post updates must publish so search can delete stale reviewed/private docs");
 
         assertTrue(commentCmd.contains("private Boolean reviewRequired"), "comment command must carry reviewRequired");
         assertTrue(interactionController.contains("contentModerationService.checkContent"), "comment controller must use structured moderation decisions");

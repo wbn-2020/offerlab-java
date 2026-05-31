@@ -11,13 +11,14 @@ import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.lang.management.ManagementFactory;
+import java.net.InetAddress;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Outbox 定时投递调度器
- * 扫描 t_outbox_message 表，将待发消息投递到 Kafka
- * 支持重试和失败处理
+ * Flushes claimed outbox messages to Kafka.
  */
 @Slf4j
 @Component
@@ -28,73 +29,72 @@ public class OutboxScheduler {
     private final KafkaTemplate<String, EventEnvelope<?>> kafkaTemplate;
     private final ObjectMapper objectMapper;
 
-    /** 最大重试次数 */
     private static final int MAX_RETRY = 5;
-
-    /** 单次扫描数量 */
     private static final int BATCH_SIZE = 100;
+    private static final int CLAIM_LEASE_SECONDS = 60;
+    private final String owner = buildOwner();
 
-    /**
-     * 定时扫表投递
-     * 每 1 秒执行一次
-     */
     @Scheduled(fixedDelay = 1000)
     public void flush() {
         try {
-            List<OutboxMessage> pending = outboxMapper.findPending(BATCH_SIZE);
-            if (pending.isEmpty()) {
+            LocalDateTime lockUntil = LocalDateTime.now().plusSeconds(CLAIM_LEASE_SECONDS);
+            int claimed = outboxMapper.claimPending(owner, lockUntil, BATCH_SIZE);
+            if (claimed <= 0) {
                 return;
             }
 
-            log.debug("outbox flush: found {} pending messages", pending.size());
+            List<OutboxMessage> messages = outboxMapper.findClaimed(owner, BATCH_SIZE);
+            log.debug("outbox flush: owner={} claimed={} loaded={}", owner, claimed, messages.size());
 
-            for (OutboxMessage msg : pending) {
+            for (OutboxMessage msg : messages) {
                 try {
-                    // 反序列化 EventEnvelope
                     EventEnvelope envelope = objectMapper.readValue(msg.getPayload(), EventEnvelope.class);
-
-                    // 构建 Kafka 消息，使用 aggregateId 作为 key 保证顺序
                     Message<EventEnvelope> kafkaMsg = MessageBuilder
                             .withPayload(envelope)
                             .setHeader(KafkaHeaders.TOPIC, msg.getTopic())
-                            .setHeader(KafkaHeaders.KEY, msg.getAggregateId().toString())
+                            .setHeader(KafkaHeaders.KEY, String.valueOf(msg.getAggregateId()))
                             .build();
 
-                    // 发送到 Kafka
                     kafkaTemplate.send(kafkaMsg).get();
 
-                    // 标记已发送
-                    outboxMapper.markSent(msg.getId());
-                    log.debug("outbox message sent: id={} topic={}", msg.getId(), msg.getTopic());
-
+                    int updated = outboxMapper.markSent(msg.getId(), owner);
+                    if (updated <= 0) {
+                        log.warn("outbox message sent but mark-sent skipped: id={} owner={}", msg.getId(), owner);
+                    } else {
+                        log.debug("outbox message sent: id={} topic={} owner={}", msg.getId(), msg.getTopic(), owner);
+                    }
                 } catch (Exception e) {
                     handleSendFailure(msg, e);
                 }
             }
         } catch (Exception e) {
-            log.error("outbox flush failed", e);
+            log.error("outbox flush failed: owner={}", owner, e);
         }
     }
 
-    /**
-     * 处理发送失败
-     * 重试次数 < MAX_RETRY：更新重试时间，状态保持 0
-     * 重试次数 >= MAX_RETRY：标记为失败（状态 2），等待人工处理
-     */
     private void handleSendFailure(OutboxMessage msg, Exception e) {
-        int newRetryCount = msg.getRetryCount() + 1;
+        int newRetryCount = (msg.getRetryCount() == null ? 0 : msg.getRetryCount()) + 1;
 
         if (newRetryCount >= MAX_RETRY) {
-            // 超过最大重试次数，标记为失败
-            outboxMapper.updateRetry(msg.getId(), 2, newRetryCount, null);
-            log.error("outbox message failed after {} retries: id={} topic={}", MAX_RETRY, msg.getId(), msg.getTopic(), e);
+            int updated = outboxMapper.updateRetry(msg.getId(), owner, OutboxMessageMapper.STATUS_FAILED, newRetryCount, null);
+            log.error("outbox message failed after {} retries: id={} topic={} owner={} updated={}",
+                    MAX_RETRY, msg.getId(), msg.getTopic(), owner, updated, e);
         } else {
-            // 计算下次重试时间：2^retryCount * 30 秒
             long delaySeconds = (long) Math.pow(2, newRetryCount) * 30;
             LocalDateTime nextRetryTime = LocalDateTime.now().plusSeconds(delaySeconds);
-            outboxMapper.updateRetry(msg.getId(), 0, newRetryCount, nextRetryTime);
-            log.warn("outbox message retry scheduled: id={} topic={} nextRetry={} delaySeconds={}",
-                    msg.getId(), msg.getTopic(), nextRetryTime, delaySeconds, e);
+            int updated = outboxMapper.updateRetry(msg.getId(), owner, OutboxMessageMapper.STATUS_PENDING, newRetryCount, nextRetryTime);
+            log.warn("outbox message retry scheduled: id={} topic={} owner={} nextRetry={} delaySeconds={} updated={}",
+                    msg.getId(), msg.getTopic(), owner, nextRetryTime, delaySeconds, updated, e);
         }
+    }
+
+    private static String buildOwner() {
+        String host = "unknown";
+        try {
+            host = InetAddress.getLocalHost().getHostName();
+        } catch (Exception ignored) {
+            // best-effort identifier only
+        }
+        return host + ":" + ManagementFactory.getRuntimeMXBean().getName() + ":" + UUID.randomUUID();
     }
 }

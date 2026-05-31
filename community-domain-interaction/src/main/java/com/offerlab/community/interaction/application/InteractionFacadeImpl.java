@@ -7,6 +7,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
@@ -28,6 +29,7 @@ import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,32 +62,39 @@ public class InteractionFacadeImpl implements InteractionFacade {
     private final UserFacade userFacade;
     private final SnowflakeIdGenerator idGen;
     private final EventPublisher events;
+    private final AfterCommitExecutor afterCommit;
 
     @Override
     @Transactional
     public void like(Long uid, Long postId) {
-        PostDTO post = postFacade.getPost(postId);
+        PostDTO post = postFacade.getPost(postId, uid);
         if (post == null) throw new BizException(ErrorCode.POST_NOT_FOUND);
 
-        LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_POST, postId);
-        if (existing != null) {
-            if (existing.getIsDeleted() == 0) {
-                throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+        try {
+            LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_POST, postId);
+            if (existing != null) {
+                if (existing.getIsDeleted() == 0) {
+                    throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+                }
+                if (likeMapper.restoreById(existing.getId()) <= 0) {
+                    throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+                }
+            } else {
+                LikePO po = new LikePO();
+                po.setId(idGen.nextId());
+                po.setUserId(uid);
+                po.setTargetType(TARGET_POST);
+                po.setTargetId(postId);
+                po.setTargetAuthorId(post.getAuthorId());
+                po.setIsDeleted(0);
+                likeMapper.insert(po);
             }
-            likeMapper.restoreById(existing.getId());
-        } else {
-            LikePO po = new LikePO();
-            po.setId(idGen.nextId());
-            po.setUserId(uid);
-            po.setTargetType(TARGET_POST);
-            po.setTargetId(postId);
-            po.setTargetAuthorId(post.getAuthorId());
-            po.setIsDeleted(0);
-            likeMapper.insert(po);
+        } catch (DuplicateKeyException e) {
+            throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
         }
-        // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrLike(postId, 1);
+        // MySQL 计数为权威，Redis 提交后增量刷新
         postCounterMapper.incrLike(postId, 1);
+        afterCommit.execute(() -> postCounterRedis.incrLike(postId, 1), "post like counter:" + postId);
         events.publish(PostLikedEvent.builder()
                 .uid(uid).postId(postId).postAuthorId(post.getAuthorId())
                 .timestamp(Instant.now().toEpochMilli()).build());
@@ -101,10 +110,12 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getIsDeleted, 0)
                 .last("LIMIT 1"));
         if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
-        likeMapper.softDeleteById(po.getId());
-        // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrLike(postId, -1);
+        if (likeMapper.softDeleteById(po.getId()) <= 0) {
+            throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
+        }
+        // MySQL 计数为权威，Redis 提交后增量刷新
         postCounterMapper.incrLike(postId, -1);
+        afterCommit.execute(() -> postCounterRedis.incrLike(postId, -1), "post unlike counter:" + postId);
     }
 
     @Override
@@ -133,21 +144,27 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != COMMENT_STATUS_NORMAL) {
             throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
         }
-        LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_COMMENT, commentId);
-        if (existing != null) {
-            if (existing.getIsDeleted() == 0) {
-                throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+        try {
+            LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_COMMENT, commentId);
+            if (existing != null) {
+                if (existing.getIsDeleted() == 0) {
+                    throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+                }
+                if (likeMapper.restoreById(existing.getId()) <= 0) {
+                    throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
+                }
+            } else {
+                LikePO po = new LikePO();
+                po.setId(idGen.nextId());
+                po.setUserId(uid);
+                po.setTargetType(TARGET_COMMENT);
+                po.setTargetId(commentId);
+                po.setTargetAuthorId(comment.getAuthorId());
+                po.setIsDeleted(0);
+                likeMapper.insert(po);
             }
-            likeMapper.restoreById(existing.getId());
-        } else {
-            LikePO po = new LikePO();
-            po.setId(idGen.nextId());
-            po.setUserId(uid);
-            po.setTargetType(TARGET_COMMENT);
-            po.setTargetId(commentId);
-            po.setTargetAuthorId(comment.getAuthorId());
-            po.setIsDeleted(0);
-            likeMapper.insert(po);
+        } catch (DuplicateKeyException e) {
+            throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
         }
         updateCommentLikeCount(commentId, 1);
         events.publish(CommentLikedEvent.builder()
@@ -169,34 +186,42 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getIsDeleted, 0)
                 .last("LIMIT 1"));
         if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
-        likeMapper.softDeleteById(po.getId());
+        if (likeMapper.softDeleteById(po.getId()) <= 0) {
+            throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
+        }
         updateCommentLikeCount(commentId, -1);
     }
 
     @Override
     @Transactional
     public void favorite(Long uid, Long postId) {
-        PostDTO post = postFacade.getPost(postId);
+        PostDTO post = postFacade.getPost(postId, uid);
         if (post == null) throw new BizException(ErrorCode.POST_NOT_FOUND);
 
-        FavoritePO existing = favoriteMapper.selectAnyByUserPost(uid, postId);
-        if (existing != null) {
-            if (existing.getIsDeleted() == 0) {
-                throw new BizException(ErrorCode.FAVORITE_ALREADY_EXISTS);
+        try {
+            FavoritePO existing = favoriteMapper.selectAnyByUserPost(uid, postId);
+            if (existing != null) {
+                if (existing.getIsDeleted() == 0) {
+                    throw new BizException(ErrorCode.FAVORITE_ALREADY_EXISTS);
+                }
+                if (favoriteMapper.restoreById(existing.getId()) <= 0) {
+                    throw new BizException(ErrorCode.FAVORITE_ALREADY_EXISTS);
+                }
+            } else {
+                FavoritePO po = new FavoritePO();
+                po.setId(idGen.nextId());
+                po.setUserId(uid);
+                po.setPostId(postId);
+                po.setFolderId(0L);
+                po.setIsDeleted(0);
+                favoriteMapper.insert(po);
             }
-            favoriteMapper.restoreById(existing.getId());
-        } else {
-            FavoritePO po = new FavoritePO();
-            po.setId(idGen.nextId());
-            po.setUserId(uid);
-            po.setPostId(postId);
-            po.setFolderId(0L);
-            po.setIsDeleted(0);
-            favoriteMapper.insert(po);
+        } catch (DuplicateKeyException e) {
+            throw new BizException(ErrorCode.FAVORITE_ALREADY_EXISTS);
         }
-        // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrFavorite(postId, 1);
+        // MySQL 计数为权威，Redis 提交后增量刷新
         postCounterMapper.incrFavorite(postId, 1);
+        afterCommit.execute(() -> postCounterRedis.incrFavorite(postId, 1), "post favorite counter:" + postId);
         events.publish(PostFavoritedEvent.builder()
                 .uid(uid).postId(postId).postAuthorId(post.getAuthorId())
                 .timestamp(Instant.now().toEpochMilli()).build());
@@ -211,16 +236,18 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(FavoritePO::getIsDeleted, 0)
                 .last("LIMIT 1"));
         if (po == null) throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
-        favoriteMapper.softDeleteById(po.getId());
-        // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrFavorite(postId, -1);
+        if (favoriteMapper.softDeleteById(po.getId()) <= 0) {
+            throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
+        }
+        // MySQL 计数为权威，Redis 提交后增量刷新
         postCounterMapper.incrFavorite(postId, -1);
+        afterCommit.execute(() -> postCounterRedis.incrFavorite(postId, -1), "post unfavorite counter:" + postId);
     }
 
     @Override
     @Transactional
     public Long addComment(CommentCreateCmd cmd) {
-        PostDTO post = postFacade.getPost(cmd.getPostId());
+        PostDTO post = postFacade.getPost(cmd.getPostId(), cmd.getAuthorUid());
         if (post == null) throw new BizException(ErrorCode.POST_NOT_FOUND);
 
         long id = idGen.nextId();
@@ -250,9 +277,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
         commentMapper.insert(po);
         if (!reviewRequired) {
-            // 双写：Redis 写主 + MySQL 兜底
-            postCounterRedis.incrComment(cmd.getPostId(), 1);
+            // MySQL 计数为权威，Redis 提交后增量刷新
             postCounterMapper.incrComment(cmd.getPostId(), 1);
+            afterCommit.execute(() -> postCounterRedis.incrComment(cmd.getPostId(), 1), "post comment counter:" + cmd.getPostId());
             events.publish(CommentCreatedEvent.builder()
                     .uid(cmd.getAuthorUid())
                     .postId(cmd.getPostId())
@@ -329,14 +356,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
         } else {
             deleteQuery.eq(CommentPO::getId, po.getId());
         }
-        Long deletedCount = commentMapper.selectCount(deleteQuery);
-        if (deletedCount == null || deletedCount <= 0) {
+        int deletedCount = commentMapper.delete(deleteQuery);
+        if (deletedCount <= 0) {
             return;
         }
-        commentMapper.delete(deleteQuery);
-        // 双写：Redis 写主 + MySQL 兜底
-        postCounterRedis.incrComment(po.getPostId(), -deletedCount);
-        postCounterMapper.incrComment(po.getPostId(), -deletedCount);
+        long deleted = deletedCount;
+        // MySQL 计数为权威，Redis 提交后增量刷新
+        postCounterMapper.incrComment(po.getPostId(), -deleted);
+        afterCommit.execute(() -> postCounterRedis.incrComment(po.getPostId(), -deleted), "post comment delete counter:" + po.getPostId());
     }
 
     @Override
@@ -371,13 +398,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     private void updateCommentLikeCount(Long commentId, int delta) {
-        CommentPO update = new CommentPO();
-        CommentPO latest = commentMapper.selectById(commentId);
-        if (latest == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
-        int current = latest.getLikeCount() == null ? 0 : latest.getLikeCount();
-        update.setId(commentId);
-        update.setLikeCount(Math.max(0, current + delta));
-        commentMapper.updateById(update);
+        if (commentMapper.incrLikeCount(commentId, delta) <= 0) {
+            throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        }
     }
 
     private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size) {

@@ -50,6 +50,7 @@ public class FeedInboxRedis {
             );
         } catch (Exception e) {
             log.warn("addToInbox failed: uid={} postId={} err={}", uid, postId, e.getMessage());
+            throw new IllegalStateException("add feed inbox failed", e);
         }
     }
 
@@ -61,6 +62,7 @@ public class FeedInboxRedis {
             redis.expire(key, java.time.Duration.ofDays(30));
         } catch (Exception e) {
             log.warn("addToAuthorTimeline failed: uid={} postId={}", authorUid, postId, e);
+            throw new IllegalStateException("add author timeline failed", e);
         }
     }
 
@@ -71,6 +73,7 @@ public class FeedInboxRedis {
             redis.opsForZSet().removeRange(GLOBAL_LATEST, 0, -GLOBAL_LATEST_CAP - 1);
         } catch (Exception e) {
             log.warn("addToGlobalLatest failed", e);
+            throw new IllegalStateException("add global latest failed", e);
         }
     }
 

@@ -57,7 +57,7 @@ public class GlobalExceptionHandler {
         log.warn("[param] {}", e.getMessage());
         Result<?> r = Result.fail(ErrorCode.PARAM_ERROR);
         r.setTraceId(TraceContext.get());
-        return ResponseEntity.ok(r);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(r);
     }
 
     @ExceptionHandler(Throwable.class)

@@ -7,6 +7,7 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentReportMapper;
@@ -47,6 +48,7 @@ public class CommentReportService {
     private final SnowflakeIdGenerator idGen;
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Long reportComment(Long commentId, Long reporterUid, String reason, String detail) {
@@ -148,8 +150,8 @@ public class CommentReportService {
         CommentPO update = new CommentPO();
         update.setCommentStatus(COMMENT_STATUS_HIDDEN);
         commentMapper.update(update, visibleQuery);
-        postCounterRedis.incrComment(postId, -visibleCount);
         postCounterMapper.incrComment(postId, -visibleCount);
+        afterCommit.execute(() -> postCounterRedis.incrComment(postId, -visibleCount), "post comment hide counter:" + postId);
     }
 
     private int clampLimit(int limit) {

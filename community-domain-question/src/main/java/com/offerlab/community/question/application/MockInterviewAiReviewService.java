@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -33,6 +32,10 @@ public class MockInterviewAiReviewService {
     private String model;
     @Value("${offerlab.ai.deepseek.timeout-millis:15000}")
     private int timeoutMillis;
+    @Value("${offerlab.ai.deepseek.allowed-hosts:" + DeepseekSafety.DEFAULT_ALLOWED_HOSTS + "}")
+    private String allowedHosts;
+    @Value("${offerlab.ai.deepseek.review-max-answer-chars:" + DeepseekSafety.DEFAULT_MAX_ANSWER_CHARS + "}")
+    private int maxAnswerChars;
 
     public ReviewResult review(MockInterviewAnswerPO answer) {
         if (answer == null || answer.getQuestionId() == null || !hasText(answer.getAnswerText())) {
@@ -66,7 +69,7 @@ public class MockInterviewAiReviewService {
                 Map.of("role", "user", "content", prompt(answer))
         ));
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(normalizeBaseUrl() + "/chat/completions"))
+                .uri(DeepseekSafety.chatCompletionsUri(baseUrl, allowedHosts))
                 .timeout(Duration.ofMillis(timeoutMillis))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
@@ -143,15 +146,10 @@ public class MockInterviewAiReviewService {
     }
 
     private String prompt(MockInterviewAnswerPO answer) {
-        return "question:\n" + limit(clean(answer.getQuestionTextSnapshot()), 1200)
-                + "\nreference:\n" + limit(clean(answer.getAnswerHintSnapshot()), 1200)
-                + "\nselfReview:\n" + limit(clean(answer.getSelfReview()), 800)
-                + "\nanswer:\n" + limit(clean(answer.getAnswerText()), 4000);
-    }
-
-    private String normalizeBaseUrl() {
-        String url = !hasText(baseUrl) ? "https://api.deepseek.com" : baseUrl.trim();
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+        return "question:\n" + DeepseekSafety.trimForPrompt(answer.getQuestionTextSnapshot(), 1200)
+                + "\nreference:\n" + DeepseekSafety.trimForPrompt(answer.getAnswerHintSnapshot(), 1200)
+                + "\nselfReview:\n" + DeepseekSafety.trimForPrompt(answer.getSelfReview(), 800)
+                + "\nanswer:\n" + DeepseekSafety.trimForPrompt(answer.getAnswerText(), maxAnswerChars);
     }
 
     private boolean containsAny(String text, String... needles) {

@@ -13,11 +13,11 @@ public interface UserCounterMapper extends BaseMapper<UserCounterPO> {
             "ON DUPLICATE KEY UPDATE user_id = user_id")
     int initIfAbsent(@Param("userId") Long userId);
 
-    @Update("UPDATE t_user_counter SET follower_count = follower_count + #{delta} " +
+    @Update("UPDATE t_user_counter SET follower_count = GREATEST(0, follower_count + #{delta}) " +
             "WHERE user_id = #{userId}")
     int incrFollower(@Param("userId") Long userId, @Param("delta") long delta);
 
-    @Update("UPDATE t_user_counter SET following_count = following_count + #{delta} " +
+    @Update("UPDATE t_user_counter SET following_count = GREATEST(0, following_count + #{delta}) " +
             "WHERE user_id = #{userId}")
     int incrFollowing(@Param("userId") Long userId, @Param("delta") long delta);
 

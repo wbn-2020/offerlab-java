@@ -20,7 +20,7 @@ public interface FavoriteMapper extends BaseMapper<FavoritePO> {
             """)
     FavoritePO selectAnyByUserPost(@Param("userId") Long userId, @Param("postId") Long postId);
 
-    @Update("UPDATE t_int_favorite SET is_deleted = 0 WHERE id = #{id}")
+    @Update("UPDATE t_int_favorite SET is_deleted = 0 WHERE id = #{id} AND is_deleted = 1")
     int restoreById(@Param("id") Long id);
 
     @Update("UPDATE t_int_favorite SET is_deleted = 1 WHERE id = #{id} AND is_deleted = 0")

@@ -40,6 +40,10 @@ public class EventTopicResolver {
             return new TopicMapping("post.updated", readLong(event, "getPostId"), "POST_UPDATED");
         }
 
+        if ("PostDeletedEvent".equals(className)) {
+            return new TopicMapping("post.deleted", readLong(event, "getPostId"), "POST_DELETED");
+        }
+
         if ("PostLikedEvent".equals(className)) {
             return new TopicMapping("interaction.like", readLong(event, "getPostId"), "LIKE");
         }

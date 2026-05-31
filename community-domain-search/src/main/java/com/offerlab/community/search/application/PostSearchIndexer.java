@@ -63,15 +63,30 @@ public class PostSearchIndexer {
         }
         PostPO post = postMapper.selectById(postId);
         if (post == null) {
-            return false;
+            return deletePostDocument(postId);
         }
         if (!Integer.valueOf(Post.STATUS_PUBLISHED).equals(post.getPostStatus())
                 || !Integer.valueOf(Post.VIS_PUBLIC).equals(post.getVisibility())) {
-            return false;
+            return deletePostDocument(postId);
         }
         boolean ok = elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(postId), toDocument(post));
         if (ok) {
             log.debug("post indexed to elasticsearch: postId={}", postId);
+        }
+        return ok;
+    }
+
+    public boolean deletePost(Long postId) {
+        if (postId == null || !ensurePostIndex()) {
+            return false;
+        }
+        return deletePostDocument(postId);
+    }
+
+    private boolean deletePostDocument(Long postId) {
+        boolean ok = elasticsearch.deleteDocument(elasticsearch.postIndex(), String.valueOf(postId));
+        if (ok) {
+            log.debug("post deleted from elasticsearch: postId={}", postId);
         }
         return ok;
     }

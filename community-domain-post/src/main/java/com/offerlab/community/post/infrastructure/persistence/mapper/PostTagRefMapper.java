@@ -6,7 +6,10 @@ import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+
+import java.util.List;
 
 @Mapper
 public interface PostTagRefMapper extends BaseMapper<PostTagRefPO> {
@@ -19,4 +22,7 @@ public interface PostTagRefMapper extends BaseMapper<PostTagRefPO> {
 
     @Delete("DELETE FROM t_post_tag_ref WHERE post_id = #{postId}")
     int deleteByPostId(@Param("postId") Long postId);
+
+    @Select("SELECT post_id FROM t_post_tag_ref WHERE tag_id = #{tagId}")
+    List<Long> selectPostIdsByTagId(@Param("tagId") Long tagId);
 }

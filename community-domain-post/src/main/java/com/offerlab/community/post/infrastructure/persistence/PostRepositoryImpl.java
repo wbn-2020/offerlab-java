@@ -6,6 +6,7 @@ import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
+import com.offerlab.community.post.infrastructure.persistence.mapper.PostTagRefMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,7 @@ public class PostRepositoryImpl implements PostRepository {
     private final PostMapper postMapper;
     private final PostExtensionMapper extMapper;
     private final PostCounterMapper counterMapper;
+    private final PostTagRefMapper postTagRefMapper;
 
     @Override
     @Transactional
@@ -94,11 +96,13 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     public List<Post> findByAuthor(Long authorId, long cursor, int size) {
+        int limit = listLimit(size);
         LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
                 .eq(PostPO::getAuthorId, authorId)
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
+                .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
                 .orderByDesc(PostPO::getCreateTime)
-                .last("LIMIT " + size);
+                .last("LIMIT " + limit);
         if (cursor > 0) {
             q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
@@ -120,14 +124,18 @@ public class PostRepositoryImpl implements PostRepository {
         if (postType != null) {
             q.eq(PostPO::getPostType, postType);
         }
-        if (tagId != null) {
-            q.inSql(PostPO::getId, "SELECT post_id FROM t_post_tag_ref WHERE tag_id = " + tagId);
+        if (tagId != null && tagId > 0) {
+            List<Long> taggedPostIds = postTagRefMapper.selectPostIdsByTagId(tagId);
+            if (taggedPostIds.isEmpty()) {
+                return List.of();
+            }
+            q.in(PostPO::getId, taggedPostIds);
         }
         return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
     }
 
     private static LambdaQueryWrapper<PostPO> baseListQuery(long cursor, int size) {
-        int limit = Math.max(1, Math.min(size, 100));
+        int limit = listLimit(size);
         LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
@@ -137,6 +145,10 @@ public class PostRepositoryImpl implements PostRepository {
             q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
         return q;
+    }
+
+    private static int listLimit(int size) {
+        return Math.max(1, Math.min(size, 101));
     }
 
     private static PostPO toPO(Post p) {

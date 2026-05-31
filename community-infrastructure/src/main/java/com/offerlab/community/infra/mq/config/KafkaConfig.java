@@ -5,6 +5,7 @@ import com.offerlab.community.infra.mq.EventEnvelope;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +20,9 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.util.backoff.ExponentialBackOff;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 
@@ -105,9 +109,21 @@ public class KafkaConfig {
 
         // JSON 反序列化配置
         props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, EventEnvelope.class.getName());
-        props.put(JsonDeserializer.TRUSTED_PACKAGES, "*");
+        props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.offerlab.community.infra.mq,com.offerlab.community.*");
 
         return new DefaultKafkaConsumerFactory<>(props);
+    }
+
+    @Bean
+    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, EventEnvelope<?>> template) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
+                template,
+                (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition())
+        );
+        ExponentialBackOff backOff = new ExponentialBackOff(1000L, 2.0);
+        backOff.setMaxInterval(10_000L);
+        backOff.setMaxElapsedTime(30_000L);
+        return new DefaultErrorHandler(recoverer, backOff);
     }
 
     /**
@@ -121,6 +137,7 @@ public class KafkaConfig {
         factory.setConcurrency(listenerConcurrency);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);  // 手动立即提交
         factory.setBatchListener(false);  // 单条消息处理
+        factory.setCommonErrorHandler(kafkaErrorHandler(kafkaTemplate()));
         return factory;
     }
 }

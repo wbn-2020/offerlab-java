@@ -41,6 +41,12 @@ public class OutboxMessage {
     /** 重试次数 */
     private Integer retryCount;
 
+    /** Scheduler instance that claimed this message. */
+    private String lockOwner;
+
+    /** Claim lease expiry. Expired claims can be retried by another instance. */
+    private LocalDateTime lockUntil;
+
     /** 下次重试时间 */
     private LocalDateTime nextRetryTime;
 

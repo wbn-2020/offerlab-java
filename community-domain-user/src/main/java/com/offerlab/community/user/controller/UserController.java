@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
@@ -143,26 +144,35 @@ public class UserController {
     public Result<PageResult<UserBriefDTO>> followers(@PathVariable Long uid,
                                                      @RequestParam(defaultValue = "0") long cursor,
                                                      @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(toPage(userFacade.getFollowerIds(uid, cursor, size), size));
+        int limit = pageSize(size);
+        return Result.ok(toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit));
     }
 
     @GetMapping("/{uid}/following")
     public Result<PageResult<UserBriefDTO>> following(@PathVariable Long uid,
                                                      @RequestParam(defaultValue = "0") long cursor,
                                                      @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(toPage(userFacade.getFollowingIds(uid, cursor, size), size));
+        int limit = pageSize(size);
+        return Result.ok(toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit));
     }
 
-    private PageResult<UserBriefDTO> toPage(List<Long> ids, int size) {
-        if (ids.isEmpty()) return PageResult.empty();
-        List<UserBriefDTO> items = ids.stream()
+    private PageResult<UserBriefDTO> toFollowPage(List<FollowCursorDTO> rows, int limit) {
+        if (rows.isEmpty()) return PageResult.empty();
+        boolean hasMore = rows.size() > limit;
+        List<FollowCursorDTO> pageRows = hasMore ? rows.subList(0, limit) : rows;
+        List<UserBriefDTO> items = pageRows.stream()
+                .map(FollowCursorDTO::getUid)
                 .map(userFacade::getUserBrief)
                 .filter(java.util.Objects::nonNull)
                 .toList();
-        // 关注列表游标使用最后一个 uid，前端需把 nextCursor 原样带回。
-        boolean hasMore = ids.size() == size;
-        String next = hasMore ? String.valueOf(ids.get(ids.size() - 1)) : null;
+        String next = hasMore && !pageRows.isEmpty()
+                ? String.valueOf(pageRows.get(pageRows.size() - 1).getRelationId())
+                : null;
         return PageResult.of(items, next, hasMore);
+    }
+
+    private int pageSize(int size) {
+        return Math.max(1, Math.min(size, 100));
     }
 
     private UserBriefDTO copyBrief(UserBriefDTO dto) {

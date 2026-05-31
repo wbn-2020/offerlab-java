@@ -52,4 +52,18 @@ class SearchAnalyticsGuardTest {
         assertTrue(opsControllerSource.contains("SearchAnalyticsDTO"), "ops search analytics endpoint must return structured DTO");
         assertTrue(opsControllerSource.contains("searchAnalyticsService.summary"), "ops endpoint must call analytics summary service");
     }
+    @Test
+    void mysqlFallbackSearchMustStayBoundedAndDatabaseFiltered() throws Exception {
+        String facadeSource = Files.readString(Path.of("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java"), StandardCharsets.UTF_8);
+        String postMapperSource = Files.readString(Path.of("../community-domain-post/src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/PostMapper.java"), StandardCharsets.UTF_8);
+
+        assertTrue(facadeSource.contains("MYSQL_FALLBACK_MAX_SCAN"), "MySQL fallback must have an explicit scan ceiling");
+        assertTrue(facadeSource.contains("fallbackScanLimit(limit)"), "MySQL fallback must clamp per-request scan size");
+        assertTrue(facadeSource.contains("postMapper.searchPublicPostsFallback"), "search fallback must use a mapper query");
+        assertTrue(facadeSource.contains("postMapper.suggestPublicPostsFallback"), "suggest fallback must use a mapper query");
+        assertTrue(postMapperSource.contains("searchPublicPostsFallback"), "post mapper must expose DB-side filtered fallback search");
+        assertTrue(postMapperSource.contains("e.company LIKE CONCAT('%', #{company}, '%')"), "company filter must run in SQL before loading rows");
+        assertTrue(postMapperSource.contains("e.position = #{position}"), "position filter must run in SQL before loading rows");
+        assertTrue(postMapperSource.contains("LIMIT #{limit}"), "fallback SQL must be limit-bound");
+    }
 }

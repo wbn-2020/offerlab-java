@@ -209,9 +209,19 @@ public class NotificationFacadeImpl implements NotificationFacade {
         po.setTargetType(targetType);
         po.setTargetId(targetId);
         po.setContentJson(toJson(content));
+        po.setDedupKey(NotificationDedupKey.of(receiverUid, senderUid, notifType, targetType, targetId, content));
         po.setIsRead(0);
         po.setIsDeleted(0);
-        mapper.insert(po);
+        int inserted = mapper.insertIgnore(po);
+        if (inserted <= 0) {
+            log.debug("duplicate notification skipped: dedupKey={}", po.getDedupKey());
+        }
+    }
+
+    @Transactional
+    void createFromRetryTask(Long receiverUid, Long senderUid, Integer notifType,
+                             Integer targetType, Long targetId, Map<String, Object> content) {
+        create(receiverUid, senderUid, notifType, targetType, targetId, content == null ? Map.of() : content);
     }
 
     private boolean allowsNotificationType(Long receiverUid, Integer notifType) {

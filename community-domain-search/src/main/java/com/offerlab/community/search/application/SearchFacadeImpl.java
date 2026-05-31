@@ -1,6 +1,5 @@
 package com.offerlab.community.search.application;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
@@ -9,7 +8,6 @@ import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
-import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
@@ -45,6 +43,7 @@ import java.util.stream.Collectors;
 public class SearchFacadeImpl implements SearchFacade {
 
     private static final int SUMMARY_LEN = 120;
+    private static final int MYSQL_FALLBACK_MAX_SCAN = 200;
     private static final List<String> FALLBACK_HOT = List.of("Java", "字节跳动", "面经", "Spring", "Redis", "Kafka");
 
     private final PostMapper postMapper;
@@ -201,11 +200,33 @@ public class SearchFacadeImpl implements SearchFacade {
                     .createTime(toLocalDateTime(source.path("createTime").asLong(0L)))
                     .build());
         }
+        List<PostBriefDTO> visibleItems = filterVisibleSearchResults(items);
         boolean hasMore = items.size() == limit;
-        String next = hasMore
+        String next = hasMore && !items.isEmpty() && items.get(items.size() - 1).getCreateTime() != null
                 ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
-        return PageResult.of(enrich(items), next, hasMore);
+        return PageResult.of(visibleItems, next, hasMore);
+    }
+
+    private List<PostBriefDTO> filterVisibleSearchResults(List<PostBriefDTO> esItems) {
+        if (esItems == null || esItems.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, PostBriefDTO> visibleById = postFacade.batchGetPosts(esItems.stream()
+                .map(PostBriefDTO::getId)
+                .toList());
+        List<PostBriefDTO> visible = new ArrayList<>();
+        for (PostBriefDTO esItem : esItems) {
+            PostBriefDTO current = visibleById.get(esItem.getId());
+            if (current == null) {
+                log.debug("stale elasticsearch post filtered: postId={}", esItem.getId());
+                continue;
+            }
+            current.setHighlightTitle(esItem.getHighlightTitle());
+            current.setHighlightSummary(esItem.getHighlightSummary());
+            visible.add(current);
+        }
+        return visible;
     }
 
     private Optional<String> firstHighlight(JsonNode hit, String field) {
@@ -248,13 +269,7 @@ public class SearchFacadeImpl implements SearchFacade {
         if (p.isBlank()) {
             return List.of();
         }
-        LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
-                .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
-                .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
-                .and(w -> w.like(PostPO::getTitle, p).or().like(PostPO::getContent, p))
-                .orderByDesc(PostPO::getCreateTime)
-                .last("LIMIT " + Math.max(limit * 5, limit));
-        List<PostPO> candidates = postMapper.selectList(q);
+        List<PostPO> candidates = postMapper.suggestPublicPostsFallback(p, fallbackScanLimit(limit));
         if (candidates.isEmpty()) {
             return List.of();
         }
@@ -275,30 +290,20 @@ public class SearchFacadeImpl implements SearchFacade {
     private PageResult<PostBriefDTO> searchByMysql(String keyword, String company, String position,
                                                    Integer type, String sort, String cursor, int limit) {
         long c = parseCursor(cursor);
-        LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
-                .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
-                .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
-                .orderByDesc(PostPO::getCreateTime)
-                .last("LIMIT " + Math.max(limit * 5, limit));
         String kw = clean(keyword);
-        if (!kw.isBlank()) {
-            q.and(w -> w.like(PostPO::getTitle, kw).or().like(PostPO::getContent, kw));
-        }
-        if (type != null) {
-            q.eq(PostPO::getPostType, type);
-        }
-        if (c > 0) {
-            q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(c), ZoneOffset.UTC));
-        }
-
-        List<PostPO> candidates = postMapper.selectList(q);
+        LocalDateTime cursorTime = c > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(c), ZoneOffset.UTC) : null;
+        List<PostPO> candidates = postMapper.searchPublicPostsFallback(
+                blankToNull(kw),
+                blankToNull(clean(company)),
+                blankToNull(clean(position)),
+                type,
+                cursorTime,
+                fallbackScanLimit(limit));
         if (candidates.isEmpty()) {
             return PageResult.empty();
         }
         Map<Long, String> extByPostId = loadExtJson(candidates.stream().map(PostPO::getId).toList());
-        List<PostPO> filtered = candidates.stream()
-                .filter(p -> matchExt(extByPostId.get(p.getId()), company, position))
-                .toList();
+        List<PostPO> filtered = candidates;
         if (filtered.isEmpty()) {
             return PageResult.empty();
         }
@@ -354,17 +359,12 @@ public class SearchFacadeImpl implements SearchFacade {
                 .build();
     }
 
-    private boolean matchExt(String extJson, String company, String position) {
-        String companyFilter = clean(company);
-        String positionFilter = clean(position);
-        if (companyFilter.isBlank() && positionFilter.isBlank()) {
-            return true;
-        }
-        JsonNode ext = parseExt(extJson);
-        String companyValue = clean(ext.path("company").asText(""));
-        String positionValue = clean(ext.path("position").asText(""));
-        return (companyFilter.isBlank() || companyValue.contains(companyFilter))
-                && (positionFilter.isBlank() || positionValue.equals(positionFilter));
+    private int fallbackScanLimit(int limit) {
+        return Math.min(Math.max(limit + 1, limit * 2), MYSQL_FALLBACK_MAX_SCAN);
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private Map<Long, String> loadExtJson(Collection<Long> postIds) {

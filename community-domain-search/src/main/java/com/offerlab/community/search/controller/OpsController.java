@@ -19,8 +19,11 @@ import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
+import com.offerlab.community.search.application.SearchIndexRetryService;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
+import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRetryTaskMapper;
+import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRetryTaskPO;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +49,7 @@ import java.util.Objects;
 public class OpsController {
 
     private final PostSearchIndexer indexer;
+    private final SearchIndexRetryService searchIndexRetryService;
     private final SearchAnalyticsService searchAnalyticsService;
     private final OutboxMessageMapper outboxMessageMapper;
     private final AdminRoleMapper adminRoleMapper;
@@ -69,6 +73,7 @@ public class OpsController {
         data.put("adminRoleEnabled", adminPermissionService.roleTableEnabled());
         data.put("adminMode", adminPermissionService.mode());
         data.put("search", indexer.status());
+        data.put("searchIndexRetry", searchIndexRetryService.status());
         data.put("outbox", outbox);
         return Result.ok(data);
     }
@@ -213,6 +218,64 @@ public class OpsController {
                                                       @RequestParam(defaultValue = "10") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         return Result.ok(searchAnalyticsService.summary(days, limit));
+    }
+
+    @GetMapping("/search-index-retry-tasks/status")
+    public Result<Map<String, Object>> searchIndexRetryStatus() {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(searchIndexRetryService.status());
+    }
+
+    @GetMapping("/search-index-retry-tasks")
+    public Result<List<SearchIndexRetryTaskPO>> listSearchIndexRetryTasks(@RequestParam(required = false) Integer status,
+                                                                          @RequestParam(defaultValue = "20") int limit) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(searchIndexRetryService.listRecent(normalizeSearchRetryStatus(status), limit));
+    }
+
+    @GetMapping("/search-index-retry-tasks/{id}")
+    public Result<SearchIndexRetryTaskPO> getSearchIndexRetryTask(@PathVariable Long id) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        SearchIndexRetryTaskPO task = searchIndexRetryService.findById(id);
+        if (task == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return Result.ok(task);
+    }
+
+    @PostMapping("/search-index-retry-tasks/{id}/replay")
+    public Result<Map<String, Object>> replaySearchIndexRetryTask(@PathVariable Long id) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
+        SearchIndexRetryTaskPO task = searchIndexRetryService.findById(id);
+        if (task == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        if (task.getTaskStatus() == null || task.getTaskStatus() != SearchIndexRetryTaskMapper.STATUS_FAILED) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        boolean replayed = searchIndexRetryService.replayFailed(id);
+        adminAuditService.record(uid, "SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id,
+                task, Map.of("replayed", replayed), null);
+        return Result.ok(Map.of("id", id, "replayed", replayed));
+    }
+
+    @PostMapping("/search-index-retry-tasks/replay-batch")
+    public Result<Map<String, Object>> replaySearchIndexRetryTasks(@RequestBody SearchIndexRetryBatchRequest request) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
+        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .limit(100)
+                .toList();
+        if (ids.isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int replayed = searchIndexRetryService.replayFailedBatch(ids);
+        adminAuditService.record(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", "SEARCH_INDEX_RETRY_TASK", null,
+                ids, Map.of("replayed", replayed), null);
+        return Result.ok(Map.of("requested", ids.size(), "replayed", replayed));
     }
 
     @GetMapping("/moderation/keywords")
@@ -417,6 +480,19 @@ public class OpsController {
         return value;
     }
 
+    private static Integer normalizeSearchRetryStatus(Integer status) {
+        if (status == null) {
+            return null;
+        }
+        if (status == SearchIndexRetryTaskMapper.STATUS_PENDING
+                || status == SearchIndexRetryTaskMapper.STATUS_DONE
+                || status == SearchIndexRetryTaskMapper.STATUS_FAILED
+                || status == SearchIndexRetryTaskMapper.STATUS_RUNNING) {
+            return status;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
     private static String normalizeRoleCode(String roleCode) {
         if (!StringUtils.hasText(roleCode)) {
             return AdminPermissionService.ROLE_ADMIN;
@@ -440,5 +516,8 @@ public class OpsController {
     }
 
     public record OutboxRetryBatchRequest(List<Long> ids) {
+    }
+
+    public record SearchIndexRetryBatchRequest(List<Long> ids) {
     }
 }
