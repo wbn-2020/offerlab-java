@@ -8,3 +8,9 @@ spring:
 logging:
   level:
     com.offerlab.community: DEBUG
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

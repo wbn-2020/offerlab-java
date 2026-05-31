@@ -23,7 +23,7 @@ public interface LikeMapper extends BaseMapper<LikePO> {
                                  @Param("targetType") Integer targetType,
                                  @Param("targetId") Long targetId);
 
-    @Update("UPDATE t_int_like SET is_deleted = 0 WHERE id = #{id}")
+    @Update("UPDATE t_int_like SET is_deleted = 0 WHERE id = #{id} AND is_deleted = 1")
     int restoreById(@Param("id") Long id);
 
     @Update("UPDATE t_int_like SET is_deleted = 1 WHERE id = #{id} AND is_deleted = 0")

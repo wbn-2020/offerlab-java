@@ -5,8 +5,10 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.event.PostDeletedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PostUpdatedEvent;
 import com.offerlab.community.post.domain.model.Post;
@@ -43,6 +45,7 @@ public class PostApplicationService {
     private final EventPublisher events;
     private final PostVersionHistoryService versionHistoryService;
     private final PostPublishQualityValidator qualityValidator;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
@@ -119,15 +122,13 @@ public class PostApplicationService {
         if (tagsProvided) {
             syncTags(post.getId(), resolvedTagIds);
         }
-        if (post.getPostStatus() != null && post.getPostStatus() == Post.STATUS_PUBLISHED) {
-            events.publish(PostUpdatedEvent.builder()
-                    .postId(post.getId())
-                    .authorId(post.getAuthorId())
-                    .title(post.getTitle())
-                    .content(post.getContent())
-                    .timestamp(Instant.now().toEpochMilli())
-                    .build());
-        }
+        events.publish(PostUpdatedEvent.builder()
+                .postId(post.getId())
+                .authorId(post.getAuthorId())
+                .title(post.getTitle())
+                .content(post.getContent())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
     }
 
     @Transactional
@@ -138,6 +139,11 @@ public class PostApplicationService {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         postRepo.softDelete(postId);
+        events.publish(PostDeletedEvent.builder()
+                .postId(postId)
+                .authorId(post.getAuthorId())
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
     }
 
     public Post getOrThrow(Long postId) {
@@ -145,10 +151,8 @@ public class PostApplicationService {
     }
 
     public void incrView(Long postId) {
-        // Redis 写主
-        postCounterRedis.incrView(postId, 1);
-        // 双写 MySQL（过渡方案，下一波切异步）
         counterMapper.incrView(postId, 1);
+        afterCommit.execute(() -> postCounterRedis.incrView(postId, 1), "post view counter:" + postId);
     }
 
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {

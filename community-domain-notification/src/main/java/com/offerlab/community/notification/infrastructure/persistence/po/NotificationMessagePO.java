@@ -18,6 +18,7 @@ public class NotificationMessagePO {
     private Integer targetType;
     private Long targetId;
     private String contentJson;
+    private String dedupKey;
     private Integer isRead;
     private LocalDateTime createTime;
     private Integer isDeleted;

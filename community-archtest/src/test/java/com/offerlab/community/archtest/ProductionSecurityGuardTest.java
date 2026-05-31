@@ -4,6 +4,7 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.infra.web.handler.GlobalExceptionHandler;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.infra.web.config.WebMvcConfig;
 import com.offerlab.community.feed.controller.FeedController;
@@ -16,14 +17,20 @@ import com.offerlab.community.user.controller.UserController;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProductionSecurityGuardTest {
 
@@ -90,7 +97,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void prodProfileDoesNotAllowLocalOpenAdminMode() {
-        AdminPermissionService service = new AdminPermissionService("", mapperWithoutAdminTable(), prodEnvironment());
+        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), prodEnvironment());
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -98,13 +105,47 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
-    void devProfileKeepsLocalOpenAdminModeForBootstrap() {
-        AdminPermissionService service = new AdminPermissionService("", mapperWithoutAdminTable(), devEnvironment());
+    void devProfileLocksAdminModeUnlessLocalOpenIsExplicitlyEnabled() {
+        AdminPermissionService service = new AdminPermissionService("", false, mapperWithoutAdminTable(), devEnvironment());
+
+        assertFalse(service.isLocalOpenMode());
+        assertEquals("LOCKED", service.mode());
+        assertThrows(BizException.class, () -> service.requireAdmin(10001L));
+    }
+
+    @Test
+    void devProfileAllowsExplicitLocalOpenAdminModeForBootstrap() {
+        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), devEnvironment());
 
         assertEquals("LOCAL_OPEN", service.mode());
         service.requireAdmin(10001L);
     }
 
+    @Test
+    void prodConfigMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
+        String prodConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
+        String baseConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
+        String devConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
+
+        assertTrue(baseConfig.contains("api-docs:\n    path: /v3/api-docs\n    enabled: false") || baseConfig.contains("api-docs:\r\n    path: /v3/api-docs\r\n    enabled: false"), "base config must disable OpenAPI docs by default");
+        assertTrue(baseConfig.contains("swagger-ui:\n    path: /swagger-ui.html\n    enabled: false") || baseConfig.contains("swagger-ui:\r\n    path: /swagger-ui.html\r\n    enabled: false"), "base config must disable Swagger UI by default");
+        assertTrue(devConfig.contains("api-docs:\n    enabled: true") || devConfig.contains("api-docs:\r\n    enabled: true"), "dev profile must explicitly enable OpenAPI docs");
+        assertTrue(devConfig.contains("swagger-ui:\n    enabled: true") || devConfig.contains("swagger-ui:\r\n    enabled: true"), "dev profile must explicitly enable Swagger UI");
+        assertTrue(prodConfig.contains("api-docs:\n    enabled: false") || prodConfig.contains("api-docs:\r\n    enabled: false"), "prod must disable OpenAPI docs");
+        assertTrue(prodConfig.contains("swagger-ui:\n    enabled: false") || prodConfig.contains("swagger-ui:\r\n    enabled: false"), "prod must disable Swagger UI");
+        assertFalse(prodConfig.contains("local-open-enabled: true"), "prod must not enable local-open admin bootstrap");
+        assertTrue(prodConfig.contains("secret: ${JWT_SECRET}"), "prod must require an external JWT secret");
+        assertTrue(prodConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "prod must require explicit CORS origins");
+    }
+
+    @Test
+    void parameterErrorsMustReturnHttp400() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+        ResponseEntity<?> response = handler.handleParam(new IllegalArgumentException("bad request"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    }
     private static Environment prodEnvironment() {
         return profiles("prod");
     }

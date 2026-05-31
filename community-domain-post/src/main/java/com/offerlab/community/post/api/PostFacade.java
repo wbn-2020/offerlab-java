@@ -17,6 +17,8 @@ public interface PostFacade {
 
     PostDTO getPost(Long postId);
 
+    PostDTO getPost(Long postId, Long viewerUid);
+
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds);
 
     Map<Long, PostCounterDTO> batchGetCounters(Collection<Long> postIds);

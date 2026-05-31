@@ -37,6 +37,10 @@ public final class CacheKeyBuilder {
         return "post:detail:" + postId;
     }
 
+    public static String postDetailRaw(Long postId) {
+        return "post:detail:raw:" + postId;
+    }
+
     /**
      * 问题题库列表缓存
      * question:list:{hash}

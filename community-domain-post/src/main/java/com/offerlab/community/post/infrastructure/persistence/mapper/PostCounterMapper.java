@@ -16,12 +16,12 @@ public interface PostCounterMapper extends BaseMapper<PostCounterPO> {
     @Update("UPDATE t_post_counter SET view_count = view_count + #{delta} WHERE post_id = #{postId}")
     int incrView(@Param("postId") Long postId, @Param("delta") long delta);
 
-    @Update("UPDATE t_post_counter SET like_count = like_count + #{delta} WHERE post_id = #{postId}")
+    @Update("UPDATE t_post_counter SET like_count = GREATEST(0, like_count + #{delta}) WHERE post_id = #{postId}")
     int incrLike(@Param("postId") Long postId, @Param("delta") long delta);
 
-    @Update("UPDATE t_post_counter SET comment_count = comment_count + #{delta} WHERE post_id = #{postId}")
+    @Update("UPDATE t_post_counter SET comment_count = GREATEST(0, comment_count + #{delta}) WHERE post_id = #{postId}")
     int incrComment(@Param("postId") Long postId, @Param("delta") long delta);
 
-    @Update("UPDATE t_post_counter SET favorite_count = favorite_count + #{delta} WHERE post_id = #{postId}")
+    @Update("UPDATE t_post_counter SET favorite_count = GREATEST(0, favorite_count + #{delta}) WHERE post_id = #{postId}")
     int incrFavorite(@Param("postId") Long postId, @Param("delta") long delta);
 }

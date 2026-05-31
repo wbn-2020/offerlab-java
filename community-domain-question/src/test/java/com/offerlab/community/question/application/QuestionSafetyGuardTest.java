@@ -404,4 +404,20 @@ class QuestionSafetyGuardTest {
         assertTrue(mapperSource.contains("up.star_story IS NOT NULL"), "answer draft filter must match STAR story mappings");
         assertTrue(mapperSource.indexOf("AND EXISTS (") == mapperSource.lastIndexOf("AND EXISTS ("), "personal filters should share one progress EXISTS block");
     }
+    @Test
+    void deepseekCallsMustBeAllowlistedRedactedAndBounded() throws Exception {
+        String safetySource = Files.readString(Path.of("src/main/java/com/offerlab/community/question/application/DeepseekSafety.java"), StandardCharsets.UTF_8);
+        String extractorSource = Files.readString(Path.of("src/main/java/com/offerlab/community/question/application/DeepseekQuestionExtractor.java"), StandardCharsets.UTF_8);
+        String reviewSource = Files.readString(Path.of("src/main/java/com/offerlab/community/question/application/MockInterviewAiReviewService.java"), StandardCharsets.UTF_8);
+
+        assertTrue(safetySource.contains("DEFAULT_ALLOWED_HOSTS"), "DeepSeek calls must have an explicit allowed-host list");
+        assertTrue(safetySource.contains("\"https\".equalsIgnoreCase(base.getScheme())"), "DeepSeek calls must require https");
+        assertTrue(safetySource.contains("allowedHostSet(allowedHosts).contains"), "DeepSeek calls must reject unapproved hosts");
+        assertTrue(safetySource.contains("[email-redacted]"), "prompts must redact email-like personal data");
+        assertTrue(safetySource.contains("[redacted]"), "prompts must redact token/password/secret-like data");
+        assertTrue(extractorSource.contains("DeepseekSafety.chatCompletionsUri(baseUrl, allowedHosts)"), "question extraction must use the safe DeepSeek URI builder");
+        assertTrue(extractorSource.contains("extract-max-prompt-chars"), "question extraction prompt length must be configurable and bounded");
+        assertTrue(reviewSource.contains("DeepseekSafety.chatCompletionsUri(baseUrl, allowedHosts)"), "mock interview review must use the safe DeepSeek URI builder");
+        assertTrue(reviewSource.contains("review-max-answer-chars"), "mock interview answer prompt length must be configurable and bounded");
+    }
 }

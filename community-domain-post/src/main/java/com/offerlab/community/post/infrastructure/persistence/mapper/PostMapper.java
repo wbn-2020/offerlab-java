@@ -148,6 +148,62 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<PostPO> selectHotPosts(@Param("cursorTime") LocalDateTime cursorTime, @Param("limit") int limit);
 
     @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="keyword != null and keyword != ''">
+              AND (
+                    p.title LIKE CONCAT('%', #{keyword}, '%')
+                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                  )
+              </if>
+              <if test="company != null and company != ''">
+              AND e.company LIKE CONCAT('%', #{company}, '%')
+              </if>
+              <if test="position != null and position != ''">
+              AND e.position = #{position}
+              </if>
+              <if test="type != null">
+              AND p.post_type = #{type}
+              </if>
+              <if test="cursorTime != null">
+              AND p.create_time &lt; #{cursorTime}
+              </if>
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> searchPublicPostsFallback(@Param("keyword") String keyword,
+                                           @Param("company") String company,
+                                           @Param("position") String position,
+                                           @Param("type") Integer type,
+                                           @Param("cursorTime") LocalDateTime cursorTime,
+                                           @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (
+                    p.title LIKE CONCAT('%', #{prefix}, '%')
+                    OR e.company LIKE CONCAT('%', #{prefix}, '%')
+                    OR e.position LIKE CONCAT('%', #{prefix}, '%')
+                  )
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> suggestPublicPostsFallback(@Param("prefix") String prefix, @Param("limit") int limit);
+
+    @Select("""
             SELECT p.*
             FROM t_post_main p
             JOIN t_post_extension e ON e.post_id = p.id

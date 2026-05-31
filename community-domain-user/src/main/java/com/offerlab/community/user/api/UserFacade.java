@@ -1,6 +1,7 @@
 package com.offerlab.community.user.api;
 
 import com.offerlab.community.user.api.dto.UserBriefDTO;
+import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 
 import java.util.Collection;
@@ -24,7 +25,11 @@ public interface UserFacade {
 
     List<Long> getFollowerIds(Long uid, long cursor, int size);
 
+    List<FollowCursorDTO> getFollowerPage(Long uid, long cursor, int size);
+
     List<Long> getFollowingIds(Long uid, long cursor, int size);
+
+    List<FollowCursorDTO> getFollowingPage(Long uid, long cursor, int size);
 
     long getFollowerCount(Long uid);
 

@@ -53,7 +53,7 @@ CREATE TABLE t_user_follow (
     to_uid          BIGINT       NOT NULL COMMENT '被关注者',
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '0关注中 1已取关',
-    UNIQUE KEY uk_from_to (from_uid, to_uid, is_deleted),
+    UNIQUE KEY uk_from_to (from_uid, to_uid),
     KEY idx_to_uid   (to_uid, create_time),
     KEY idx_from_uid (from_uid, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关注关系';

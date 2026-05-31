@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.domain.model.User;
@@ -98,8 +99,18 @@ public class UserFacadeImpl implements UserFacade {
     }
 
     @Override
+    public List<FollowCursorDTO> getFollowerPage(Long uid, long cursor, int size) {
+        return followRepo.followerPage(uid, cursor, size);
+    }
+
+    @Override
     public List<Long> getFollowingIds(Long uid, long cursor, int size) {
         return followRepo.followingIds(uid, cursor, size);
+    }
+
+    @Override
+    public List<FollowCursorDTO> getFollowingPage(Long uid, long cursor, int size) {
+        return followRepo.followingPage(uid, cursor, size);
     }
 
     @Override

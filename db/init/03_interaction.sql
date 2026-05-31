@@ -32,7 +32,7 @@ CREATE TABLE t_int_like (
     target_author_id BIGINT       NOT NULL,
     create_time      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     is_deleted       TINYINT      NOT NULL DEFAULT 0,
-    UNIQUE KEY uk_user_target (user_id, target_type, target_id, is_deleted),
+    UNIQUE KEY uk_user_target (user_id, target_type, target_id),
     KEY idx_target (target_type, target_id, create_time),
     KEY idx_target_author (target_author_id, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='点赞';
@@ -45,6 +45,6 @@ CREATE TABLE t_int_favorite (
     folder_id       BIGINT       NOT NULL DEFAULT 0,
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
-    UNIQUE KEY uk_user_post (user_id, post_id, is_deleted),
+    UNIQUE KEY uk_user_post (user_id, post_id),
     KEY idx_user_folder (user_id, folder_id, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='收藏';

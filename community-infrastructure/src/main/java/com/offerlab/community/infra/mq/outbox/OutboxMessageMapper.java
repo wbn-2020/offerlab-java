@@ -11,39 +11,89 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Outbox 消息表 Mapper
+ * Outbox message mapper.
  */
 @Mapper
 public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
 
-    /**
-     * 查询待发送的消息（包括重试消息）
-     * @param limit 查询数量
-     * @return 消息列表
-     */
-    @Select("SELECT * FROM t_outbox_message WHERE msg_status = 0 AND (next_retry_time IS NULL OR next_retry_time <= NOW()) LIMIT #{limit}")
-    List<OutboxMessage> findPending(@Param("limit") int limit);
+    int STATUS_PENDING = 0;
+    int STATUS_SENT = 1;
+    int STATUS_FAILED = 2;
+    int STATUS_SENDING = 3;
 
-    /**
-     * 标记消息已发送
-     * @param id 消息 ID
-     */
-    @Update("UPDATE t_outbox_message SET msg_status = 1, update_time = NOW() WHERE id = #{id}")
-    void markSent(@Param("id") Long id);
+    @Update("""
+            UPDATE t_outbox_message
+            SET msg_status = 3,
+                lock_owner = #{owner},
+                lock_until = #{lockUntil},
+                update_time = NOW(3)
+            WHERE (
+                  (
+                    msg_status = 0
+                    AND (next_retry_time IS NULL OR next_retry_time <= NOW(3))
+                  )
+                  OR (
+                    msg_status = 3
+                    AND lock_until <= NOW(3)
+                  )
+            )
+            ORDER BY create_time ASC
+            LIMIT #{limit}
+            """)
+    int claimPending(@Param("owner") String owner,
+                     @Param("lockUntil") LocalDateTime lockUntil,
+                     @Param("limit") int limit);
 
-    /**
-     * 标记消息失败并更新重试信息
-     * @param id 消息 ID
-     * @param retryCount 新的重试次数
-     * @param nextRetryTime 下次重试时间
-     */
-    @Update("UPDATE t_outbox_message SET msg_status = #{status}, retry_count = #{retryCount}, next_retry_time = #{nextRetryTime}, update_time = NOW() WHERE id = #{id}")
-    void updateRetry(@Param("id") Long id, @Param("status") Integer status, @Param("retryCount") Integer retryCount, @Param("nextRetryTime") LocalDateTime nextRetryTime);
+    @Select("""
+            SELECT *
+            FROM t_outbox_message
+            WHERE msg_status = 3
+              AND lock_owner = #{owner}
+              AND lock_until > NOW(3)
+            ORDER BY create_time ASC
+            LIMIT #{limit}
+            """)
+    List<OutboxMessage> findClaimed(@Param("owner") String owner, @Param("limit") int limit);
+
+    @Update("""
+            UPDATE t_outbox_message
+            SET msg_status = 1,
+                lock_owner = NULL,
+                lock_until = NULL,
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND msg_status = 3
+              AND lock_owner = #{owner}
+            """)
+    int markSent(@Param("id") Long id, @Param("owner") String owner);
+
+    @Update("""
+            UPDATE t_outbox_message
+            SET msg_status = #{status},
+                retry_count = #{retryCount},
+                next_retry_time = #{nextRetryTime},
+                lock_owner = NULL,
+                lock_until = NULL,
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND msg_status = 3
+              AND lock_owner = #{owner}
+            """)
+    int updateRetry(@Param("id") Long id,
+                    @Param("owner") String owner,
+                    @Param("status") Integer status,
+                    @Param("retryCount") Integer retryCount,
+                    @Param("nextRetryTime") LocalDateTime nextRetryTime);
 
     @Select("SELECT msg_status AS status, COUNT(*) AS count FROM t_outbox_message GROUP BY msg_status")
     List<Map<String, Object>> countByStatus();
 
-    @Select("SELECT COUNT(*) FROM t_outbox_message WHERE msg_status = 0 AND (next_retry_time IS NULL OR next_retry_time <= NOW())")
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_outbox_message
+            WHERE msg_status = 0
+              AND (next_retry_time IS NULL OR next_retry_time <= NOW(3))
+            """)
     long countDuePending();
 
     @Select("""
@@ -68,7 +118,9 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
             UPDATE t_outbox_message
             SET msg_status = 0,
                 next_retry_time = NULL,
-                update_time = NOW()
+                lock_owner = NULL,
+                lock_until = NULL,
+                update_time = NOW(3)
             WHERE id = #{id}
               AND msg_status = 2
             """)
@@ -79,7 +131,9 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
             UPDATE t_outbox_message
             SET msg_status = 0,
                 next_retry_time = NULL,
-                update_time = NOW()
+                lock_owner = NULL,
+                lock_until = NULL,
+                update_time = NOW(3)
             WHERE msg_status = 2
               AND id IN
               <foreach collection="ids" item="id" open="(" separator="," close=")">

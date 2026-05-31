@@ -20,12 +20,15 @@ public class AdminPermissionService {
 
     private final Set<Long> adminUids;
     private final AdminRoleMapper adminRoleMapper;
+    private final boolean localOpenEnabled;
     private final Environment environment;
 
     public AdminPermissionService(@Value("${offerlab.admin.uid-whitelist:${OFFERLAB_ADMIN_UIDS:}}") String whitelist,
+                                  @Value("${offerlab.admin.local-open-enabled:${OFFERLAB_ADMIN_LOCAL_OPEN_ENABLED:false}}") boolean localOpenEnabled,
                                   AdminRoleMapper adminRoleMapper,
                                   Environment environment) {
         this.adminUids = parseWhitelist(whitelist);
+        this.localOpenEnabled = localOpenEnabled;
         this.adminRoleMapper = adminRoleMapper;
         this.environment = environment;
     }
@@ -73,13 +76,18 @@ public class AdminPermissionService {
         if (environment.matchesProfiles("prod")) {
             return "LOCKED";
         }
-        return "LOCAL_OPEN";
+        return localOpenEnabled ? "LOCAL_OPEN" : "LOCKED";
     }
 
     public boolean isLocalOpenMode() {
-        return !environment.matchesProfiles("prod")
+        return localOpenEnabled
+                && !environment.matchesProfiles("prod")
                 && adminUids.isEmpty()
                 && (!adminTableExists() || countAdminRows() == 0);
+    }
+
+    public boolean localOpenEnabled() {
+        return localOpenEnabled;
     }
 
     public boolean whitelistEnabled() {

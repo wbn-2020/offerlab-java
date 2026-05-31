@@ -9,7 +9,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -36,6 +35,10 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
     private String model;
     @Value("${offerlab.ai.deepseek.timeout-millis:15000}")
     private int timeoutMillis;
+    @Value("${offerlab.ai.deepseek.allowed-hosts:" + DeepseekSafety.DEFAULT_ALLOWED_HOSTS + "}")
+    private String allowedHosts;
+    @Value("${offerlab.ai.deepseek.extract-max-prompt-chars:" + DeepseekSafety.DEFAULT_MAX_PROMPT_CHARS + "}")
+    private int maxPromptChars;
 
     @Override
     public List<ExtractedQuestion> extract(PostDTO post) {
@@ -67,7 +70,7 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
                 Map.of("role", "user", "content", prompt(post))
         ));
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(normalizeBaseUrl() + "/chat/completions"))
+                .uri(DeepseekSafety.chatCompletionsUri(baseUrl, allowedHosts))
                 .timeout(Duration.ofMillis(timeoutMillis))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
@@ -111,17 +114,10 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
     }
 
     private String prompt(PostDTO post) {
-        String ext = post.getExtJson() == null ? "{}" : post.getExtJson();
-        String content = post.getContent() == null ? "" : post.getContent();
-        if (content.length() > 8000) {
-            content = content.substring(0, 8000);
-        }
-        return "title: " + post.getTitle() + "\nextJson: " + ext + "\ncontent:\n" + content;
-    }
-
-    private String normalizeBaseUrl() {
-        String url = baseUrl == null || baseUrl.isBlank() ? "https://api.deepseek.com" : baseUrl.trim();
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+        String ext = DeepseekSafety.trimForPrompt(post == null ? "{}" : post.getExtJson(), 2000);
+        String content = DeepseekSafety.trimForPrompt(post == null ? "" : post.getContent(), maxPromptChars);
+        String title = DeepseekSafety.trimForPrompt(post == null ? "" : post.getTitle(), 255);
+        return "title: " + title + "\nextJson: " + ext + "\ncontent:\n" + content;
     }
 
     private String normalizeDifficulty(String value) {

@@ -46,6 +46,7 @@ public class UserApplicationService {
     private final ObjectMapper objectMapper;
     private final UserPrivacySettingMapper privacySettingMapper;
     private final UserProfileMapper profileMapper;
+    private final UserCacheService userCacheService;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -68,7 +69,7 @@ public class UserApplicationService {
                 .accountStatus(User.STATUS_NORMAL)
                 .build();
         userRepo.register(user);
-        log.info("user registered: uid={} email={}", uid, email);
+        log.info("user registered: uid={} email={}", uid, maskEmail(email));
         return uid;
     }
 
@@ -123,6 +124,7 @@ public class UserApplicationService {
                 .followeeId(toUid)
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
+        userCacheService.evictBrief(fromUid, toUid);
     }
 
     @Transactional
@@ -131,10 +133,22 @@ public class UserApplicationService {
         if (!ok) {
             throw new BizException(ErrorCode.FOLLOW_NOT_EXISTS);
         }
+        userCacheService.evictBrief(fromUid, toUid);
     }
 
     public User getUser(Long uid) {
         return userRepo.findById(uid).orElseThrow(() -> new BizException(ErrorCode.USER_NOT_FOUND));
+    }
+
+    private String maskEmail(String email) {
+        if (!StringUtils.hasText(email)) {
+            return "";
+        }
+        int at = email.indexOf('@');
+        if (at <= 1) {
+            return "***";
+        }
+        return email.charAt(0) + "***" + email.substring(at);
     }
 
     @Transactional
@@ -144,6 +158,7 @@ public class UserApplicationService {
         if (avatarUrl != null) u.setAvatarUrl(avatarUrl);
         if (bio != null) u.setBio(bio);
         userRepo.updateProfile(u);
+        userCacheService.evictBrief(uid);
     }
 
     @Transactional
@@ -156,6 +171,7 @@ public class UserApplicationService {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         userRepo.updateProfile(u);
+        userCacheService.evictBrief(uid);
     }
 
     @Transactional

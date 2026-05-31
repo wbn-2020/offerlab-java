@@ -4,7 +4,8 @@ import com.offerlab.community.post.api.event.PostPublishedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.event.EventListener;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -23,7 +24,7 @@ public class FeedFanoutListener {
     private final FeedFanoutService fanoutService;
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostPublished(PostPublishedEvent event) {
         try {
             fanoutService.fanoutPostPublished(event, "spring-local-event");
