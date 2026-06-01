@@ -101,9 +101,18 @@ mvn -pl community-bootstrap -am spring-boot:run
 
 ```sql
 SOURCE db/migration/20260524_ops_governance.sql;
+SOURCE db/migration/20260601_demo_question_seed_existing_db.sql;
 ```
 
 迁移脚本预期只创建缺失表和缺失索引，不应删除表、清空数据或重置 schema。执行前建议先备份数据库，并在测试库验证。
+
+如果你是给现有本地库补演示数据，请先确认 schema 已跑到 20260601，再执行：
+
+```powershell
+mysql -h 127.0.0.1 -P 3306 -u offerlab -p offerlab
+SOURCE db/migration/20260601_demo_question_seed_existing_db.sql;
+node scripts/verify-demo-question-data.mjs --admin-email=admin
+```
 
 ## AI 调用说明
 
