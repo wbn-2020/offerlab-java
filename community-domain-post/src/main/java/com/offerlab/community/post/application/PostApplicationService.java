@@ -77,6 +77,8 @@ public class PostApplicationService {
                     .authorId(cmd.getAuthorId())
                     .title(input.title())
                     .content(input.content())
+                    .visibility(post.getVisibility())
+                    .postStatus(post.getPostStatus())
                     .timestamp(Instant.now().toEpochMilli())
                     .build());
         }
@@ -127,6 +129,8 @@ public class PostApplicationService {
                 .authorId(post.getAuthorId())
                 .title(post.getTitle())
                 .content(post.getContent())
+                .visibility(post.getVisibility())
+                .postStatus(post.getPostStatus())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
     }
@@ -239,13 +243,17 @@ public class PostApplicationService {
     }
 
     private void syncTags(Long postId, List<Long> tagIds) {
+        Set<Long> oldIds = new LinkedHashSet<>(currentTagIds(postId));
+        Set<Long> newIds = tagIds == null ? Set.of() : tagIds.stream()
+                .filter(id -> id != null && id > 0)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         postTagRefMapper.deleteByPostId(postId);
-        if (tagIds == null || tagIds.isEmpty()) {
-            return;
-        }
-        for (Long tagId : tagIds) {
+        oldIds.stream()
+                .filter(id -> !newIds.contains(id))
+                .forEach(postTagRefMapper::decrUseCount);
+        for (Long tagId : newIds) {
             int inserted = postTagRefMapper.insertIgnore(idGen.nextId(), postId, tagId);
-            if (inserted > 0) {
+            if (inserted > 0 && !oldIds.contains(tagId)) {
                 postTagRefMapper.incrUseCount(tagId);
             }
         }

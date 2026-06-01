@@ -1,6 +1,9 @@
 package com.offerlab.community.infra.audit;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import lombok.RequiredArgsConstructor;
@@ -9,7 +12,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -103,7 +110,41 @@ public class AdminAuditService {
     }
 
     private String toJson(Object value) throws Exception {
-        return value == null ? null : objectMapper.writeValueAsString(value);
+        if (value == null) {
+            return null;
+        }
+        JsonNode node = objectMapper.valueToTree(value);
+        redact(node);
+        return objectMapper.writeValueAsString(node);
+    }
+
+    private void redact(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node instanceof ObjectNode objectNode) {
+            Iterator<Map.Entry<String, JsonNode>> fields = objectNode.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                if (sensitiveField(field.getKey())) {
+                    objectNode.put(field.getKey(), "***");
+                } else {
+                    redact(field.getValue());
+                }
+            }
+            return;
+        }
+        if (node instanceof ArrayNode arrayNode) {
+            arrayNode.forEach(this::redact);
+        }
+    }
+
+    private boolean sensitiveField(String key) {
+        if (!StringUtils.hasText(key)) {
+            return false;
+        }
+        String normalized = key.toLowerCase(Locale.ROOT);
+        return SENSITIVE_FIELDS.stream().anyMatch(normalized::contains);
     }
 
     private String clean(String value) {
@@ -117,4 +158,9 @@ public class AdminAuditService {
         String trimmed = value.trim();
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
     }
+
+    private static final Set<String> SENSITIVE_FIELDS = Set.of(
+            "password", "passwd", "pwd", "token", "secret", "authorization", "credential",
+            "email", "phone", "mobile", "idcard", "identity", "cookie"
+    );
 }

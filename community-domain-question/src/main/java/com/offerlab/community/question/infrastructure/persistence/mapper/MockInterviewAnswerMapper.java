@@ -46,7 +46,15 @@ public interface MockInterviewAnswerMapper extends BaseMapper<MockInterviewAnswe
             UPDATE t_mock_interview_answer
             SET answer_text = #{answerText},
                 self_review = #{selfReview},
-                score = #{score}
+                score = #{score},
+                ai_reviewed = 0,
+                ai_review_status = 'NOT_REQUESTED',
+                ai_review_error = NULL,
+                ai_score = NULL,
+                ai_completeness = NULL,
+                ai_project_expression = NULL,
+                ai_follow_up_suggestion = NULL,
+                ai_review_provider = NULL
             WHERE uid = #{uid}
               AND session_id = #{sessionId}
               AND question_id = #{questionId}
@@ -67,7 +75,42 @@ public interface MockInterviewAnswerMapper extends BaseMapper<MockInterviewAnswe
 
     @Update("""
             UPDATE t_mock_interview_answer
+            SET ai_reviewed = 0,
+                ai_review_status = 'PENDING',
+                ai_review_error = NULL
+            WHERE uid = #{uid}
+              AND session_id = #{sessionId}
+              AND TRIM(COALESCE(answer_text, '')) <> ''
+            """)
+    int markPendingForSession(@Param("uid") Long uid, @Param("sessionId") Long sessionId);
+
+    @Update("""
+            UPDATE t_mock_interview_answer
+            SET ai_reviewed = 0,
+                ai_review_status = 'PENDING',
+                ai_review_error = NULL
+            WHERE uid = #{uid}
+              AND session_id = #{sessionId}
+              AND ai_review_status IN ('FAILED', 'NOT_REQUESTED')
+              AND TRIM(COALESCE(answer_text, '')) <> ''
+            """)
+    int markRetryPendingForSession(@Param("uid") Long uid, @Param("sessionId") Long sessionId);
+
+    @Select("""
+            SELECT *
+            FROM t_mock_interview_answer
+            WHERE uid = #{uid}
+              AND session_id = #{sessionId}
+              AND ai_review_status = 'PENDING'
+            ORDER BY sequence_no ASC, id ASC
+            """)
+    List<MockInterviewAnswerPO> selectPendingAiReview(@Param("uid") Long uid, @Param("sessionId") Long sessionId);
+
+    @Update("""
+            UPDATE t_mock_interview_answer
             SET ai_reviewed = 1,
+                ai_review_status = 'SUCCEEDED',
+                ai_review_error = NULL,
                 ai_score = #{aiScore},
                 ai_completeness = #{aiCompleteness},
                 ai_project_expression = #{aiProjectExpression},
@@ -85,5 +128,19 @@ public interface MockInterviewAnswerMapper extends BaseMapper<MockInterviewAnswe
                        @Param("aiProjectExpression") String aiProjectExpression,
                        @Param("aiFollowUpSuggestion") String aiFollowUpSuggestion,
                        @Param("aiReviewProvider") String aiReviewProvider);
+
+    @Update("""
+            UPDATE t_mock_interview_answer
+            SET ai_reviewed = 0,
+                ai_review_status = 'FAILED',
+                ai_review_error = #{aiReviewError}
+            WHERE uid = #{uid}
+              AND session_id = #{sessionId}
+              AND question_id = #{questionId}
+            """)
+    int updateAiReviewFailed(@Param("uid") Long uid,
+                             @Param("sessionId") Long sessionId,
+                             @Param("questionId") Long questionId,
+                             @Param("aiReviewError") String aiReviewError);
 
 }

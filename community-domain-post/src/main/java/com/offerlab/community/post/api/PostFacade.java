@@ -21,6 +21,8 @@ public interface PostFacade {
 
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds);
 
+    Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid);
+
     Map<Long, PostCounterDTO> batchGetCounters(Collection<Long> postIds);
 
     Long publishPost(PostCreateCmd cmd);
@@ -33,7 +35,7 @@ public interface PostFacade {
 
     PageResult<PostBriefDTO> getLatest(long cursor, int size);
 
-    PageResult<PostBriefDTO> getHot(long cursor, int size);
+    PageResult<PostBriefDTO> getHot(String cursor, int size);
 
 
     List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit);

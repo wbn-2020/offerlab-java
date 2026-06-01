@@ -17,6 +17,42 @@ CREATE TABLE IF NOT EXISTS t_ai_extract_task (
     KEY idx_status_time (task_status, update_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI extract task';
 
+CREATE TABLE IF NOT EXISTS t_question_index_task (
+    task_id       VARCHAR(64)  NOT NULL PRIMARY KEY,
+    task_type     VARCHAR(32)  NOT NULL,
+    task_status   VARCHAR(16)  NOT NULL DEFAULT 'PENDING',
+    operator_uid  BIGINT       NULL,
+    accepted      TINYINT      NOT NULL DEFAULT 0,
+    indexed       INT          NOT NULL DEFAULT 0,
+    failed        INT          NOT NULL DEFAULT 0,
+    total         INT          NOT NULL DEFAULT 0,
+    index_name    VARCHAR(128) NULL,
+    message       VARCHAR(500) NULL,
+    create_time   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    update_time   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    KEY idx_question_index_task_status_time (task_status, update_time),
+    KEY idx_question_index_task_operator_time (operator_uid, create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Question index rebuild task';
+
+CREATE TABLE IF NOT EXISTS t_question_index_retry_task (
+    id              BIGINT       NOT NULL PRIMARY KEY,
+    dedup_key       VARCHAR(128) NOT NULL,
+    question_id     BIGINT       NOT NULL,
+    operation       VARCHAR(16)  NOT NULL COMMENT 'INDEX / DELETE',
+    task_status     TINYINT      NOT NULL DEFAULT 0 COMMENT '0 pending, 1 done, 2 failed, 3 running',
+    retry_count     INT          NOT NULL DEFAULT 0,
+    next_retry_time DATETIME(3)  NULL,
+    lock_owner      VARCHAR(128) NULL,
+    lock_until      DATETIME(3)  NULL,
+    last_error      VARCHAR(500) NULL,
+    create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uk_question_index_retry_dedup (dedup_key),
+    KEY idx_question_index_retry_due (task_status, next_retry_time),
+    KEY idx_question_index_retry_lock (lock_owner, lock_until),
+    KEY idx_question_index_retry_question (question_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Question ES index retry task';
+
 CREATE TABLE IF NOT EXISTS t_interview_question (
     id                 BIGINT       NOT NULL PRIMARY KEY,
     canonical_id       BIGINT       NULL,
@@ -142,6 +178,8 @@ CREATE TABLE IF NOT EXISTS t_mock_interview_answer (
     self_review  VARCHAR(1000) NULL,
     score        INT          NOT NULL DEFAULT 0,
     ai_reviewed  TINYINT      NOT NULL DEFAULT 0,
+    ai_review_status VARCHAR(16) NOT NULL DEFAULT 'NOT_REQUESTED',
+    ai_review_error VARCHAR(500) NULL,
     ai_score     INT          NULL,
     ai_completeness VARCHAR(300) NULL,
     ai_project_expression VARCHAR(300) NULL,
@@ -150,5 +188,6 @@ CREATE TABLE IF NOT EXISTS t_mock_interview_answer (
     create_time  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_session_question (session_id, question_id),
     KEY idx_session_sequence (session_id, sequence_no),
+    KEY idx_ai_review_status (uid, session_id, ai_review_status),
     KEY idx_uid_time (uid, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Mock interview answer';

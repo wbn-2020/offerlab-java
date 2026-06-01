@@ -2,6 +2,7 @@ package com.offerlab.community.feed.application;
 
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.infra.mq.idempotent.IdempotentChecker;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
@@ -40,7 +41,9 @@ public class FeedFanoutService {
         try {
             long ts = event.getTimestamp() == null ? System.currentTimeMillis() : event.getTimestamp();
             feedRedis.addToAuthorTimeline(authorId, postId, ts);
-            feedRedis.addToGlobalLatest(postId, ts);
+            if (isPublicPublished(event)) {
+                feedRedis.addToGlobalLatest(postId, ts);
+            }
 
             long cursor = 0L;
             long followerCount = 0L;
@@ -74,5 +77,11 @@ public class FeedFanoutService {
             log.error("feed fanout failed: source={} postId={} authorId={}", source, postId, authorId, e);
             throw e;
         }
+    }
+
+    private boolean isPublicPublished(PostPublishedEvent event) {
+        return event.getVisibility() == null
+                || (Integer.valueOf(Post.VIS_PUBLIC).equals(event.getVisibility())
+                && (event.getPostStatus() == null || Integer.valueOf(Post.STATUS_PUBLISHED).equals(event.getPostStatus())));
     }
 }

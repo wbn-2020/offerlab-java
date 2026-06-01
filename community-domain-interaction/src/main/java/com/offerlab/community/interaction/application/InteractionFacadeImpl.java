@@ -144,6 +144,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != COMMENT_STATUS_NORMAL) {
             throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
         }
+        requirePostVisible(comment.getPostId(), uid);
         try {
             LikePO existing = likeMapper.selectAnyByUserTarget(uid, TARGET_COMMENT, commentId);
             if (existing != null) {
@@ -179,6 +180,11 @@ public class InteractionFacadeImpl implements InteractionFacade {
     @Override
     @Transactional
     public void unlikeComment(Long uid, Long commentId) {
+        CommentPO comment = commentMapper.selectById(commentId);
+        if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != COMMENT_STATUS_NORMAL) {
+            throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        }
+        requirePostVisible(comment.getPostId(), uid);
         LikePO po = likeMapper.selectOne(new LambdaQueryWrapper<LikePO>()
                 .eq(LikePO::getUserId, uid)
                 .eq(LikePO::getTargetType, TARGET_COMMENT)
@@ -296,6 +302,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     @Override
     public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size) {
+        requirePostVisible(postId, viewerUid);
         int limit = clampPageSize(size);
         LambdaQueryWrapper<CommentPO> q = new LambdaQueryWrapper<CommentPO>()
                 .eq(CommentPO::getPostId, postId)
@@ -345,6 +352,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     public void deleteComment(Long commentId, Long operatorUid) {
         CommentPO po = commentMapper.selectById(commentId);
         if (po == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        requirePostVisible(po.getPostId(), operatorUid);
         if (!Objects.equals(po.getAuthorId(), operatorUid) && !Objects.equals(po.getPostAuthorId(), operatorUid)) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
@@ -401,6 +409,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (commentMapper.incrLikeCount(commentId, delta) <= 0) {
             throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
         }
+    }
+
+    private PostDTO requirePostVisible(Long postId, Long viewerUid) {
+        PostDTO post = postFacade.getPost(postId, viewerUid);
+        if (post == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        return post;
     }
 
     private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size) {

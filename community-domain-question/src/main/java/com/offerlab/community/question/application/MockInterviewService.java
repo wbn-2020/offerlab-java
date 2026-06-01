@@ -3,6 +3,7 @@ package com.offerlab.community.question.application;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.question.api.dto.MockInterviewAnswerDTO;
 import com.offerlab.community.question.api.dto.MockInterviewDraftCmd;
 import com.offerlab.community.question.api.dto.MockInterviewSessionDTO;
@@ -42,6 +43,8 @@ import java.util.stream.Collectors;
 public class MockInterviewService {
     private static final String STATUS_STARTED = "started";
     private static final String STATUS_COMPLETED = "completed";
+    private static final String AI_REVIEW_NOT_REQUESTED = "NOT_REQUESTED";
+    private static final String AI_REVIEW_PENDING = "PENDING";
     private static final int INSIGHT_WINDOW_SIZE = 20;
     private static final int WEAK_ANSWER_LIMIT = 6;
     private static final int PERSONAL_CANDIDATE_LIMIT = 20;
@@ -53,7 +56,8 @@ public class MockInterviewService {
     private final UserQuestionProgressMapper progressMapper;
     private final UserPrepTargetMapper prepTargetMapper;
     private final SnowflakeIdGenerator idGen;
-    private final MockInterviewAiReviewService aiReviewService;
+    private final AfterCommitExecutor afterCommit;
+    private final MockInterviewAiReviewTaskService aiReviewTaskService;
 
     @Transactional
     public MockInterviewSessionDTO start(Long uid, MockInterviewStartCmd cmd) {
@@ -105,7 +109,7 @@ public class MockInterviewService {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         if (STATUS_COMPLETED.equals(session.getStatus())) {
-            throw new BizException(ErrorCode.INVALID_STATUS);
+            return get(uid, sessionId);
         }
         List<MockInterviewAnswerPO> existing = answerMapper.selectBySession(sessionId, uid);
         Map<Long, MockInterviewSubmitCmd.AnswerCmd> byQuestionId = (cmd == null || cmd.getAnswers() == null ? List.<MockInterviewSubmitCmd.AnswerCmd>of() : cmd.getAnswers())
@@ -133,8 +137,25 @@ public class MockInterviewService {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         if (Boolean.TRUE.equals(cmd == null ? null : cmd.getAiReviewEnabled())) {
-            reviewAnswers(uid, sessionId, existing);
+            answerMapper.markPendingForSession(uid, sessionId);
+            afterCommit.execute(() -> aiReviewTaskService.reviewSession(uid, sessionId),
+                    "mock interview AI review session=" + sessionId);
         }
+        return get(uid, sessionId);
+    }
+
+    @Transactional
+    public MockInterviewSessionDTO retryAiReview(Long uid, Long sessionId) {
+        MockInterviewSessionPO session = sessionMapper.selectByUser(sessionId, uid);
+        if (session == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        if (!STATUS_COMPLETED.equals(session.getStatus())) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        answerMapper.markRetryPendingForSession(uid, sessionId);
+        afterCommit.execute(() -> aiReviewTaskService.reviewSession(uid, sessionId),
+                "mock interview AI review retry session=" + sessionId);
         return get(uid, sessionId);
     }
 
@@ -422,6 +443,8 @@ public class MockInterviewService {
                         .selfReview(answer.getSelfReview())
                         .score(answer.getScore())
                         .aiReviewed(Objects.requireNonNullElse(answer.getAiReviewed(), 0) == 1)
+                        .aiReviewStatus(aiReviewStatus(answer))
+                        .aiReviewError(answer.getAiReviewError())
                         .aiScore(answer.getAiScore())
                         .aiCompleteness(answer.getAiCompleteness())
                         .aiProjectExpression(answer.getAiProjectExpression())
@@ -431,20 +454,6 @@ public class MockInterviewService {
                         .question(toQuestionDto(questions.get(answer.getQuestionId()), answer, tagsByQuestion))
                         .build())
                 .toList();
-    }
-
-    private void reviewAnswers(Long uid, Long sessionId, List<MockInterviewAnswerPO> answers) {
-        if (answers == null || answers.isEmpty()) {
-            return;
-        }
-        for (MockInterviewAnswerPO answer : answers) {
-            MockInterviewAiReviewService.ReviewResult result = aiReviewService.review(answer);
-            if (result == null) {
-                continue;
-            }
-            answerMapper.updateAiReview(uid, sessionId, answer.getQuestionId(), result.score(),
-                    result.completeness(), result.projectExpression(), result.followUpSuggestion(), result.provider());
-        }
     }
 
     private QuestionDTO toQuestionDto(InterviewQuestionPO row, MockInterviewAnswerPO snapshot, Map<Long, List<QuestionTagDTO>> tagsByQuestion) {
@@ -588,6 +597,16 @@ public class MockInterviewService {
 
     private String limit(String value, int max) {
         return value.length() <= max ? value : value.substring(0, max);
+    }
+
+    private String aiReviewStatus(MockInterviewAnswerPO answer) {
+        String status = clean(answer == null ? null : answer.getAiReviewStatus());
+        if (!status.isBlank()) {
+            return status;
+        }
+        return answer != null && Objects.requireNonNullElse(answer.getAiReviewed(), 0) == 1
+                ? "SUCCEEDED"
+                : AI_REVIEW_NOT_REQUESTED;
     }
 
     private int number(Map<String, Object> values, String key) {

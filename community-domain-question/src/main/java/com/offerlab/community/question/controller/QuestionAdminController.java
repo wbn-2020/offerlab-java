@@ -101,6 +101,15 @@ public class QuestionAdminController {
         return Result.ok(questionIndexTaskService.getTask(taskId));
     }
 
+    @PostMapping("/questions/index-tasks/{taskId}/retry")
+    public Result<QuestionIndexTaskService.QuestionIndexTask> retryQuestionIndexTask(@PathVariable String taskId) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        QuestionIndexTaskService.QuestionIndexTask task = questionIndexTaskService.retryTask(taskId);
+        adminAuditService.record(uid, "QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", taskId, null, task, null);
+        return Result.ok(task);
+    }
+
     @GetMapping("/questions/index-tasks")
     public Result<List<QuestionIndexTaskService.QuestionIndexTask>> listQuestionIndexTasks(@RequestParam(defaultValue = "10") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);

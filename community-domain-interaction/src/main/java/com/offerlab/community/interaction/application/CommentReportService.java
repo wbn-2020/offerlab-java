@@ -13,6 +13,7 @@ import com.offerlab.community.interaction.infrastructure.persistence.mapper.Comm
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentReportMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentPO;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentReportPO;
+import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -45,6 +46,7 @@ public class CommentReportService {
     private final PostCounterMapper postCounterMapper;
     private final PostCounterRedis postCounterRedis;
     private final PostRepository postRepo;
+    private final PostFacade postFacade;
     private final SnowflakeIdGenerator idGen;
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
@@ -56,6 +58,9 @@ public class CommentReportService {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
         CommentPO comment = requireVisibleComment(commentId);
+        if (postFacade.getPost(comment.getPostId(), reporterUid) == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
         contentModerationService.requireUserCanPublish(reporterUid);
         contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT, reason, detail);
         if (reportMapper.findPendingByReporter(commentId, reporterUid) != null) {

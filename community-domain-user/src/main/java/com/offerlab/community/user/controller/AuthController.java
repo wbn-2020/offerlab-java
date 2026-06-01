@@ -28,14 +28,14 @@ public class AuthController {
     private final UserApplicationService userService;
 
     @PostMapping("/register")
-    @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600)
+    @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600, failOpen = false)
     public Result<Map<String, Long>> register(@Valid @RequestBody RegisterReq req, HttpServletRequest http) {
         Long uid = userService.register(req.getEmail(), req.getPassword(), req.getNickname());
         return Result.ok(Map.of("uid", uid));
     }
 
     @PostMapping("/login")
-    @RateLimit(key = "'auth:login:' + #http.remoteAddr", rate = 20, per = 300)
+    @RateLimit(key = "'auth:login:' + #http.remoteAddr", rate = 20, per = 300, failOpen = false)
     public Result<Map<String, Object>> login(@Valid @RequestBody LoginReq req, HttpServletRequest http) {
         String token = userService.login(req.getEmail(), req.getPassword(), http.getRemoteAddr());
         return Result.ok(Map.of("token", token));

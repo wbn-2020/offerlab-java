@@ -26,6 +26,8 @@ public class MockInterviewAnswerDTO {
     private String selfReview;
     private Integer score;
     private Boolean aiReviewed;
+    private String aiReviewStatus;
+    private String aiReviewError;
     private Integer aiScore;
     private String aiCompleteness;
     private String aiProjectExpression;

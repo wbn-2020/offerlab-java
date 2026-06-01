@@ -79,8 +79,7 @@ public class FeedFacadeImpl implements FeedFacade {
 
     @Override
     public PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size) {
-        long c = parseCursorAsEpoch(cursor);
-        var page = postFacade.getHot(c, size);
+        var page = postFacade.getHot(cursor, size);
         if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
             return getLatestFeed(viewerUid, cursor, size);
         }
@@ -97,11 +96,15 @@ public class FeedFacadeImpl implements FeedFacade {
                                                       Long viewerUid) {
         if (tuples == null || tuples.isEmpty()) return PageResult.empty();
         List<long[]> idsAndScores = tuples.stream()
-                .map(t -> new long[]{Long.parseLong(t.getValue()), t.getScore() == null ? 0L : t.getScore().longValue()})
+                .map(this::toPostIdAndScore)
+                .filter(Objects::nonNull)
                 .toList();
+        if (idsAndScores.isEmpty()) {
+            return PageResult.empty();
+        }
 
         List<Long> postIds = idsAndScores.stream().map(a -> a[0]).toList();
-        var posts = postFacade.batchGetPosts(postIds);
+        var posts = postFacade.batchGetPosts(postIds, viewerUid);
         var counters = postFacade.batchGetCounters(postIds);
         Set<Long> authorIds = posts.values().stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet());
         var authors = userFacade.batchGetUserBriefs(authorIds);
@@ -126,13 +129,25 @@ public class FeedFacadeImpl implements FeedFacade {
                     .myInteraction(my)
                     .build());
         }
-        boolean hasMore = items.size() == size;
+        boolean hasMore = idsAndScores.size() == size;
         String next = null;
         if (hasMore) {
             long lastScore = idsAndScores.get(idsAndScores.size() - 1)[1];
             next = String.valueOf(lastScore);
         }
         return PageResult.of(items, next, hasMore);
+    }
+
+    private long[] toPostIdAndScore(ZSetOperations.TypedTuple<String> tuple) {
+        if (tuple == null || tuple.getValue() == null) {
+            return null;
+        }
+        try {
+            return new long[]{Long.parseLong(tuple.getValue()), tuple.getScore() == null ? 0L : tuple.getScore().longValue()};
+        } catch (NumberFormatException e) {
+            log.warn("feed redis tuple skipped: invalid postId={}", tuple.getValue());
+            return null;
+        }
     }
 
     private PageResult<FeedItemVO> fallbackLatestFromDb(Long viewerUid, String cursor, int size) {

@@ -117,21 +117,11 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     public List<Post> findPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
-        LambdaQueryWrapper<PostPO> q = baseListQuery(cursor, size);
-        if (authorId != null) {
-            q.eq(PostPO::getAuthorId, authorId);
-        }
-        if (postType != null) {
-            q.eq(PostPO::getPostType, postType);
-        }
-        if (tagId != null && tagId > 0) {
-            List<Long> taggedPostIds = postTagRefMapper.selectPostIdsByTagId(tagId);
-            if (taggedPostIds.isEmpty()) {
-                return List.of();
-            }
-            q.in(PostPO::getId, taggedPostIds);
-        }
-        return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
+        return postMapper.selectPublicPosts(authorId, tagId != null && tagId > 0 ? tagId : null, postType,
+                        cursorTime(cursor), cursorId(cursor), listLimit(size))
+                .stream()
+                .map(p -> toDomain(p, null))
+                .toList();
     }
 
     private static LambdaQueryWrapper<PostPO> baseListQuery(long cursor, int size) {
@@ -149,6 +139,21 @@ public class PostRepositoryImpl implements PostRepository {
 
     private static int listLimit(int size) {
         return Math.max(1, Math.min(size, 101));
+    }
+
+    private static LocalDateTime cursorTime(long cursor) {
+        if (cursor <= 0) {
+            return null;
+        }
+        long time = cursor > 10_000_000_000_000L ? cursor / 1_000_000L : cursor;
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(time), ZoneOffset.UTC);
+    }
+
+    private static Long cursorId(long cursor) {
+        if (cursor <= 0 || cursor <= 10_000_000_000_000L) {
+            return Long.MAX_VALUE;
+        }
+        return cursor % 1_000_000L;
     }
 
     private static PostPO toPO(Post p) {

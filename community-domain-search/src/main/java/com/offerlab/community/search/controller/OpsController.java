@@ -18,6 +18,7 @@ import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
 import com.offerlab.community.search.application.SearchIndexRetryService;
 import com.offerlab.community.search.application.PostSearchIndexer;
@@ -51,6 +52,7 @@ public class OpsController {
     private final PostSearchIndexer indexer;
     private final SearchIndexRetryService searchIndexRetryService;
     private final SearchAnalyticsService searchAnalyticsService;
+    private final NotificationRetryService notificationRetryService;
     private final OutboxMessageMapper outboxMessageMapper;
     private final AdminRoleMapper adminRoleMapper;
     private final AdminPermissionService adminPermissionService;
@@ -74,6 +76,7 @@ public class OpsController {
         data.put("adminMode", adminPermissionService.mode());
         data.put("search", indexer.status());
         data.put("searchIndexRetry", searchIndexRetryService.status());
+        data.put("notificationRetry", notificationRetryService.status());
         data.put("outbox", outbox);
         return Result.ok(data);
     }

@@ -17,5 +17,7 @@ public class PostPublishedEvent {
     private Long authorId;
     private String title;
     private String content;
+    private Integer visibility;
+    private Integer postStatus;
     private Long timestamp;
 }

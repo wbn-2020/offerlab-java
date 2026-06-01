@@ -44,14 +44,24 @@ public class RateLimitAspect {
         long now = System.currentTimeMillis();
         long window = rl.per() * 1000L;
 
-        Long pass = redis.execute(
-                luaLoader.get("ratelimit_sliding"),
-                Collections.singletonList(key),
-                String.valueOf(now),
-                String.valueOf(window),
-                String.valueOf(rl.rate()),
-                String.valueOf(rl.per())
-        );
+        Long pass;
+        try {
+            pass = redis.execute(
+                    luaLoader.get("ratelimit_sliding"),
+                    Collections.singletonList(key),
+                    String.valueOf(now),
+                    String.valueOf(window),
+                    String.valueOf(rl.rate()),
+                    String.valueOf(rl.per())
+            );
+        } catch (Exception e) {
+            if (rl.failOpen()) {
+                log.warn("rate limit degraded open: key={} rate={}/{}s reason={}", key, rl.rate(), rl.per(), e.getMessage());
+                return pjp.proceed();
+            }
+            log.error("rate limit dependency unavailable: key={} rate={}/{}s", key, rl.rate(), rl.per(), e);
+            throw new BizException(ErrorCode.CACHE_ERROR.getCode(), "限流服务暂时不可用，请稍后重试");
+        }
 
         if (pass == null || pass == 0L) {
             log.warn("rate limit exceeded: key={} rate={}/{}s", key, rl.rate(), rl.per());

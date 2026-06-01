@@ -26,6 +26,8 @@ public class MockInterviewAnswerPO {
     private String selfReview;
     private Integer score;
     private Integer aiReviewed;
+    private String aiReviewStatus;
+    private String aiReviewError;
     private Integer aiScore;
     private String aiCompleteness;
     private String aiProjectExpression;

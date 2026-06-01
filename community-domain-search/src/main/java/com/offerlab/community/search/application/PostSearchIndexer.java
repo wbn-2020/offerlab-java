@@ -1,6 +1,5 @@
 package com.offerlab.community.search.application;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
@@ -30,6 +29,8 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 public class PostSearchIndexer {
+
+    private static final int REBUILD_BATCH_SIZE = 500;
 
     private final ElasticsearchHttpClient elasticsearch;
     private final PostMapper postMapper;
@@ -116,27 +117,40 @@ public class PostSearchIndexer {
                     "message", "Elasticsearch is unavailable or index creation failed"
             );
         }
-        List<PostPO> posts = postMapper.selectList(new LambdaQueryWrapper<PostPO>()
-                .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
-                .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
-                .eq(PostPO::getIsDeleted, 0)
-                .orderByAsc(PostPO::getId));
         int indexed = 0;
         int failed = 0;
-        for (PostPO post : posts) {
-            if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()), toDocument(post))) {
-                indexed++;
-            } else {
-                failed++;
+        int total = 0;
+        long lastId = 0L;
+        while (true) {
+            List<PostPO> posts = postMapper.selectPublicPostsForIndexAfterId(lastId, REBUILD_BATCH_SIZE);
+            if (posts == null || posts.isEmpty()) {
+                break;
+            }
+            total += posts.size();
+            for (PostPO post : posts) {
+                if (post.getId() != null && post.getId() > lastId) {
+                    lastId = post.getId();
+                }
+                if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()), toDocument(post))) {
+                    indexed++;
+                } else {
+                    failed++;
+                }
+            }
+            if (posts.size() < REBUILD_BATCH_SIZE) {
+                break;
             }
         }
-        return Map.of(
-                "accepted", true,
-                "indexed", indexed,
-                "failed", failed,
-                "total", posts.size(),
-                "indexName", elasticsearch.postIndex()
-        );
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("accepted", failed == 0);
+        result.put("indexed", indexed);
+        result.put("failed", failed);
+        result.put("total", total);
+        result.put("indexName", elasticsearch.postIndex());
+        if (failed > 0) {
+            result.put("message", failed + " post documents failed to index");
+        }
+        return result;
     }
 
     private Map<String, Object> toDocument(PostPO post) {

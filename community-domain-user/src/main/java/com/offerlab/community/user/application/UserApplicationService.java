@@ -75,7 +75,7 @@ public class UserApplicationService {
 
     public String login(String email, String password, String ip) {
         User user = userRepo.findByEmail(email)
-                .orElseThrow(() -> new BizException(ErrorCode.USER_NOT_FOUND));
+                .orElseThrow(() -> new BizException(ErrorCode.PASSWORD_ERROR));
         if (!user.isActive()) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }

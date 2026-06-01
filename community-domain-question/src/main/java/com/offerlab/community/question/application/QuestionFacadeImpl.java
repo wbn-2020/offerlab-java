@@ -9,6 +9,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
@@ -105,6 +106,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
     private final PlatformTransactionManager transactionManager;
     private final QuestionSearchIndexer questionSearchIndexer;
     private final QuestionPrepAssembler prepAssembler;
+    private final AfterCommitExecutor afterCommit;
 
     @Override
     @Transactional
@@ -163,8 +165,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
     public Map<String, Object> rebuildQuestions(int limit) {
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 500));
         List<Long> postIds = postMapper.selectRecentPublicInterviewPostIds(safeLimit);
-        postIds.forEach(postId -> extractPostQuestions(postId, true));
-        return Map.of("requested", safeLimit, "submitted", postIds.size());
+        List<Long> taskIds = postIds.stream()
+                .map(postId -> new TransactionTemplate(transactionManager)
+                        .execute(status -> extractPostQuestions(postId, true)))
+                .filter(Objects::nonNull)
+                .toList();
+        return Map.of("requested", safeLimit, "submitted", taskIds.size(), "taskIds", taskIds);
     }
 
     @Override
@@ -598,7 +604,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         scoreBase.setSourceSnippet(update.getSourceSnippet() == null ? scoreBase.getSourceSnippet() : update.getSourceSnippet());
         update.setQualityScore(score(scoreBase));
         questionMapper.updateAdmin(update);
-        questionSearchIndexer.indexQuestion(questionId);
+        afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index update:" + questionId);
         return toQuestionDtos(questionMapper.selectVisibleByIds(List.of(questionId), true), null).get(0);
     }
 
@@ -611,7 +617,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         evictQuestionDetail(questionId);
-        questionSearchIndexer.indexQuestion(questionId);
+        afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index review:" + questionId);
         return Map.of("questionId", questionId, "status", status);
     }
 

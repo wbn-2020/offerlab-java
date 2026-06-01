@@ -77,12 +77,18 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) {
+        return batchGetPosts(postIds, null);
+    }
+
+    @Override
+    public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) {
         if (postIds == null || postIds.isEmpty()) return Map.of();
         Map<Long, Post> posts = postRepo.batchFindByIds(postIds);
         Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.keySet());
         Map<Long, PostBriefDTO> result = new HashMap<>(posts.size());
         for (Post p : posts.values()) {
-            if (p.isVisibleTo(null, false)) {
+            boolean following = viewerUid != null && p.getAuthorId() != null && userFacade.isFollowing(viewerUid, p.getAuthorId());
+            if (p.isVisibleTo(viewerUid, following)) {
                 result.put(p.getId(), toBrief(p, tags.getOrDefault(p.getId(), List.of())));
             }
         }
@@ -172,12 +178,10 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
-    public PageResult<PostBriefDTO> getHot(long cursor, int size) {
+    public PageResult<PostBriefDTO> getHot(String cursor, int size) {
         int limit = pageSize(size);
-        LocalDateTime cursorTime = cursor > 0
-                ? LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC)
-                : null;
-        return pagedPo(postMapper.selectHotPosts(cursorTime, limit + 1), limit);
+        HotCursor hotCursor = HotCursor.parse(cursor);
+        return pagedHotPo(postMapper.selectHotPosts(hotCursor.score(), hotCursor.time(), hotCursor.id(), limit + 1), limit);
     }
 
     @Override
@@ -206,7 +210,7 @@ public class PostFacadeImpl implements PostFacade {
         enrichBriefs(items);
         // 普通列表使用 createTime 毫秒时间戳作为游标，前端需原样传回。
         String next = hasMore && !pageList.isEmpty()
-                ? String.valueOf(pageList.get(pageList.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+                ? listCursor(pageList.get(pageList.size() - 1).getCreateTime(), pageList.get(pageList.size() - 1).getId())
                 : null;
         return PageResult.of(items, next, hasMore);
     }
@@ -238,6 +242,19 @@ public class PostFacadeImpl implements PostFacade {
                 ? String.valueOf(pageList.get(pageList.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
         return PageResult.of(items, next, hasMore);
+    }
+
+    private PageResult<PostBriefDTO> pagedHotPo(List<PostPO> list, int size) {
+        if (list.isEmpty()) return PageResult.empty();
+        boolean hasMore = list.size() > size;
+        List<PostPO> pageList = hasMore ? list.subList(0, size) : list;
+        PageResult<PostBriefDTO> page = pagedPo(pageList, size);
+        String next = hasMore && !pageList.isEmpty()
+                ? HotCursor.of(pageList.get(pageList.size() - 1),
+                batchGetCounters(List.of(pageList.get(pageList.size() - 1).getId()))
+                        .get(pageList.get(pageList.size() - 1).getId()))
+                : null;
+        return PageResult.of(page.getItems(), next, hasMore);
     }
 
     private int pageSize(int size) {
@@ -413,5 +430,50 @@ public class PostFacadeImpl implements PostFacade {
         if (content == null) return "";
         String s = content.replaceAll("[#*`>\\[\\]()_!~\\-]+", " ").trim();
         return s.length() <= SUMMARY_LEN ? s : s.substring(0, SUMMARY_LEN) + "...";
+    }
+
+    private static String listCursor(LocalDateTime time, Long id) {
+        if (time == null) {
+            return null;
+        }
+        long millis = time.toInstant(ZoneOffset.UTC).toEpochMilli();
+        long suffix = id == null ? 0L : Math.floorMod(id, 1_000_000L);
+        return String.valueOf(millis * 1_000_000L + suffix);
+    }
+
+    private record HotCursor(Double score, LocalDateTime time, Long id) {
+        static HotCursor parse(String cursor) {
+            if (cursor == null || cursor.isBlank() || !cursor.contains(":")) {
+                return new HotCursor(null, null, null);
+            }
+            try {
+                String[] parts = cursor.split(":");
+                double score = Double.parseDouble(parts[0]) / 10_000D;
+                LocalDateTime time = LocalDateTime.ofInstant(Instant.ofEpochMilli(Long.parseLong(parts[1])), ZoneOffset.UTC);
+                Long id = Long.parseLong(parts[2]);
+                return new HotCursor(score, time, id);
+            } catch (RuntimeException ignored) {
+                return new HotCursor(null, null, null);
+            }
+        }
+
+        static String of(PostPO post, PostCounterDTO counter) {
+            double score = 0D;
+            if (counter != null) {
+                score += safe(counter.getLikeCount()) * 3D;
+                score += safe(counter.getFavoriteCount()) * 4D;
+                score += safe(counter.getCommentCount()) * 5D;
+                score += safe(counter.getViewCount()) * 0.2D;
+            }
+            if (post.getCreateTime() != null) {
+                score += Math.max(0D, 72D - java.time.Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
+            }
+            long time = post.getCreateTime() == null ? 0L : post.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+            return Math.round(score * 10_000D) + ":" + time + ":" + post.getId();
+        }
+    }
+
+    private static long safe(Long value) {
+        return value == null ? 0L : value;
     }
 }

@@ -133,7 +133,39 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
-              AND (#{cursorTime} IS NULL OR p.create_time < #{cursorTime})
+              AND (
+                #{cursorScore} IS NULL
+                OR (
+                  (
+                    COALESCE(c.like_count, 0) * 3
+                    + COALESCE(c.favorite_count, 0) * 4
+                    + COALESCE(c.comment_count, 0) * 5
+                    + COALESCE(c.view_count, 0) * 0.2
+                    + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
+                  ) < #{cursorScore}
+                )
+                OR (
+                  (
+                    COALESCE(c.like_count, 0) * 3
+                    + COALESCE(c.favorite_count, 0) * 4
+                    + COALESCE(c.comment_count, 0) * 5
+                    + COALESCE(c.view_count, 0) * 0.2
+                    + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
+                  ) = #{cursorScore}
+                  AND p.create_time < #{cursorTime}
+                )
+                OR (
+                  (
+                    COALESCE(c.like_count, 0) * 3
+                    + COALESCE(c.favorite_count, 0) * 4
+                    + COALESCE(c.comment_count, 0) * 5
+                    + COALESCE(c.view_count, 0) * 0.2
+                    + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
+                  ) = #{cursorScore}
+                  AND p.create_time = #{cursorTime}
+                  AND p.id < #{cursorId}
+                )
+              )
             ORDER BY (
                 COALESCE(c.like_count, 0) * 3
                 + COALESCE(c.favorite_count, 0) * 4
@@ -145,7 +177,54 @@ public interface PostMapper extends BaseMapper<PostPO> {
             p.id DESC
             LIMIT #{limit}
             """)
-    List<PostPO> selectHotPosts(@Param("cursorTime") LocalDateTime cursorTime, @Param("limit") int limit);
+    List<PostPO> selectHotPosts(@Param("cursorScore") Double cursorScore,
+                                @Param("cursorTime") LocalDateTime cursorTime,
+                                @Param("cursorId") Long cursorId,
+                                @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            <if test="tagId != null">
+            JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
+            </if>
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="authorId != null">
+              AND p.author_id = #{authorId}
+              </if>
+              <if test="postType != null">
+              AND p.post_type = #{postType}
+              </if>
+              <if test="cursorTime != null">
+              AND (p.create_time &lt; #{cursorTime}
+                   OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId}))
+              </if>
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> selectPublicPosts(@Param("authorId") Long authorId,
+                                   @Param("tagId") Long tagId,
+                                   @Param("postType") Integer postType,
+                                   @Param("cursorTime") LocalDateTime cursorTime,
+                                   @Param("cursorId") Long cursorId,
+                                   @Param("limit") int limit);
+
+    @Select("""
+            SELECT p.*
+            FROM t_post_main p
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.id > #{lastId}
+            ORDER BY p.id ASC
+            LIMIT #{limit}
+            """)
+    List<PostPO> selectPublicPostsForIndexAfterId(@Param("lastId") Long lastId,
+                                                  @Param("limit") int limit);
 
     @Select("""
             <script>
