@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -45,6 +46,7 @@ class QuestionIndexTaskServiceTest {
     void submitRebuildTaskPersistsPendingTask() {
         AtomicReference<QuestionIndexTaskPO> saved = new AtomicReference<>();
         when(taskMapper.tableExists()).thenReturn(1);
+        when(taskMapper.findActiveRebuildTask("QUESTION_INDEX_REBUILD")).thenReturn(null);
         doAnswer(invocation -> {
             QuestionIndexTaskPO task = invocation.getArgument(0);
             saved.set(task);
@@ -59,6 +61,21 @@ class QuestionIndexTaskServiceTest {
         assertEquals("PENDING", task.getStatus());
         assertEquals(99L, task.getOperatorUid());
         assertFalse(task.isRetryable());
+    }
+
+    @Test
+    void submitRebuildTaskReturnsActiveTaskWithoutInsert() {
+        QuestionIndexTaskPO active = task("task-active", "RUNNING");
+        active.setOperatorUid(100L);
+        when(taskMapper.tableExists()).thenReturn(1);
+        when(taskMapper.findActiveRebuildTask("QUESTION_INDEX_REBUILD")).thenReturn(active);
+
+        QuestionIndexTaskService.QuestionIndexTask task = service.submitRebuildTask(101L);
+
+        assertEquals("task-active", task.getTaskId());
+        assertEquals("RUNNING", task.getStatus());
+        assertEquals(100L, task.getOperatorUid());
+        verify(taskMapper, never()).insertTask(any(QuestionIndexTaskPO.class));
     }
 
     @Test

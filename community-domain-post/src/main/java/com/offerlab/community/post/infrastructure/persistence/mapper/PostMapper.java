@@ -238,6 +238,15 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND (
                     p.title LIKE CONCAT('%', #{keyword}, '%')
                     OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR e.company LIKE CONCAT('%', #{keyword}, '%')
+                    OR e.position LIKE CONCAT('%', #{keyword}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                    )
                   )
               </if>
               <if test="company != null and company != ''">
@@ -275,6 +284,13 @@ public interface PostMapper extends BaseMapper<PostPO> {
                     p.title LIKE CONCAT('%', #{prefix}, '%')
                     OR e.company LIKE CONCAT('%', #{prefix}, '%')
                     OR e.position LIKE CONCAT('%', #{prefix}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{prefix}, '%')
+                    )
                   )
             ORDER BY p.create_time DESC, p.id DESC
             LIMIT #{limit}

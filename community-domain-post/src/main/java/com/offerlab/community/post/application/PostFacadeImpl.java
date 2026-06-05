@@ -7,6 +7,7 @@ import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
@@ -33,6 +34,7 @@ import org.springframework.stereotype.Service;
 import java.time.ZoneOffset;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -56,6 +58,8 @@ public class PostFacadeImpl implements PostFacade {
     private final UserFacade userFacade;
 
     private static final int SUMMARY_LEN = 120;
+    private static final int MAX_SYNTHETIC_SCAN_ROWS = 1000;
+    private static final int SYNTHETIC_SCAN_MULTIPLIER = 6;
 
     @Override
     public PostDTO getPost(Long postId) {
@@ -93,6 +97,7 @@ public class PostFacadeImpl implements PostFacade {
             }
         }
         enrichBriefs(result.values());
+        result.entrySet().removeIf(entry -> PublicContentFilter.isSyntheticPost(entry.getValue()));
         return result;
     }
 
@@ -181,19 +186,22 @@ public class PostFacadeImpl implements PostFacade {
     public PageResult<PostBriefDTO> getHot(String cursor, int size) {
         int limit = pageSize(size);
         HotCursor hotCursor = HotCursor.parse(cursor);
-        return pagedHotPo(postMapper.selectHotPosts(hotCursor.score(), hotCursor.time(), hotCursor.id(), limit + 1), limit);
+        return pagedHotPo(postMapper.selectHotPosts(hotCursor.score(), hotCursor.time(), hotCursor.id(), scanSize(limit)), limit);
     }
 
     @Override
     public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
         int limit = pageSize(size);
-        List<Post> list = postRepo.findPosts(authorId, tagId, postType, cursor, limit + 1);
+        List<Post> list = scanPublicPosts(authorId, tagId, postType, cursor, limit);
         return paged(list, limit);
     }
 
     @Override
     public List<TagDTO> listTags() {
-        return tagMapper.selectActiveTags().stream().map(this::toTagDto).toList();
+        return tagMapper.selectActiveTags().stream()
+                .map(this::toTagDto)
+                .filter(tag -> !PublicContentFilter.isSyntheticText(tag.getName()))
+                .toList();
     }
 
     @Override
@@ -203,14 +211,26 @@ public class PostFacadeImpl implements PostFacade {
 
     private PageResult<PostBriefDTO> paged(List<Post> list, int size) {
         if (list.isEmpty()) return PageResult.empty();
-        boolean hasMore = list.size() > size;
-        List<Post> pageList = hasMore ? list.subList(0, size) : list;
-        Map<Long, List<TagDTO>> tags = tagsByPostIds(pageList.stream().map(Post::getId).toList());
-        List<PostBriefDTO> items = pageList.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
-        enrichBriefs(items);
+        Map<Long, Post> postById = list.stream().collect(Collectors.toMap(Post::getId, post -> post, (left, right) -> left));
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
+        List<PostBriefDTO> visible = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
+        enrichBriefs(visible);
+        visible = visible.stream()
+                .filter(post -> !PublicContentFilter.isSyntheticPost(post))
+                .toList();
+        boolean visibleHasMore = visible.size() > size;
+        boolean rawHasMore = list.size() > size;
+        List<PostBriefDTO> items = visibleHasMore ? visible.subList(0, size) : visible;
+        Post cursorPost = null;
+        if (visibleHasMore && !items.isEmpty()) {
+            cursorPost = postById.get(items.get(items.size() - 1).getId());
+        } else if (rawHasMore) {
+            cursorPost = list.get(list.size() - 1);
+        }
         // 普通列表使用 createTime 毫秒时间戳作为游标，前端需原样传回。
-        String next = hasMore && !pageList.isEmpty()
-                ? listCursor(pageList.get(pageList.size() - 1).getCreateTime(), pageList.get(pageList.size() - 1).getId())
+        boolean hasMore = visibleHasMore || rawHasMore;
+        String next = hasMore && cursorPost != null
+                ? listCursor(cursorPost.getCreateTime(), cursorPost.getId())
                 : null;
         return PageResult.of(items, next, hasMore);
     }
@@ -238,6 +258,9 @@ public class PostFacadeImpl implements PostFacade {
                         .build())
                 .toList();
         enrichBriefs(items);
+        items = items.stream()
+                .filter(post -> !PublicContentFilter.isSyntheticPost(post))
+                .toList();
         String next = hasMore && !pageList.isEmpty()
                 ? String.valueOf(pageList.get(pageList.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
@@ -246,19 +269,112 @@ public class PostFacadeImpl implements PostFacade {
 
     private PageResult<PostBriefDTO> pagedHotPo(List<PostPO> list, int size) {
         if (list.isEmpty()) return PageResult.empty();
-        boolean hasMore = list.size() > size;
-        List<PostPO> pageList = hasMore ? list.subList(0, size) : list;
-        PageResult<PostBriefDTO> page = pagedPo(pageList, size);
-        String next = hasMore && !pageList.isEmpty()
-                ? HotCursor.of(pageList.get(pageList.size() - 1),
-                batchGetCounters(List.of(pageList.get(pageList.size() - 1).getId()))
-                        .get(pageList.get(pageList.size() - 1).getId()))
+        Map<Long, PostPO> postById = list.stream().collect(Collectors.toMap(PostPO::getId, post -> post, (left, right) -> left));
+        List<Long> postIds = list.stream().map(PostPO::getId).toList();
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(postIds);
+        Map<Long, String> extJson = extensionMapper.selectBatchIds(postIds).stream()
+                .collect(Collectors.toMap(PostExtensionPO::getPostId, PostExtensionPO::getExtJson, (a, b) -> a));
+        List<PostBriefDTO> visible = list.stream()
+                .map(p -> PostBriefDTO.builder()
+                        .id(p.getId())
+                        .authorId(p.getAuthorId())
+                        .postType(p.getPostType())
+                        .title(p.getTitle())
+                        .summary(summary(p.getContent()))
+                        .coverUrl(p.getCoverUrl())
+                        .extJson(extJson.get(p.getId()))
+                        .tags(tags.getOrDefault(p.getId(), List.of()))
+                        .createTime(p.getCreateTime())
+                        .build())
+                .toList();
+        enrichBriefs(visible);
+        visible = visible.stream()
+                .filter(post -> !PublicContentFilter.isSyntheticPost(post))
+                .toList();
+        boolean visibleHasMore = visible.size() > size;
+        boolean rawHasMore = list.size() > size;
+        List<PostBriefDTO> items = visibleHasMore ? visible.subList(0, size) : visible;
+        PostPO cursorPost = null;
+        if (visibleHasMore && !items.isEmpty()) {
+            cursorPost = postById.get(items.get(items.size() - 1).getId());
+        } else if (rawHasMore) {
+            cursorPost = list.get(list.size() - 1);
+        }
+        boolean hasMore = visibleHasMore || rawHasMore;
+        String next = hasMore && cursorPost != null
+                ? HotCursor.of(cursorPost,
+                batchGetCounters(List.of(cursorPost.getId())).get(cursorPost.getId()))
                 : null;
-        return PageResult.of(page.getItems(), next, hasMore);
+        return PageResult.of(items, next, hasMore);
     }
 
     private int pageSize(int size) {
         return Math.max(1, Math.min(size, 100));
+    }
+
+    private int scanSize(int pageSize) {
+        return Math.min(pageSize * 3 + 1, 200);
+    }
+
+    private List<Post> scanPublicPosts(Long authorId, Long tagId, Integer postType, long cursor, int pageSize) {
+        int scanLimit = scanSize(pageSize);
+        int maxRows = Math.min(MAX_SYNTHETIC_SCAN_ROWS,
+                Math.max(scanLimit, scanLimit * SYNTHETIC_SCAN_MULTIPLIER));
+        List<Post> scanned = new ArrayList<>();
+        long scanCursor = cursor;
+        while (scanned.size() < maxRows) {
+            int remaining = Math.min(scanLimit, maxRows - scanned.size());
+            List<Post> batch = postRepo.findPosts(authorId, tagId, postType, scanCursor, remaining);
+            if (batch.isEmpty()) {
+                break;
+            }
+            scanned.addAll(batch);
+            if (batch.size() < remaining || hasVisiblePageAfterSyntheticFiltering(scanned, pageSize)) {
+                break;
+            }
+            Long nextCursor = nextScanCursor(batch.get(batch.size() - 1));
+            if (nextCursor == null || nextCursor == scanCursor) {
+                break;
+            }
+            scanCursor = nextCursor;
+        }
+        return scanned;
+    }
+
+    private boolean hasVisiblePageAfterSyntheticFiltering(List<Post> posts, int pageSize) {
+        if (posts == null || posts.isEmpty()) {
+            return false;
+        }
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.stream().map(Post::getId).toList());
+        Map<Long, com.offerlab.community.user.api.dto.UserBriefDTO> authors = userFacade.batchGetUserBriefs(
+                posts.stream()
+                        .map(Post::getAuthorId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()));
+        int visible = 0;
+        for (Post post : posts) {
+            PostBriefDTO brief = toBrief(post, tags.getOrDefault(post.getId(), List.of()));
+            brief.setAuthor(authors.get(post.getAuthorId()));
+            if (!PublicContentFilter.isSyntheticPost(brief) && ++visible >= pageSize) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Long nextScanCursor(Post post) {
+        if (post == null) {
+            return null;
+        }
+        String cursor = listCursor(post.getCreateTime(), post.getId());
+        if (cursor == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(cursor);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private PostBriefDTO toBrief(Post p) {

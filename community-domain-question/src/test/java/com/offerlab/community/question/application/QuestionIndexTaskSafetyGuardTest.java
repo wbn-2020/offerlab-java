@@ -31,6 +31,8 @@ class QuestionIndexTaskSafetyGuardTest {
         assertTrue(taskService.contains("STATUS_RUNNING"), "rebuild task must expose running status");
         assertTrue(taskService.contains("STATUS_SUCCEEDED"), "rebuild task must expose succeeded status");
         assertTrue(taskService.contains("STATUS_FAILED"), "rebuild task must expose failed status");
+        assertTrue(taskService.contains("rebuildSubmitLock"), "rebuild submission must be serialized in-process");
+        assertTrue(taskService.contains("findActiveRebuildTask"), "rebuild submission must reuse active pending/running tasks");
         assertTrue(taskService.contains("retryTask"), "failed rebuild task must be manually retryable");
         assertTrue(controller.contains("/questions/index-tasks/{taskId}/retry"), "admin API must expose rebuild task retry");
         assertTrue(retryService.contains("@Scheduled(fixedDelay = 5000)"), "question ES retry service must replay due tasks");

@@ -27,8 +27,15 @@ import com.offerlab.community.search.infrastructure.persistence.mapper.SearchInd
 import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRetryTaskPO;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.util.StringUtils;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,6 +54,7 @@ import java.util.Objects;
 @RestController
 @RequestMapping("/api/v1/ops")
 @RequiredArgsConstructor
+@Validated
 public class OpsController {
 
     private final PostSearchIndexer indexer;
@@ -115,7 +123,8 @@ public class OpsController {
     }
 
     @PostMapping("/outbox/{id}/retry")
-    public Result<Map<String, Object>> retryOutbox(@PathVariable Long id) {
+    public Result<Map<String, Object>> retryOutbox(@PathVariable Long id,
+                                                   @Valid @RequestBody(required = false) ActionRemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
         OutboxMessage message = outboxMessageMapper.findById(id);
@@ -125,26 +134,34 @@ public class OpsController {
         if (message.getMsgStatus() == null || message.getMsgStatus() != 2) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
+        adminAuditService.requireWritable("OUTBOX_RETRY", "OUTBOX", id);
         int updated = outboxMessageMapper.markFailedForRetry(id);
-        adminAuditService.record(uid, "OUTBOX_RETRY", "OUTBOX", id, message, Map.of("retried", updated > 0), null);
+        adminAuditService.recordRequired(uid, "OUTBOX_RETRY", "OUTBOX", id, message,
+                Map.of("retried", updated > 0), actionRemark(request, null));
         return Result.ok(Map.of("id", id, "retried", updated > 0));
     }
 
     @PostMapping("/outbox/retry-batch")
-    public Result<Map<String, Object>> retryOutboxBatch(@RequestBody OutboxRetryBatchRequest request) {
+    public Result<Map<String, Object>> retryOutboxBatch(@Valid @RequestBody OutboxRetryBatchRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
-        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
-                .filter(id -> id != null && id > 0)
+        List<Long> ids = request.ids().stream()
                 .distinct()
-                .limit(100)
                 .toList();
-        if (ids.isEmpty()) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
+        adminAuditService.requireWritable("OUTBOX_RETRY_BATCH", "OUTBOX", null);
         int updated = outboxMessageMapper.markFailedForRetryBatch(ids);
-        adminAuditService.record(uid, "OUTBOX_RETRY_BATCH", "OUTBOX", null, ids, Map.of("retried", updated), null);
+        adminAuditService.recordRequired(uid, "OUTBOX_RETRY_BATCH", "OUTBOX", null, ids,
+                Map.of("retried", updated), auditRemark(request.remark(), null));
         return Result.ok(Map.of("requested", ids.size(), "retried", updated));
+    }
+
+    @PostMapping("/outbox/retry-batch/preview")
+    public Result<Map<String, Object>> previewOutboxRetryBatch(@Valid @RequestBody OutboxRetryBatchRequest request) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        List<Long> ids = request.ids().stream()
+                .distinct()
+                .toList();
+        return Result.ok(previewOutboxRetry(ids));
     }
 
     @GetMapping("/admins")
@@ -154,38 +171,37 @@ public class OpsController {
     }
 
     @PostMapping("/admins")
-    public Result<Map<String, Object>> addAdmin(@RequestBody AdminRequest request) {
+    public Result<Map<String, Object>> addAdmin(@Valid @RequestBody AdminRequest request) {
         Long operatorUid = UserContext.require();
         adminPermissionService.requireAdmin(operatorUid);
-        Long targetUid = requireTargetUid(request);
-        String roleCode = normalizeRoleCode(request == null ? null : request.roleCode());
-        String remark = cleanRemark(request == null ? null : request.remark());
+        Long targetUid = request.uid();
+        String roleCode = normalizeRoleCode(request.roleCode());
+        String remark = cleanRemark(request.remark());
         int updated = adminRoleMapper.upsertAdmin(targetUid, roleCode, remark, operatorUid);
         adminAuditService.record(operatorUid, "ADMIN_ROLE_UPSERT", "ADMIN_ROLE", targetUid + ":" + roleCode, null,
-                Map.of("uid", targetUid, "roleCode", roleCode, "enabled", true), remark);
+                Map.of("uid", targetUid, "roleCode", roleCode, "enabled", true),
+                auditRemark(request.auditRemark(), remark));
         return Result.ok(Map.of("uid", targetUid, "roleCode", roleCode, "enabled", true, "updated", updated > 0));
     }
 
     @PostMapping("/admins/{uid}/status")
-    public Result<Map<String, Object>> updateAdminStatus(@PathVariable Long uid,
-                                                        @RequestBody AdminStatusRequest request) {
+    public Result<Map<String, Object>> updateAdminStatus(@PathVariable @Positive Long uid,
+                                                        @Valid @RequestBody AdminStatusRequest request) {
         Long operatorUid = UserContext.require();
         adminPermissionService.requireAdmin(operatorUid);
-        if (uid == null || uid <= 0) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
-        String roleCode = normalizeRoleCode(request == null ? null : request.roleCode());
-        int enabled = request != null && Boolean.TRUE.equals(request.enabled()) ? 1 : 0;
+        String roleCode = normalizeRoleCode(request.roleCode());
+        int enabled = Boolean.TRUE.equals(request.enabled()) ? 1 : 0;
         if (enabled == 0 && AdminPermissionService.ROLE_ADMIN.equals(roleCode)
                 && Objects.equals(uid, operatorUid) && adminRoleMapper.countEnabledAdmins() <= 1) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
-        int updated = adminRoleMapper.updateAdminStatus(uid, roleCode, enabled, cleanRemark(request == null ? null : request.remark()), operatorUid);
+        int updated = adminRoleMapper.updateAdminStatus(uid, roleCode, enabled, cleanRemark(request.remark()), operatorUid);
         if (updated == 0) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         adminAuditService.record(operatorUid, "ADMIN_ROLE_STATUS", "ADMIN_ROLE", uid + ":" + roleCode, null,
-                Map.of("uid", uid, "roleCode", roleCode, "enabled", enabled == 1), request == null ? null : request.remark());
+                Map.of("uid", uid, "roleCode", roleCode, "enabled", enabled == 1),
+                auditRemark(request.auditRemark(), request.remark()));
         return Result.ok(Map.of("uid", uid, "roleCode", roleCode, "enabled", enabled == 1, "updated", true));
     }
 
@@ -218,9 +234,10 @@ public class OpsController {
 
     @GetMapping("/search/analytics")
     public Result<SearchAnalyticsDTO> searchAnalytics(@RequestParam(defaultValue = "30") int days,
-                                                      @RequestParam(defaultValue = "10") int limit) {
+                                                      @RequestParam(defaultValue = "10") int limit,
+                                                      @RequestParam(defaultValue = "false") boolean includeTestData) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
-        return Result.ok(searchAnalyticsService.summary(days, limit));
+        return Result.ok(searchAnalyticsService.summary(days, limit, includeTestData));
     }
 
     @GetMapping("/search-index-retry-tasks/status")
@@ -247,7 +264,8 @@ public class OpsController {
     }
 
     @PostMapping("/search-index-retry-tasks/{id}/replay")
-    public Result<Map<String, Object>> replaySearchIndexRetryTask(@PathVariable Long id) {
+    public Result<Map<String, Object>> replaySearchIndexRetryTask(@PathVariable Long id,
+                                                                  @Valid @RequestBody(required = false) ActionRemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
         SearchIndexRetryTaskPO task = searchIndexRetryService.findById(id);
@@ -257,28 +275,34 @@ public class OpsController {
         if (task.getTaskStatus() == null || task.getTaskStatus() != SearchIndexRetryTaskMapper.STATUS_FAILED) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
+        adminAuditService.requireWritable("SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id);
         boolean replayed = searchIndexRetryService.replayFailed(id);
-        adminAuditService.record(uid, "SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id,
-                task, Map.of("replayed", replayed), null);
+        adminAuditService.recordRequired(uid, "SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id,
+                task, Map.of("replayed", replayed), actionRemark(request, null));
         return Result.ok(Map.of("id", id, "replayed", replayed));
     }
 
     @PostMapping("/search-index-retry-tasks/replay-batch")
-    public Result<Map<String, Object>> replaySearchIndexRetryTasks(@RequestBody SearchIndexRetryBatchRequest request) {
+    public Result<Map<String, Object>> replaySearchIndexRetryTasks(@Valid @RequestBody SearchIndexRetryBatchRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
-        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
-                .filter(id -> id != null && id > 0)
+        List<Long> ids = request.ids().stream()
                 .distinct()
-                .limit(100)
                 .toList();
-        if (ids.isEmpty()) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
+        adminAuditService.requireWritable("SEARCH_INDEX_RETRY_REPLAY_BATCH", "SEARCH_INDEX_RETRY_TASK", null);
         int replayed = searchIndexRetryService.replayFailedBatch(ids);
-        adminAuditService.record(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", "SEARCH_INDEX_RETRY_TASK", null,
-                ids, Map.of("replayed", replayed), null);
+        adminAuditService.recordRequired(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", "SEARCH_INDEX_RETRY_TASK", null,
+                ids, Map.of("replayed", replayed), auditRemark(request.remark(), null));
         return Result.ok(Map.of("requested", ids.size(), "replayed", replayed));
+    }
+
+    @PostMapping("/search-index-retry-tasks/replay-batch/preview")
+    public Result<Map<String, Object>> previewSearchIndexRetryBatch(@Valid @RequestBody SearchIndexRetryBatchRequest request) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        List<Long> ids = request.ids().stream()
+                .distinct()
+                .toList();
+        return Result.ok(previewSearchIndexRetry(ids));
     }
 
     @GetMapping("/moderation/keywords")
@@ -304,7 +328,8 @@ public class OpsController {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         ModerationKeyword keyword = moderationAdminService.saveKeyword(null, cmd, uid);
-        adminAuditService.record(uid, "MODERATION_KEYWORD_CREATE", "MODERATION_KEYWORD", keyword.getId(), null, keyword, null);
+        adminAuditService.record(uid, "MODERATION_KEYWORD_CREATE", "MODERATION_KEYWORD", keyword.getId(), null,
+                keyword, auditRemark(cmd == null ? null : cmd.getAuditRemark(), cmd == null ? null : cmd.getRemark()));
         return Result.ok(keyword);
     }
 
@@ -314,7 +339,8 @@ public class OpsController {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         ModerationKeyword keyword = moderationAdminService.saveKeyword(id, cmd, uid);
-        adminAuditService.record(uid, "MODERATION_KEYWORD_UPDATE", "MODERATION_KEYWORD", id, null, keyword, null);
+        adminAuditService.record(uid, "MODERATION_KEYWORD_UPDATE", "MODERATION_KEYWORD", id, null,
+                keyword, auditRemark(cmd == null ? null : cmd.getAuditRemark(), cmd == null ? null : cmd.getRemark()));
         return Result.ok(keyword);
     }
 
@@ -340,27 +366,32 @@ public class OpsController {
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         UserModerationState state = moderationAdminService.saveUserState(cmd, uid);
         enrichUserBrief(state);
-        adminAuditService.record(uid, "USER_MODERATION_STATE", "USER", state.getUid(), null, state, cmd == null ? null : cmd.getReason());
+        adminAuditService.record(uid, "USER_MODERATION_STATE", "USER", state.getUid(), null, state,
+                auditRemark(cmd == null ? null : cmd.getAuditRemark(), cmd == null ? null : cmd.getReason()));
         return Result.ok(state);
     }
 
     @PostMapping("/moderation/users/{targetUid}/clear-mute")
-    public Result<UserModerationState> clearModerationUserMute(@PathVariable Long targetUid) {
+    public Result<UserModerationState> clearModerationUserMute(@PathVariable Long targetUid,
+                                                               @Valid @RequestBody(required = false) ActionRemarkRequest request) {
         Long operatorUid = UserContext.require();
         adminPermissionService.requireScope(operatorUid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        UserModerationState state = moderationAdminService.clearUserMute(targetUid, operatorUid);
+        String remark = actionRemark(request, "解除禁言");
+        UserModerationState state = moderationAdminService.clearUserMute(targetUid, operatorUid, remark);
         enrichUserBrief(state);
-        adminAuditService.record(operatorUid, "USER_MODERATION_CLEAR_MUTE", "USER", targetUid, null, state, "解除禁言");
+        adminAuditService.record(operatorUid, "USER_MODERATION_CLEAR_MUTE", "USER", targetUid, null, state, remark);
         return Result.ok(state);
     }
 
     @PostMapping("/moderation/users/{targetUid}/clear-ban")
-    public Result<UserModerationState> clearModerationUserBan(@PathVariable Long targetUid) {
+    public Result<UserModerationState> clearModerationUserBan(@PathVariable Long targetUid,
+                                                              @Valid @RequestBody(required = false) ActionRemarkRequest request) {
         Long operatorUid = UserContext.require();
         adminPermissionService.requireScope(operatorUid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        UserModerationState state = moderationAdminService.clearUserBan(targetUid, operatorUid);
+        String remark = actionRemark(request, "解除封禁");
+        UserModerationState state = moderationAdminService.clearUserBan(targetUid, operatorUid, remark);
         enrichUserBrief(state);
-        adminAuditService.record(operatorUid, "USER_MODERATION_CLEAR_BAN", "USER", targetUid, null, state, "解除封禁");
+        adminAuditService.record(operatorUid, "USER_MODERATION_CLEAR_BAN", "USER", targetUid, null, state, remark);
         return Result.ok(state);
     }
 
@@ -409,12 +440,89 @@ public class OpsController {
         return counts;
     }
 
+    private Map<String, Object> previewOutboxRetry(List<Long> ids) {
+        List<Map<String, Object>> items = ids.stream()
+                .map(id -> {
+                    OutboxMessage message = outboxMessageMapper.findById(id);
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", id);
+                    if (message == null) {
+                        item.put("eligible", false);
+                        item.put("reason", "NOT_FOUND");
+                        item.put("reasonText", "消息不存在");
+                        return item;
+                    }
+                    boolean eligible = message.getMsgStatus() != null && message.getMsgStatus() == 2;
+                    item.put("eligible", eligible);
+                    item.put("reason", eligible ? "READY" : "STATUS_NOT_FAILED");
+                    item.put("reasonText", eligible ? "失败消息，可重试" : "当前状态不是失败，不会被重试");
+                    item.put("status", message.getMsgStatus());
+                    item.put("statusText", statusName(message.getMsgStatus()));
+                    item.put("objectLabel", message.getTopic() + ":" + message.getAggregateId());
+                    item.put("retryCount", message.getRetryCount());
+                    return item;
+                })
+                .toList();
+        return previewResult("OUTBOX_RETRY_BATCH", ids, items);
+    }
+
+    private Map<String, Object> previewSearchIndexRetry(List<Long> ids) {
+        List<Map<String, Object>> items = ids.stream()
+                .map(id -> {
+                    SearchIndexRetryTaskPO task = searchIndexRetryService.findById(id);
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", id);
+                    if (task == null) {
+                        item.put("eligible", false);
+                        item.put("reason", "NOT_FOUND");
+                        item.put("reasonText", "补偿任务不存在");
+                        return item;
+                    }
+                    boolean eligible = task.getTaskStatus() != null && task.getTaskStatus() == SearchIndexRetryTaskMapper.STATUS_FAILED;
+                    item.put("eligible", eligible);
+                    item.put("reason", eligible ? "READY" : "STATUS_NOT_FAILED");
+                    item.put("reasonText", eligible ? "失败任务，可重放" : "当前状态不是失败，不会被重放");
+                    item.put("status", task.getTaskStatus());
+                    item.put("statusText", searchRetryStatusName(task.getTaskStatus()));
+                    item.put("objectLabel", "post:" + task.getPostId());
+                    item.put("operation", task.getOperation());
+                    item.put("retryCount", task.getRetryCount());
+                    return item;
+                })
+                .toList();
+        return previewResult("SEARCH_INDEX_RETRY_REPLAY_BATCH", ids, items);
+    }
+
+    private Map<String, Object> previewResult(String operation, List<Long> ids, List<Map<String, Object>> items) {
+        long eligible = items.stream()
+                .filter(item -> Boolean.TRUE.equals(item.get("eligible")))
+                .count();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("operation", operation);
+        result.put("requested", ids.size());
+        result.put("eligible", eligible);
+        result.put("skipped", ids.size() - eligible);
+        result.put("items", items);
+        return result;
+    }
+
     private static String statusName(Object status) {
         int value = status instanceof Number number ? number.intValue() : -1;
         return switch (value) {
             case 0 -> "pending";
             case 1 -> "sent";
             case 2 -> "failed";
+            default -> "unknown";
+        };
+    }
+
+    private static String searchRetryStatusName(Object status) {
+        int value = status instanceof Number number ? number.intValue() : -1;
+        return switch (value) {
+            case SearchIndexRetryTaskMapper.STATUS_PENDING -> "pending";
+            case SearchIndexRetryTaskMapper.STATUS_DONE -> "done";
+            case SearchIndexRetryTaskMapper.STATUS_FAILED -> "failed";
+            case SearchIndexRetryTaskMapper.STATUS_RUNNING -> "running";
             default -> "unknown";
         };
     }
@@ -465,13 +573,6 @@ public class OpsController {
         }
     }
 
-    private static Long requireTargetUid(AdminRequest request) {
-        if (request == null || request.uid() == null || request.uid() <= 0) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
-        return request.uid();
-    }
-
     private static String cleanRemark(String remark) {
         if (remark == null) {
             return "";
@@ -481,6 +582,29 @@ public class OpsController {
             return value.substring(0, 200);
         }
         return value;
+    }
+
+    private static String cleanAuditRemark(String remark) {
+        if (!StringUtils.hasText(remark)) {
+            return null;
+        }
+        String value = remark.trim();
+        if (value.length() > 500) {
+            return value.substring(0, 500);
+        }
+        return value;
+    }
+
+    private static String auditRemark(String primary, String fallback) {
+        String value = cleanAuditRemark(primary);
+        return value == null ? cleanAuditRemark(fallback) : value;
+    }
+
+    private static String actionRemark(ActionRemarkRequest request, String fallback) {
+        if (request == null) {
+            return cleanAuditRemark(fallback);
+        }
+        return auditRemark(request.remark(), request.reason() == null ? fallback : request.reason());
     }
 
     private static Integer normalizeSearchRetryStatus(Integer status) {
@@ -512,15 +636,32 @@ public class OpsController {
         throw new BizException(ErrorCode.PARAM_ERROR);
     }
 
-    public record AdminRequest(Long uid, String roleCode, String remark) {
+    public record AdminRequest(
+            @NotNull @Positive Long uid,
+            @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
+            @Size(max = 200) String remark,
+            @Size(max = 500) String auditRemark) {
     }
 
-    public record AdminStatusRequest(Boolean enabled, String roleCode, String remark) {
+    public record AdminStatusRequest(
+            @NotNull Boolean enabled,
+            @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
+            @Size(max = 200) String remark,
+            @Size(max = 500) String auditRemark) {
     }
 
-    public record OutboxRetryBatchRequest(List<Long> ids) {
+    public record OutboxRetryBatchRequest(
+            @NotEmpty @Size(max = 100) List<@NotNull @Positive Long> ids,
+            @Size(max = 500) String remark) {
     }
 
-    public record SearchIndexRetryBatchRequest(List<Long> ids) {
+    public record SearchIndexRetryBatchRequest(
+            @NotEmpty @Size(max = 100) List<@NotNull @Positive Long> ids,
+            @Size(max = 500) String remark) {
+    }
+
+    public record ActionRemarkRequest(
+            @Size(max = 500) String remark,
+            @Size(max = 500) String reason) {
     }
 }

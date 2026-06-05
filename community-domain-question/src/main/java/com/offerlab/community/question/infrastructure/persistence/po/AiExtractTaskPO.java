@@ -17,6 +17,13 @@ public class AiExtractTaskPO {
     private Integer taskStatus;
     private Integer retryCount;
     private Integer questionCount;
+    private String provider;
+    private Boolean fallbackUsed;
+    private Long durationMs;
+    private Integer promptTokens;
+    private Integer completionTokens;
+    private Long estimatedCostMicros;
+    private String errorCode;
     private String errorMessage;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

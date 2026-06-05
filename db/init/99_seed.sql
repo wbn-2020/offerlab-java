@@ -3,30 +3,34 @@
 SET NAMES utf8mb4;
 USE offerlab;
 
-INSERT INTO t_tag (id, tag_name, tag_type, is_official) VALUES
-    (1001, 'Java', 1, 1),
-    (1002, 'Go', 1, 1),
-    (1003, 'Python', 1, 1),
-    (1004, 'Spring', 1, 1),
-    (1005, 'MySQL', 1, 1),
-    (1006, 'Redis', 1, 1),
-    (1007, 'Kafka', 1, 1),
-    (1008, 'Elasticsearch', 1, 1),
-    (1009, 'Netty', 1, 1),
-    (1010, 'JVM', 1, 1),
-    (2001, '字节跳动', 2, 1),
-    (2002, '阿里巴巴', 2, 1),
-    (2003, '腾讯', 2, 1),
-    (2004, '美团', 2, 1),
-    (2005, '小红书', 2, 1),
-    (2006, '百度', 2, 1),
-    (2007, '深测科技', 2, 1),
-    (3001, 'Java 后端', 3, 1),
-    (3002, 'Go 后端', 3, 1),
-    (3003, '前端', 3, 1),
-    (3004, '算法工程师', 3, 1),
-    (3005, '后端工程师', 3, 1)
-ON DUPLICATE KEY UPDATE tag_name = VALUES(tag_name);
+INSERT INTO t_tag (id, tag_name, tag_type, use_count, is_official) VALUES
+    (1001, 'Java', 1, 5, 1),
+    (1002, 'Go', 1, 0, 1),
+    (1003, 'Python', 1, 0, 1),
+    (1004, 'Spring', 1, 3, 1),
+    (1005, 'MySQL', 1, 3, 1),
+    (1006, 'Redis', 1, 4, 1),
+    (1007, 'Kafka', 1, 3, 1),
+    (1008, 'Elasticsearch', 1, 0, 1),
+    (1009, 'Netty', 1, 0, 1),
+    (1010, 'JVM', 1, 2, 1),
+    (2001, '字节跳动', 2, 1, 1),
+    (2002, '阿里巴巴', 2, 1, 1),
+    (2003, '腾讯', 2, 0, 1),
+    (2004, '美团', 2, 1, 1),
+    (2005, '小红书', 2, 0, 1),
+    (2006, '百度', 2, 0, 1),
+    (2007, '深测科技', 2, 3, 1),
+    (3001, 'Java 后端', 3, 4, 1),
+    (3002, 'Go 后端', 3, 0, 1),
+    (3003, '前端', 3, 0, 1),
+    (3004, '算法工程师', 3, 0, 1),
+    (3005, '后端工程师', 3, 2, 1)
+ON DUPLICATE KEY UPDATE
+    tag_name = VALUES(tag_name),
+    tag_type = VALUES(tag_type),
+    use_count = GREATEST(use_count, VALUES(use_count)),
+    is_official = VALUES(is_official);
 
 -- 本地演示账号：demo.admin@offerlab.local / OfferLab123
 INSERT INTO t_user_account
@@ -64,7 +68,7 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO t_user_counter
     (user_id, follower_count, following_count, post_count, like_received)
 VALUES
-    (990000000000000001, 12, 5, 3, 86)
+    (990000000000000001, 18, 7, 6, 196)
 ON DUPLICATE KEY UPDATE
     follower_count = VALUES(follower_count),
     following_count = VALUES(following_count),
@@ -87,7 +91,12 @@ INSERT INTO t_company_alias
 VALUES
     (990010000000000001, '深测科技', '深测科技', 1),
     (990010000000000002, '深测科技', '深测', 1),
-    (990010000000000003, '深测科技', '深测科技有限公司', 1)
+    (990010000000000003, '深测科技', '深测科技有限公司', 1),
+    (990010000000000004, '字节跳动', '字节跳动', 1),
+    (990010000000000005, '字节跳动', 'ByteDance', 1),
+    (990010000000000006, '阿里巴巴', '阿里巴巴', 1),
+    (990010000000000007, '阿里巴巴', '阿里', 1),
+    (990010000000000008, '美团', '美团', 1)
 ON DUPLICATE KEY UPDATE
     canonical_company = VALUES(canonical_company),
     status = VALUES(status),
@@ -134,6 +143,45 @@ VALUES
         NOW(3) - INTERVAL 2 DAY,
         NOW(3),
         0
+    ),
+    (
+        990100000000000004,
+        990000000000000001,
+        1,
+        '字节跳动 Java 后端二面复盘：高并发接口、限流和降级',
+        '二面重点讨论活动页高并发接口设计，包含热点缓存预热、令牌桶限流、Redis 兜底、Spring 事务边界和 Kafka 异步削峰。面试官要求说明每个方案的取舍、监控指标和故障恢复流程。',
+        NULL,
+        1,
+        1,
+        NOW(3) - INTERVAL 1 DAY,
+        NOW(3),
+        0
+    ),
+    (
+        990100000000000005,
+        990000000000000001,
+        1,
+        '美团后端工程师面经：MySQL 索引、订单一致性和压测复盘',
+        '这一轮围绕订单链路展开，重点问到 MySQL 组合索引设计、Redis 缓存穿透、库存一致性、接口压测指标以及如何把一次性能优化讲成可复盘的项目成果。',
+        NULL,
+        1,
+        1,
+        NOW(3) - INTERVAL 18 HOUR,
+        NOW(3),
+        0
+    ),
+    (
+        990100000000000006,
+        990000000000000001,
+        1,
+        '阿里巴巴 Java 后端终面准备：项目稳定性、消息链路和 STAR 表达',
+        '终面更关注项目深度和表达质量，需要把 JVM 排查、Kafka 消息补偿、Spring 服务拆分和线上稳定性治理串成完整案例，并用 STAR 说明个人贡献和量化结果。',
+        NULL,
+        1,
+        1,
+        NOW(3) - INTERVAL 6 HOUR,
+        NOW(3),
+        0
     )
 ON DUPLICATE KEY UPDATE
     author_id = VALUES(author_id),
@@ -152,7 +200,10 @@ INSERT INTO t_post_extension
 VALUES
     (990100000000000001, 1, JSON_OBJECT('company', '深测科技', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1)),
     (990100000000000002, 1, JSON_OBJECT('company', '深测科技', 'position', '后端工程师', 'yearsOfExp', 4, 'interviewResult', 2)),
-    (990100000000000003, 1, JSON_OBJECT('company', '深测科技', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1))
+    (990100000000000003, 1, JSON_OBJECT('company', '深测科技', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1)),
+    (990100000000000004, 1, JSON_OBJECT('company', '字节跳动', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1)),
+    (990100000000000005, 1, JSON_OBJECT('company', '美团', 'position', '后端工程师', 'yearsOfExp', 4, 'interviewResult', 1)),
+    (990100000000000006, 1, JSON_OBJECT('company', '阿里巴巴', 'position', 'Java 后端', 'yearsOfExp', 5, 'interviewResult', 2))
 ON DUPLICATE KEY UPDATE
     post_type = VALUES(post_type),
     ext_json = VALUES(ext_json),
@@ -163,7 +214,10 @@ INSERT INTO t_post_counter
 VALUES
     (990100000000000001, 238, 31, 9, 18, 4),
     (990100000000000002, 192, 24, 7, 15, 3),
-    (990100000000000003, 156, 19, 5, 11, 2)
+    (990100000000000003, 156, 19, 5, 11, 2),
+    (990100000000000004, 286, 42, 11, 26, 6),
+    (990100000000000005, 224, 35, 8, 21, 4),
+    (990100000000000006, 198, 28, 6, 19, 3)
 ON DUPLICATE KEY UPDATE
     view_count = VALUES(view_count),
     like_count = VALUES(like_count),
@@ -188,7 +242,25 @@ VALUES
     (990110000000000011, 990100000000000003, 1010),
     (990110000000000012, 990100000000000003, 1005),
     (990110000000000013, 990100000000000003, 2007),
-    (990110000000000014, 990100000000000003, 3001)
+    (990110000000000014, 990100000000000003, 3001),
+    (990110000000000015, 990100000000000003, 1001),
+    (990110000000000016, 990100000000000004, 1001),
+    (990110000000000017, 990100000000000004, 1004),
+    (990110000000000018, 990100000000000004, 1006),
+    (990110000000000019, 990100000000000004, 1007),
+    (990110000000000020, 990100000000000004, 2001),
+    (990110000000000021, 990100000000000004, 3001),
+    (990110000000000022, 990100000000000005, 1001),
+    (990110000000000023, 990100000000000005, 1005),
+    (990110000000000024, 990100000000000005, 1006),
+    (990110000000000025, 990100000000000005, 2004),
+    (990110000000000026, 990100000000000005, 3005),
+    (990110000000000027, 990100000000000006, 1001),
+    (990110000000000028, 990100000000000006, 1004),
+    (990110000000000029, 990100000000000006, 1007),
+    (990110000000000030, 990100000000000006, 1010),
+    (990110000000000031, 990100000000000006, 2002),
+    (990110000000000032, 990100000000000006, 3001)
 ON DUPLICATE KEY UPDATE
     post_id = VALUES(post_id),
     tag_id = VALUES(tag_id);

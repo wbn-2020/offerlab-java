@@ -28,20 +28,28 @@ public class QuestionIndexTaskService {
 
     private final QuestionSearchIndexer indexer;
     private final QuestionIndexTaskMapper taskMapper;
+    private final Object rebuildSubmitLock = new Object();
     private Executor rebuildExecutor = ForkJoinPool.commonPool();
 
     public QuestionIndexTask submitRebuildTask(Long operatorUid) {
         ensureTableReady();
-        QuestionIndexTaskPO task = new QuestionIndexTaskPO();
-        task.setTaskId(UUID.randomUUID().toString());
-        task.setTaskType(TYPE_REBUILD);
-        task.setTaskStatus(STATUS_PENDING);
-        task.setOperatorUid(operatorUid);
-        task.setAccepted(0);
-        task.setIndexed(0);
-        task.setFailed(0);
-        task.setTotal(0);
-        taskMapper.insertTask(task);
+        QuestionIndexTaskPO task;
+        synchronized (rebuildSubmitLock) {
+            QuestionIndexTaskPO activeTask = taskMapper.findActiveRebuildTask(TYPE_REBUILD);
+            if (activeTask != null) {
+                return snapshot(activeTask);
+            }
+            task = new QuestionIndexTaskPO();
+            task.setTaskId(UUID.randomUUID().toString());
+            task.setTaskType(TYPE_REBUILD);
+            task.setTaskStatus(STATUS_PENDING);
+            task.setOperatorUid(operatorUid);
+            task.setAccepted(0);
+            task.setIndexed(0);
+            task.setFailed(0);
+            task.setTotal(0);
+            taskMapper.insertTask(task);
+        }
         CompletableFuture.runAsync(() -> runRebuild(task.getTaskId()), rebuildExecutor);
         return snapshot(taskMapper.findByTaskId(task.getTaskId()));
     }

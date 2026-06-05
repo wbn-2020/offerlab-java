@@ -11,7 +11,9 @@ import com.offerlab.community.feed.controller.FeedController;
 import com.offerlab.community.interaction.controller.InteractionController;
 import com.offerlab.community.notification.controller.NotificationController;
 import com.offerlab.community.post.controller.PostController;
+import com.offerlab.community.question.controller.QuestionAdminController;
 import com.offerlab.community.question.controller.QuestionController;
+import com.offerlab.community.search.controller.SearchAdminController;
 import com.offerlab.community.user.controller.AuthController;
 import com.offerlab.community.user.controller.UserController;
 import org.junit.jupiter.api.Test;
@@ -68,6 +70,12 @@ class ProductionSecurityGuardTest {
         assertRateLimited(UserController.class, "updatePrivacySettings", com.offerlab.community.user.api.dto.UserPrivacySettingDTO.class);
         assertRateLimited(UserController.class, "follow", Long.class);
         assertRateLimited(UserController.class, "unfollow", Long.class);
+    }
+
+    @Test
+    void riskyAdminRebuildEndpointsAreRateLimitedFailClosed() throws Exception {
+        assertRateLimitedFailClosed(SearchAdminController.class, "rebuildPostIndex", SearchAdminController.RebuildRequest.class);
+        assertRateLimitedFailClosed(QuestionAdminController.class, "rebuildQuestionIndexTask", QuestionAdminController.RemarkRequest.class);
     }
 
     @Test
@@ -243,6 +251,14 @@ class ProductionSecurityGuardTest {
         RateLimit rateLimit = method.getAnnotation(RateLimit.class);
         org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, controllerClass.getSimpleName() + "." + methodName + " must be rate limited");
         org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), controllerClass.getSimpleName() + "." + methodName + " rate limit key must not be blank");
+    }
+
+    private static void assertRateLimitedFailClosed(Class<?> controllerClass, String methodName, Class<?>... parameterTypes) throws Exception {
+        Method method = controllerClass.getDeclaredMethod(methodName, parameterTypes);
+        RateLimit rateLimit = method.getAnnotation(RateLimit.class);
+        org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, controllerClass.getSimpleName() + "." + methodName + " must be rate limited");
+        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), controllerClass.getSimpleName() + "." + methodName + " rate limit key must not be blank");
+        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.failOpen(), controllerClass.getSimpleName() + "." + methodName + " rate limit must fail closed");
     }
 
     private static void invokeValidateCorsOrigins(WebMvcConfig config) throws Exception {

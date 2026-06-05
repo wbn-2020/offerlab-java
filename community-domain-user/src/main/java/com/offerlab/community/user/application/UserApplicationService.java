@@ -28,6 +28,8 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * 用户应用服务：编排领域逻辑，事务边界
@@ -36,6 +38,7 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class UserApplicationService {
+    private static final Set<String> SYNTHETIC_MARKERS = Set.of("E2E", "SMOKE", "CODEX", "TESTDATA");
 
     private final UserRepository userRepo;
     private final FollowRepository followRepo;
@@ -229,8 +232,21 @@ public class UserApplicationService {
                 .filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))
                 .map(userFacade::getUserBrief)
                 .filter(java.util.Objects::nonNull)
+                .filter(user -> !isSyntheticUser(user))
                 .limit(limit)
                 .toList();
+    }
+
+    private static boolean isSyntheticUser(UserBriefDTO user) {
+        return containsSyntheticMarker(user.getNickname()) || containsSyntheticMarker(user.getBio());
+    }
+
+    private static boolean containsSyntheticMarker(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String upper = value.toUpperCase(Locale.ROOT);
+        return SYNTHETIC_MARKERS.stream().anyMatch(upper::contains);
     }
 
     private static UserPrivacySettingPO defaultPrivacySetting(Long uid) {

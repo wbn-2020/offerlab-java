@@ -13,6 +13,7 @@ import com.offerlab.community.interaction.infrastructure.persistence.mapper.Comm
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentReportMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentPO;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentReportPO;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
@@ -84,9 +85,17 @@ public class CommentReportService {
     }
 
     public List<CommentReportDTO> listRecent(Integer status, int limit) {
+        return listRecent(status, limit, false);
+    }
+
+    public List<CommentReportDTO> listRecent(Integer status, int limit, boolean includeTestData) {
         Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
-        return reportMapper.selectRecent(effectiveStatus, clampLimit(limit)).stream()
+        int safeLimit = clampLimit(limit);
+        int queryLimit = includeTestData ? safeLimit : clampLimit(safeLimit * 5);
+        return reportMapper.selectRecent(effectiveStatus, queryLimit).stream()
                 .map(this::toDto)
+                .filter(dto -> includeTestData || !isSyntheticReport(dto))
+                .limit(safeLimit)
                 .toList();
     }
 
@@ -200,6 +209,16 @@ public class CommentReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private boolean isSyntheticReport(CommentReportDTO dto) {
+        if (dto == null) {
+            return false;
+        }
+        return PublicContentFilter.isSyntheticText(dto.getPostTitle())
+                || PublicContentFilter.isSyntheticText(dto.getCommentSummary())
+                || PublicContentFilter.isSyntheticText(dto.getReason())
+                || PublicContentFilter.isSyntheticText(dto.getDetail());
     }
 
     private String summary(String value) {

@@ -19,7 +19,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final AuthInterceptor authInterceptor;
     private final Environment environment;
 
-    @Value("${offerlab.web.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174}")
+    @Value("${offerlab.web.cors.allowed-origins:http://localhost:*,http://127.0.0.1:*}")
     private String allowedOrigins;
 
     @PostConstruct

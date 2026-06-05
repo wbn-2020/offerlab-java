@@ -1,14 +1,14 @@
 package com.offerlab.community.question.controller;
 
-import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.Result;
-import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.question.api.dto.AiTaskDetailDTO;
 import com.offerlab.community.question.api.dto.AiTaskDTO;
+import com.offerlab.community.question.api.dto.AiTaskMetricsDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasCmd;
 import com.offerlab.community.question.api.dto.CompanyAliasCandidateDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasDTO;
@@ -16,9 +16,18 @@ import com.offerlab.community.question.api.dto.QuestionAdminUpdateCmd;
 import com.offerlab.community.question.api.dto.QuestionAdminQuery;
 import com.offerlab.community.question.api.dto.QuestionDTO;
 import com.offerlab.community.question.api.dto.QuestionDuplicateGroupDTO;
+import com.offerlab.community.question.application.QuestionConstants;
 import com.offerlab.community.question.application.QuestionFacade;
 import com.offerlab.community.question.application.QuestionIndexTaskService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,11 +38,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 @RestController
 @RequestMapping("/api/v1/admin")
 @RequiredArgsConstructor
+@Validated
 public class QuestionAdminController {
     private final QuestionFacade questionFacade;
     private final AdminPermissionService adminPermissionService;
@@ -41,9 +50,18 @@ public class QuestionAdminController {
     private final QuestionIndexTaskService questionIndexTaskService;
 
     @PostMapping("/posts/{postId}/extract-questions")
-    public Result<Map<String, Long>> extractPostQuestions(@PathVariable Long postId) {
-        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
-        return Result.ok(Map.of("taskId", questionFacade.extractPostQuestions(postId, true)));
+    public Result<Map<String, Long>> extractPostQuestions(@PathVariable @Positive Long postId) {
+        if (postId == null || postId <= 0) {
+            throw new IllegalArgumentException("postId must be positive");
+        }
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        adminAuditService.requireWritable("POST_QUESTION_EXTRACT_TASK", "AI_TASK", null);
+        Long taskId = questionFacade.extractPostQuestions(postId, true);
+        Map<String, Object> request = Map.of("postId", postId, "manual", true);
+        Map<String, Object> result = Map.of("taskId", taskId, "postId", postId, "manual", true);
+        adminAuditService.recordRequired(uid, "POST_QUESTION_EXTRACT_TASK", "AI_TASK", taskId, request, result, null);
+        return Result.ok(Map.of("taskId", taskId));
     }
 
     @GetMapping("/ai-tasks")
@@ -53,6 +71,12 @@ public class QuestionAdminController {
         return Result.ok(questionFacade.listTasks(status, limit));
     }
 
+    @GetMapping("/ai-tasks/metrics")
+    public Result<AiTaskMetricsDTO> getTaskMetrics(@RequestParam(defaultValue = "100") int limit) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        return Result.ok(questionFacade.getTaskMetrics(limit));
+    }
+
     @GetMapping("/ai-tasks/{id}")
     public Result<AiTaskDetailDTO> getTaskDetail(@PathVariable Long id) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -60,38 +84,50 @@ public class QuestionAdminController {
     }
 
     @PostMapping("/ai-tasks/{id}/retry")
-    public Result<AiTaskDTO> retryTask(@PathVariable Long id) {
+    public Result<AiTaskDTO> retryTask(@PathVariable Long id,
+                                       @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        adminAuditService.requireWritable("AI_TASK_RETRY", "AI_TASK", id);
         AiTaskDTO task = questionFacade.retryTask(id);
-        adminAuditService.record(uid, "AI_TASK_RETRY", "AI_TASK", id, null, task, null);
+        adminAuditService.recordRequired(uid, "AI_TASK_RETRY", "AI_TASK", id, null, task,
+                cleanRemark(request == null ? null : request.remark()));
         return Result.ok(task);
     }
 
     @PostMapping("/questions/rebuild")
-    public Result<Map<String, Object>> rebuildQuestions(@RequestParam(defaultValue = "100") int limit) {
+    public Result<Map<String, Object>> rebuildQuestions(@RequestParam(defaultValue = "100") int limit,
+                                                        @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        adminAuditService.requireWritable("QUESTION_REBUILD", "QUESTION", null);
         Map<String, Object> result = questionFacade.rebuildQuestions(limit);
-        adminAuditService.record(uid, "QUESTION_REBUILD", "QUESTION", null, Map.of("limit", limit), result, null);
+        adminAuditService.recordRequired(uid, "QUESTION_REBUILD", "QUESTION", null, Map.of("limit", limit), result,
+                cleanRemark(request == null ? null : request.remark()));
         return Result.ok(result);
     }
 
     @PostMapping("/questions/rebuild-index")
-    public Result<Map<String, Object>> rebuildQuestionIndex() {
+    public Result<Map<String, Object>> rebuildQuestionIndex(@Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        adminAuditService.requireWritable("QUESTION_INDEX_REBUILD", "QUESTION_INDEX", null);
         Map<String, Object> result = questionFacade.rebuildQuestionIndex();
-        adminAuditService.record(uid, "QUESTION_INDEX_REBUILD", "QUESTION_INDEX", null, null, result, null);
+        adminAuditService.recordRequired(uid, "QUESTION_INDEX_REBUILD", "QUESTION_INDEX", null, null, result,
+                cleanRemark(request == null ? null : request.remark()));
         return Result.ok(result);
     }
 
     @PostMapping("/questions/rebuild-index-task")
-    public Result<QuestionIndexTaskService.QuestionIndexTask> rebuildQuestionIndexTask() {
+    @RateLimit(key = "'question:index:rebuild:' + #uid", rate = 2, per = 3600, failOpen = false)
+    public Result<QuestionIndexTaskService.QuestionIndexTask> rebuildQuestionIndexTask(
+            @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        adminAuditService.requireWritable("QUESTION_INDEX_REBUILD_TASK", "QUESTION_INDEX", null);
         QuestionIndexTaskService.QuestionIndexTask task = questionIndexTaskService.submitRebuildTask(uid);
-        adminAuditService.record(uid, "QUESTION_INDEX_REBUILD_TASK", "QUESTION_INDEX", task.getTaskId(), null, task, null);
+        adminAuditService.recordRequired(uid, "QUESTION_INDEX_REBUILD_TASK", "QUESTION_INDEX", task.getTaskId(),
+                null, task, cleanRemark(request == null ? null : request.remark()));
         return Result.ok(task);
     }
 
@@ -102,11 +138,15 @@ public class QuestionAdminController {
     }
 
     @PostMapping("/questions/index-tasks/{taskId}/retry")
-    public Result<QuestionIndexTaskService.QuestionIndexTask> retryQuestionIndexTask(@PathVariable String taskId) {
+    public Result<QuestionIndexTaskService.QuestionIndexTask> retryQuestionIndexTask(
+            @PathVariable String taskId,
+            @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        adminAuditService.requireWritable("QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", taskId);
         QuestionIndexTaskService.QuestionIndexTask task = questionIndexTaskService.retryTask(taskId);
-        adminAuditService.record(uid, "QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", taskId, null, task, null);
+        adminAuditService.recordRequired(uid, "QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", taskId,
+                null, task, cleanRemark(request == null ? null : request.remark()));
         return Result.ok(task);
     }
 
@@ -117,27 +157,25 @@ public class QuestionAdminController {
     }
 
     @PostMapping("/questions/{id}/review")
-    public Result<Map<String, Object>> reviewQuestion(@PathVariable Long id, @RequestParam int status) {
+    public Result<Map<String, Object>> reviewQuestion(@PathVariable @Positive Long id,
+                                                      @RequestParam @Min(QuestionConstants.QUESTION_PENDING)
+                                                      @Max(QuestionConstants.QUESTION_HIDDEN) int status,
+                                                      @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         Map<String, Object> result = questionFacade.reviewQuestion(id, status);
-        adminAuditService.record(uid, "QUESTION_REVIEW", "QUESTION", id, null, result, null);
+        adminAuditService.record(uid, "QUESTION_REVIEW", "QUESTION", id, null, result,
+                cleanRemark(request == null ? null : request.remark()));
         return Result.ok(result);
     }
 
     @PostMapping("/questions/batch-review")
-    public Result<Map<String, Object>> batchReviewQuestions(@RequestBody QuestionBatchReviewRequest request) {
+    public Result<Map<String, Object>> batchReviewQuestions(@Valid @RequestBody QuestionBatchReviewRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
-        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
-                .filter(Objects::nonNull)
-                .filter(id -> id > 0)
+        List<Long> ids = request.ids().stream()
                 .distinct()
-                .limit(100)
                 .toList();
-        if (ids.isEmpty()) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
         int status = request.status();
         List<Map<String, Object>> reviewed = ids.stream()
                 .map(id -> questionFacade.reviewQuestion(id, status))
@@ -148,7 +186,7 @@ public class QuestionAdminController {
                 "status", status
         );
         adminAuditService.record(uid, "QUESTION_REVIEW_BATCH", "QUESTION", null,
-                Map.of("ids", ids, "status", status), result, null);
+                Map.of("ids", ids, "status", status), result, cleanRemark(request.remark()));
         return Result.ok(result);
     }
 
@@ -192,11 +230,16 @@ public class QuestionAdminController {
     }
 
     @PostMapping("/questions/{id}")
-    public Result<QuestionDTO> updateQuestion(@PathVariable Long id, @RequestBody QuestionAdminUpdateCmd cmd) {
+    public Result<QuestionDTO> updateQuestion(@PathVariable @Positive Long id,
+                                              @RequestBody(required = false) QuestionAdminUpdateCmd cmd) {
+        if (cmd == null || !cmd.hasEditableField()) {
+            throw new IllegalArgumentException("question update body must contain editable field");
+        }
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         QuestionDTO dto = questionFacade.updateQuestionAdmin(id, cmd);
-        adminAuditService.record(uid, "QUESTION_UPDATE", "QUESTION", id, null, dto, null);
+        adminAuditService.record(uid, "QUESTION_UPDATE", "QUESTION", id, null, dto,
+                cleanRemark(cmd.getRemark()));
         return Result.ok(dto);
     }
 
@@ -237,7 +280,8 @@ public class QuestionAdminController {
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids();
         QuestionDuplicateGroupDTO dto = questionFacade.hideDuplicateQuestions(id, ids);
-        adminAuditService.record(uid, "QUESTION_DUPLICATE_HIDE", "QUESTION", id, Map.of("ids", ids), dto, null);
+        adminAuditService.record(uid, "QUESTION_DUPLICATE_HIDE", "QUESTION", id, Map.of("ids", ids), dto,
+                cleanRemark(request == null ? null : request.remark()));
         return Result.ok(dto);
     }
 
@@ -259,7 +303,8 @@ public class QuestionAdminController {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         CompanyAliasDTO dto = questionFacade.saveCompanyAlias(null, cmd);
-        adminAuditService.record(uid, "COMPANY_ALIAS_CREATE", "COMPANY_ALIAS", dto.getId(), null, dto, null);
+        adminAuditService.record(uid, "COMPANY_ALIAS_CREATE", "COMPANY_ALIAS", dto.getId(), null, dto,
+                cleanRemark(cmd == null ? null : cmd.getRemark()));
         return Result.ok(dto);
     }
 
@@ -268,20 +313,27 @@ public class QuestionAdminController {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         CompanyAliasDTO dto = questionFacade.saveCompanyAlias(id, cmd);
-        adminAuditService.record(uid, "COMPANY_ALIAS_UPDATE", "COMPANY_ALIAS", id, null, dto, null);
+        adminAuditService.record(uid, "COMPANY_ALIAS_UPDATE", "COMPANY_ALIAS", id, null, dto,
+                cleanRemark(cmd == null ? null : cmd.getRemark()));
         return Result.ok(dto);
     }
 
     @PostMapping("/company-aliases/{id}/status")
-    public Result<Map<String, Object>> updateCompanyAliasStatus(@PathVariable Long id, @RequestParam int status) {
+    public Result<Map<String, Object>> updateCompanyAliasStatus(@PathVariable Long id,
+                                                                @RequestParam int status,
+                                                                @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         Map<String, Object> result = questionFacade.updateCompanyAliasStatus(id, status);
-        adminAuditService.record(uid, "COMPANY_ALIAS_STATUS", "COMPANY_ALIAS", id, null, result, null);
+        adminAuditService.record(uid, "COMPANY_ALIAS_STATUS", "COMPANY_ALIAS", id, null, result,
+                cleanRemark(request == null ? null : request.remark()));
         return Result.ok(result);
     }
 
-    public record QuestionBatchReviewRequest(List<Long> ids, int status) {
+    public record QuestionBatchReviewRequest(
+            @NotEmpty @Size(max = 100) List<@NotNull @Positive Long> ids,
+            @NotNull @Min(QuestionConstants.QUESTION_PENDING) @Max(QuestionConstants.QUESTION_HIDDEN) Integer status,
+            @Size(max = 500) String remark) {
     }
 
     public record QuestionCanonicalRequest(Long canonicalQuestionId) {
@@ -290,6 +342,19 @@ public class QuestionAdminController {
     public record QuestionDuplicateCandidateMergeRequest(Long candidateQuestionId) {
     }
 
-    public record QuestionDuplicateHideRequest(List<Long> ids) {
+    public record QuestionDuplicateHideRequest(
+            List<Long> ids,
+            @Size(max = 500) String remark) {
+    }
+
+    public record RemarkRequest(@Size(max = 500) String remark) {
+    }
+
+    private static String cleanRemark(String remark) {
+        if (remark == null || remark.trim().isEmpty()) {
+            return null;
+        }
+        String value = remark.trim();
+        return value.length() > 500 ? value.substring(0, 500) : value;
     }
 }

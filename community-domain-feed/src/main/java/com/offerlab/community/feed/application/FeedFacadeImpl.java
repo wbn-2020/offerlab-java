@@ -23,7 +23,9 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -68,13 +70,91 @@ public class FeedFacadeImpl implements FeedFacade {
 
     @Override
     public PageResult<FeedItemVO> getLatestFeed(Long viewerUid, String cursor, int size) {
-        double maxScore = parseCursorScore(cursor);
-        Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readGlobalLatest(maxScore, size);
+        PageResult<FeedItemVO> dbPage = fallbackLatestFromDb(viewerUid, cursor, size);
+        if (cursor == null || cursor.isBlank()) {
+            return mergeFirstPageLatestWithRedis(viewerUid, size, dbPage);
+        }
+        if (dbPage != null && dbPage.getItems() != null && !dbPage.getItems().isEmpty()) {
+            return dbPage;
+        }
+        Set<ZSetOperations.TypedTuple<String>> tuples = readGlobalLatestSafely(parseCursorScore(cursor), size);
         if (tuples == null || tuples.isEmpty()) {
-            // Redis 没数据时降级走 DB
-            return fallbackLatestFromDb(viewerUid, cursor, size);
+            return PageResult.empty();
         }
         return assembleFromTuples(tuples, size, viewerUid);
+    }
+
+    private PageResult<FeedItemVO> mergeFirstPageLatestWithRedis(Long viewerUid,
+                                                                 int size,
+                                                                 PageResult<FeedItemVO> dbPage) {
+        Set<ZSetOperations.TypedTuple<String>> tuples = readGlobalLatestSafely(Double.MAX_VALUE, size);
+        boolean hasDbItems = dbPage != null && dbPage.getItems() != null && !dbPage.getItems().isEmpty();
+        boolean hasRedisItems = tuples != null && !tuples.isEmpty();
+        if (!hasDbItems && !hasRedisItems) {
+            return PageResult.empty();
+        }
+        if (!hasRedisItems) {
+            return dbPage;
+        }
+        Map<Long, Long> redisScores = tuples == null ? Map.of() : tuples.stream()
+                .map(this::toPostIdAndScore)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(pair -> pair[0], pair -> pair[1], (left, right) -> Math.max(left, right)));
+        PageResult<FeedItemVO> redisPage = assembleFromTuples(tuples, size, viewerUid);
+        Map<Long, FeedItemVO> deduped = new LinkedHashMap<>();
+        addFeedItems(deduped, redisPage == null ? null : redisPage.getItems());
+        addFeedItems(deduped, dbPage == null ? null : dbPage.getItems());
+        if (deduped.isEmpty()) {
+            return PageResult.empty();
+        }
+        List<FeedItemVO> merged = deduped.values().stream()
+                .sorted(Comparator.<FeedItemVO>comparingLong(item -> latestScore(item, redisScores)).reversed()
+                        .thenComparing(item -> item.getPost() == null ? null : item.getPost().getId(),
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+        boolean candidateHasMore = merged.size() > size;
+        List<FeedItemVO> items = candidateHasMore ? merged.subList(0, size) : merged;
+        boolean hasMore = candidateHasMore
+                || Boolean.TRUE.equals(dbPage == null ? null : dbPage.getHasMore())
+                || Boolean.TRUE.equals(redisPage == null ? null : redisPage.getHasMore());
+        String nextCursor = dbPage == null ? null : dbPage.getNextCursor();
+        if (nextCursor == null && redisPage != null) {
+            nextCursor = redisPage.getNextCursor();
+        }
+        return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private Set<ZSetOperations.TypedTuple<String>> readGlobalLatestSafely(double maxScore, int size) {
+        try {
+            return feedRedis.readGlobalLatest(maxScore, size);
+        } catch (Exception e) {
+            log.warn("feed redis global latest read failed, fallback to db page: {}", e.toString());
+            return Set.of();
+        }
+    }
+
+    private void addFeedItems(Map<Long, FeedItemVO> target, List<FeedItemVO> source) {
+        if (source == null || source.isEmpty()) {
+            return;
+        }
+        for (FeedItemVO item : source) {
+            if (item == null || item.getPost() == null || item.getPost().getId() == null) {
+                continue;
+            }
+            target.putIfAbsent(item.getPost().getId(), item);
+        }
+    }
+
+    private long latestScore(FeedItemVO item, Map<Long, Long> redisScores) {
+        if (item == null || item.getPost() == null) {
+            return 0L;
+        }
+        Long redisScore = redisScores.get(item.getPost().getId());
+        if (redisScore != null) {
+            return redisScore;
+        }
+        LocalDateTime createTime = item.getPost().getCreateTime();
+        return createTime == null ? 0L : createTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
     }
 
     @Override

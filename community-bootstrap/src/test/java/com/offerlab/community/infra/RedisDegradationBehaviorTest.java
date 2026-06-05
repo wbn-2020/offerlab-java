@@ -3,6 +3,7 @@ package com.offerlab.community.infra;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.redis.cache.MultiLevelCacheImpl;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.security.JwtAuthResult;
 import com.offerlab.community.infra.security.JwtService;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RedissonClient;
@@ -94,6 +95,9 @@ class RedisDegradationBehaviorTest {
 
         String token = jwtService.issue(123L);
 
+        JwtAuthResult authResult = jwtService.parse(token);
+        assertEquals(123L, authResult.uid());
+        assertTrue(authResult.revocationCheckDegraded());
         assertEquals(123L, jwtService.parseUid(token));
         assertDoesNotThrow(() -> jwtService.invalidate(token));
         assertDoesNotThrow(() -> jwtService.invalidateAll(123L));

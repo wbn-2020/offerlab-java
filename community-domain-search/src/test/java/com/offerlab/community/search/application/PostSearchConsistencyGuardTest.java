@@ -19,6 +19,7 @@ class PostSearchConsistencyGuardTest {
         String retryPo = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/po/SearchIndexRetryTaskPO.java");
         String opsController = read("src/main/java/com/offerlab/community/search/controller/OpsController.java");
         String facade = read("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java");
+        String taskService = read("src/main/java/com/offerlab/community/search/application/SearchIndexTaskService.java");
         String postService = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostApplicationService.java");
         String resolver = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/mq/producer/EventTopicResolver.java");
         String initSql = read("../db/init/02_post.sql");
@@ -37,6 +38,17 @@ class PostSearchConsistencyGuardTest {
         assertTrue(facade.contains("filterVisibleSearchResults"), "ES results must pass through a visibility filter");
         assertTrue(facade.contains("postFacade.batchGetPosts"), "search visibility fallback must use PostFacade current-state reads");
         assertTrue(facade.contains("stale elasticsearch post filtered"), "filtered stale ES hits must be observable in logs");
+        assertTrue(facade.contains("int scanLimit = elasticsearchScanLimit(limit)"), "ES search must over-fetch before applying visibility filters");
+        assertTrue(facade.contains("body.put(\"size\", scanLimit)"), "ES search request size must use the over-fetch limit");
+        assertTrue(facade.contains("boolean hasMore = visibleItems.size() > limit"), "ES hasMore must be calculated after visibility filtering");
+        assertTrue(facade.contains("visibleItems.subList(0, limit)"), "ES search must trim over-fetched visible results before returning the page");
+        assertTrue(facade.contains("isSparseAfterVisibilityFiltering"), "sparse ES pages must be detected after visibility filtering");
+        assertTrue(facade.contains("rawHitCount() >= esPage.scanLimit()"), "sparse detection must only trigger when ES exhausted the scan window");
+        assertTrue(facade.contains("shouldUseMysqlFallback"), "sparse ES pages must be eligible for MySQL compensation");
+        assertTrue(taskService.contains("REDIS_ACTIVE_REBUILD_KEY"), "post index rebuild task must use a distributed active gate");
+        assertTrue(taskService.contains("setIfAbsent"), "post index rebuild distributed gate must be claimed atomically");
+        assertTrue(taskService.contains("remoteActiveSnapshot"), "post index rebuild must return the active remote task instead of creating a duplicate");
+        assertTrue(taskService.contains("releaseDistributedActiveTask"), "post index rebuild must release its distributed gate after completion");
 
         assertTrue(retryService.contains("@Scheduled(fixedDelay = 5000)"), "search retry service must periodically replay due tasks");
         assertTrue(retryService.contains("claimDue(owner, lockUntil, BATCH_SIZE)"), "search retry service must claim tasks before replaying");

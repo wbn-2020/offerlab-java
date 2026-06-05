@@ -5,10 +5,12 @@ import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.question.application.QuestionIndexRetryService;
 import com.offerlab.community.search.application.SearchIndexRetryService;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.util.ClassUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -17,6 +19,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/v1/health")
@@ -86,26 +89,69 @@ public class HealthController {
     }
 
     private Map<String, Object> kafkaHealth() {
+        boolean enabled = applicationContext.getEnvironment().getProperty("offerlab.kafka.enabled", Boolean.class, true);
+        String bootstrapServers = applicationContext.getEnvironment().getProperty("spring.kafka.bootstrap-servers", "");
+        if (!enabled) {
+            return Map.of(
+                    "status", "DISABLED",
+                    "enabled", false,
+                    "configured", false,
+                    "reachable", false,
+                    "mode", "disabled"
+            );
+        }
+        if (!StringUtils.hasText(bootstrapServers)) {
+            return Map.of(
+                    "status", "DEGRADED",
+                    "enabled", true,
+                    "configured", false,
+                    "reachable", false,
+                    "message", "Kafka bootstrap servers are not configured"
+            );
+        }
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 1500);
+        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 2000);
         try {
-            Class<?> kafkaAdmin = ClassUtils.forName("org.springframework.kafka.core.KafkaAdmin", getClass().getClassLoader());
-            String[] names = applicationContext.getBeanNamesForType(kafkaAdmin);
-            return Map.of("status", names.length > 0 ? "UP" : "UNKNOWN", "configured", names.length > 0);
+            try (AdminClient adminClient = AdminClient.create(props)) {
+                int brokerCount = adminClient.describeCluster().nodes().get(2, TimeUnit.SECONDS).size();
+                return Map.of(
+                        "status", brokerCount > 0 ? "UP" : "DEGRADED",
+                        "enabled", true,
+                        "configured", true,
+                        "reachable", brokerCount > 0,
+                        "brokerCount", brokerCount
+                );
+            }
         } catch (Exception e) {
-            return Map.of("status", "UNKNOWN", "message", shortMessage(e));
+            return Map.of(
+                    "status", "DEGRADED",
+                    "enabled", true,
+                    "configured", true,
+                    "reachable", false,
+                    "message", nonBlankMessage(e, "Kafka broker is not reachable")
+            );
         }
     }
 
     private Map<String, Object> elasticsearchHealth() {
         boolean enabled = elasticsearch.enabled();
         boolean available = elasticsearch.available();
-        return Map.of("status", !enabled || available ? "UP" : "DOWN", "enabled", enabled, "available", available);
+        return Map.of(
+                "status", !enabled ? "DISABLED" : available ? "UP" : "DEGRADED",
+                "enabled", enabled,
+                "available", available,
+                "reachable", available,
+                "mode", enabled ? "enabled" : "disabled"
+        );
     }
 
     private Map<String, Object> outboxHealth() {
         try {
             return Map.of("status", "UP", "duePending", outboxMessageMapper.countDuePending());
         } catch (Exception e) {
-            return Map.of("status", "UNKNOWN", "message", shortMessage(e));
+            return Map.of("status", "DOWN", "message", shortMessage(e));
         }
     }
 
@@ -115,7 +161,12 @@ public class HealthController {
             return true;
         }
         Object status = map.get("status");
-        return status == null || "UP".equals(status) || "UNKNOWN".equals(status);
+        return status == null || "UP".equals(status) || "UNKNOWN".equals(status) || "DISABLED".equals(status);
+    }
+
+    private String nonBlankMessage(Throwable cause, String fallback) {
+        String message = shortMessage(cause);
+        return StringUtils.hasText(message) ? message : fallback;
     }
 
     private String shortMessage(Throwable cause) {

@@ -2,6 +2,7 @@ package com.offerlab.community.infra.web.interceptor;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.security.JwtAuthResult;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.trace.TraceContext;
@@ -27,6 +28,13 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private static final String HEADER = "Authorization";
     private static final String PREFIX = "Bearer ";
+    private static final String[] STRICT_REVOCATION_PREFIXES = {
+            "/api/v1/admin",
+            "/api/v1/search/admin",
+            "/api/v1/ops",
+            "/api/v1/posts/admin",
+            "/api/v1/comments/admin"
+    };
 
     private final JwtService jwtService;
 
@@ -46,13 +54,26 @@ public class AuthInterceptor implements HandlerInterceptor {
 
         String auth = request.getHeader(HEADER);
         Long uid = null;
+        boolean revocationCheckDegraded = false;
         if (StringUtils.hasText(auth) && auth.startsWith(PREFIX)) {
             try {
-                uid = jwtService.parseUid(auth.substring(PREFIX.length()));
+                String token = auth.substring(PREFIX.length());
+                JwtAuthResult authResult = jwtService.parse(token);
+                if (authResult != null) {
+                    uid = authResult.uid();
+                    revocationCheckDegraded = authResult.revocationCheckDegraded();
+                } else {
+                    uid = jwtService.parseUid(token);
+                }
             } catch (Exception e) {
                 // 公共接口允许无登录访问，非法 token 按匿名处理；受保护接口后续统一抛 401。
                 log.debug("invalid token: {}", e.getMessage());
             }
+        }
+
+        if (uid != null && revocationCheckDegraded && requiresStrictRevocation(request)) {
+            log.warn("jwt revocation check degraded for sensitive path: uid={} path={}", uid, request.getRequestURI());
+            throw new BizException(ErrorCode.UNAUTHORIZED);
         }
 
         if (uid != null) {
@@ -64,6 +85,20 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
 
         return true;
+    }
+
+    private static boolean requiresStrictRevocation(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (StringUtils.hasText(contextPath) && path.startsWith(contextPath)) {
+            path = path.substring(contextPath.length());
+        }
+        for (String prefix : STRICT_REVOCATION_PREFIXES) {
+            if (path.equals(prefix) || path.startsWith(prefix + "/")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

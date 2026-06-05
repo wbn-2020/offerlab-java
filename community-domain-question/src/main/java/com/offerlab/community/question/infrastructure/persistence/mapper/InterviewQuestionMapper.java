@@ -136,6 +136,14 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
     List<InterviewQuestionPO> selectByPostId(@Param("postId") Long postId, @Param("admin") boolean admin);
 
     @Select("""
+            SELECT COUNT(*)
+            FROM t_interview_question
+            WHERE source_post_id = #{postId}
+              AND status = #{status}
+            """)
+    int countByPostIdAndStatus(@Param("postId") Long postId, @Param("status") int status);
+
+    @Select("""
             <script>
             SELECT q.*
             FROM t_interview_question q

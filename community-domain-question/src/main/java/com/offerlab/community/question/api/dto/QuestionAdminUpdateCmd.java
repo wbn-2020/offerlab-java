@@ -15,4 +15,19 @@ public class QuestionAdminUpdateCmd {
     private String interviewRound;
     private String difficulty;
     private Integer status;
+    private String remark;
+
+    public boolean hasEditableField() {
+        return questionText != null
+                || answerHint != null
+                || examPoint != null
+                || referenceAnswer != null
+                || sourceSnippet != null
+                || qualityReason != null
+                || company != null
+                || position != null
+                || interviewRound != null
+                || difficulty != null
+                || status != null;
+    }
 }

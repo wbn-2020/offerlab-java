@@ -149,9 +149,10 @@ public class PostController {
 
     @GetMapping("/admin/reports")
     public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
-                                                   @RequestParam(defaultValue = "20") int limit) {
+                                                   @RequestParam(defaultValue = "20") int limit,
+                                                   @RequestParam(defaultValue = "false") boolean includeTestData) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        return Result.ok(reportService.listRecent(status, limit));
+        return Result.ok(reportService.listRecent(status, limit, includeTestData));
     }
 
     @PostMapping("/admin/reports/{reportId}/review")

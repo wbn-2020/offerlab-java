@@ -7,4 +7,5 @@ public class CompanyAliasCmd {
     private String canonicalCompany;
     private String alias;
     private Integer status;
+    private String remark;
 }

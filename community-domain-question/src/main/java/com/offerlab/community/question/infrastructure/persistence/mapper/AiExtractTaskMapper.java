@@ -51,6 +51,13 @@ public interface AiExtractTaskMapper extends BaseMapper<AiExtractTaskPO> {
             UPDATE t_ai_extract_task
             SET task_status = 0,
                 retry_count = retry_count + 1,
+                provider = NULL,
+                fallback_used = 0,
+                duration_ms = 0,
+                prompt_tokens = 0,
+                completion_tokens = 0,
+                estimated_cost_micros = 0,
+                error_code = NULL,
                 error_message = NULL,
                 update_time = NOW(3)
             WHERE id = #{id}

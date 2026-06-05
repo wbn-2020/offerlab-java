@@ -21,6 +21,19 @@ Effective local defaults:
 | Realtime WebSocket | `offerlab.realtime.websocket-enabled` | disabled in `dev` |
 | MySQL | `spring.datasource.url` | `jdbc:mysql://localhost:3306/offerlab` |
 
+For a full local Kafka and Elasticsearch chain, set these variables only in the
+foreground PowerShell session that starts the backend:
+
+```powershell
+$env:OFFERLAB_KAFKA_ENABLED = "true"
+$env:KAFKA_BROKERS = "localhost:9092"
+$env:ELASTICSEARCH_ENABLED = "true"
+$env:ELASTICSEARCH_URL = "http://127.0.0.1:9200"
+```
+
+Do not persist these as machine/user environment variables unless that exact
+system mutation has been reviewed and confirmed.
+
 ## Local paths
 
 Middleware is installed under `C:\codeware`:
@@ -59,10 +72,23 @@ Set-Location C:\codeware\elasticsearch-8.14.3
 .\bin\elasticsearch.bat
 ```
 
+If `config\elasticsearch.yml` still points `path.data` or `path.logs` at an old
+folder, start Elasticsearch with explicit session-scoped settings instead of
+editing system configuration:
+
+```powershell
+Set-Location C:\codeware\elasticsearch-8.14.3
+.\bin\elasticsearch.bat -Epath.data=C:\codeware\elasticsearch-8.14.3\data -Epath.logs=C:\codeware\elasticsearch-8.14.3\logs
+```
+
 OfferLab backend:
 
 ```powershell
 Set-Location C:\project\offerlab-java
+$env:OFFERLAB_KAFKA_ENABLED = "true"
+$env:KAFKA_BROKERS = "localhost:9092"
+$env:ELASTICSEARCH_ENABLED = "true"
+$env:ELASTICSEARCH_URL = "http://127.0.0.1:9200"
 mvn -pl community-bootstrap -am spring-boot:run
 ```
 
@@ -74,6 +100,15 @@ runtime.
 ## Health checks
 
 These checks are read-only:
+
+Backend repo preflight. This checks expected `C:\codeware` paths, Kafka/ES
+config hints, TCP ports, Elasticsearch health/indexes, Kafka topic list, and the
+`offerlab-feed-fanout` consumer group without writing app data:
+
+```powershell
+Set-Location C:\project\offerlab-java
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-local-middleware.ps1
+```
 
 ```powershell
 .\redis-cli.exe -h 127.0.0.1 -p 6379 ping
@@ -91,6 +126,48 @@ Set-Location C:\codeware\kafka_2.13-3.6.2
 ```powershell
 Invoke-WebRequest http://localhost:8080/swagger-ui.html -UseBasicParsing
 ```
+
+Application readiness and middleware probe without creating users, posts,
+notifications, retry rows, or report files:
+
+```powershell
+Set-Location C:\project\offerlab-java
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-offerlab.ps1 -ReadOnlyProbe -NoWriteReport
+```
+
+Full smoke creates synthetic users, posts, comments, reports, notifications,
+outbox/search/notification observations, and a JSON report. Run it only against
+local/test data:
+
+```powershell
+Set-Location C:\project\offerlab-java
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-offerlab.ps1 -ReportPath C:\codeware\offerlab-smoke-report.json
+```
+
+## Acceptance criteria
+
+- `/api/v1/health/readiness` returns `UP` when Kafka/Elasticsearch are disabled
+  for `dev`, or when they are enabled and reachable. It returns `DEGRADED` when
+  an enabled dependency is unavailable or unconfigured.
+- Elasticsearch `/_cluster/health` returns `green` or `yellow`, and both
+  `post_idx` and `question_idx` exist.
+- Kafka topic `post.published` exists.
+- Kafka consumer group `offerlab-feed-fanout` has a row for `post.published`;
+  after the full smoke publishes a post, lag should return to `0`.
+- Ops endpoints return successfully:
+  `/api/v1/ops/search-index-retry-tasks?limit=10` and
+  `/api/v1/ops/notification-retry-tasks?limit=10`.
+- Batch retry/replay checks are scoped to retry rows created by the app; do not
+  reset, truncate, or broadly delete Kafka, Elasticsearch, Redis, or MySQL data.
+
+## Fault injection
+
+Use only manual, non-destructive checks. For example, close a foreground Kafka
+or Elasticsearch terminal window, rerun the read-only probe, restart the
+dependency, then confirm readiness returns to `UP` and retry rows can be
+previewed/replayed from the Ops UI. Do not add scripts that kill processes,
+delete data directories, format Kafka storage, reset indexes, or truncate tables
+without a separate reviewed command and explicit confirmation.
 
 ## Current config risks
 

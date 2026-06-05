@@ -59,6 +59,10 @@ public class SearchAnalyticsService {
     }
 
     public SearchAnalyticsDTO summary(int days, int limit) {
+        return summary(days, limit, false);
+    }
+
+    public SearchAnalyticsDTO summary(int days, int limit, boolean includeTestData) {
         if (!tableReady()) {
             return SearchAnalyticsDTO.builder()
                     .hotKeywords(List.of())
@@ -69,9 +73,9 @@ public class SearchAnalyticsService {
         int safeDays = Math.max(1, Math.min(days, 90));
         int safeLimit = Math.max(1, Math.min(limit, 50));
         return SearchAnalyticsDTO.builder()
-                .hotKeywords(mapper.topSearchKeywords(safeDays, safeLimit).stream().map(this::toKeywordItem).toList())
-                .noResultKeywords(mapper.topNoResultKeywords(safeDays, safeLimit).stream().map(this::toKeywordItem).toList())
-                .prepClicks(mapper.topPrepClicks(safeDays, safeLimit).stream().map(this::toPrepItem).toList())
+                .hotKeywords(mapper.topSearchKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
+                .noResultKeywords(mapper.topNoResultKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
+                .prepClicks(mapper.topPrepClicks(safeDays, safeLimit, includeTestData).stream().map(this::toPrepItem).toList())
                 .build();
     }
 

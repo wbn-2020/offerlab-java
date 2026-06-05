@@ -14,6 +14,10 @@ import java.util.List;
 public class PostQuestionBlockDTO {
     private String taskStatus;
     private List<QuestionDTO> questions;
+    private Integer extractedCount;
+    private Integer visibleCount;
+    private Integer pendingReviewCount;
+    private String reviewHint;
     private Boolean errorVisible;
     private String errorMessage;
     private Boolean canRetry;

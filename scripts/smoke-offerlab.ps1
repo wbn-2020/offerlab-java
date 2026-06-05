@@ -4,7 +4,13 @@ param(
   [string]$AdminEmail = "",
   [string]$AdminPassword = "password123",
   [string]$KafkaBootstrap = "localhost:9092",
-  [string]$KafkaHome = "C:\codeware\kafka_2.13-3.6.2"
+  [string]$KafkaHome = "C:\codeware\kafka_2.13-3.6.2",
+  [string]$KafkaTopic = "post.published",
+  [string]$KafkaConsumerGroup = "offerlab-feed-fanout",
+  [string]$ElasticsearchUrl = "http://127.0.0.1:9200",
+  [string[]]$ElasticsearchIndexes = @("post_idx", "question_idx"),
+  [switch]$ReadOnlyProbe,
+  [switch]$NoWriteReport
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +56,15 @@ function Assert-True {
   $script:steps += [ordered]@{ name = $Name; ok = $true }
 }
 
+function Add-Step {
+  param([string]$Name, [bool]$Ok, [string]$Error = $null)
+  $row = [ordered]@{ name = $Name; ok = $Ok }
+  if ($Error) {
+    $row.error = $Error
+  }
+  $script:steps += $row
+}
+
 function Test-KafkaTool {
   param([string]$Name)
   $tool = Join-Path $KafkaHome "bin\windows\$Name"
@@ -59,31 +74,187 @@ function Test-KafkaTool {
   return $null
 }
 
+function Test-TcpEndpoint {
+  param([string]$HostName, [int]$Port)
+  $client = [System.Net.Sockets.TcpClient]::new()
+  try {
+    $connect = $client.BeginConnect($HostName, $Port, $null, $null)
+    if (-not $connect.AsyncWaitHandle.WaitOne(1200)) {
+      return $false
+    }
+    $client.EndConnect($connect)
+    return $true
+  } catch {
+    return $false
+  } finally {
+    $client.Dispose()
+  }
+}
+
+function Get-HostPort {
+  param([string]$Endpoint, [int]$DefaultPort)
+  $value = $Endpoint -replace "^https?://", ""
+  $value = $value.Split("/")[0]
+  $parts = $value.Split(":")
+  $portValue = 0
+  if ($parts.Count -ge 2 -and [int]::TryParse($parts[-1], [ref]$portValue)) {
+    return @{ Host = ($parts[0..($parts.Count - 2)] -join ":"); Port = $portValue }
+  }
+  return @{ Host = $value; Port = $DefaultPort }
+}
+
+function Get-KafkaLagFromLine {
+  param([string]$Line)
+  if ([string]::IsNullOrWhiteSpace($Line)) {
+    return $null
+  }
+  $parts = $Line -split "\s+"
+  $numbers = @($parts | Where-Object { $_ -match "^\d+$" })
+  if ($numbers.Count -eq 0) {
+    return $null
+  }
+  return [int]$numbers[-1]
+}
+
+function Invoke-EsReadOnlyProbe {
+  $result = [ordered]@{
+    available = $false
+    healthStatus = $null
+    indexes = @()
+    error = $null
+  }
+  try {
+    $health = Invoke-RestMethod -Method GET -Uri "$ElasticsearchUrl/_cluster/health" -TimeoutSec 2
+    $result.available = $true
+    $result.healthStatus = $health.status
+  } catch {
+    $result.error = $_.Exception.Message
+    return $result
+  }
+  foreach ($index in $ElasticsearchIndexes) {
+    try {
+      $response = Invoke-WebRequest -Method HEAD -Uri "$ElasticsearchUrl/$index" -UseBasicParsing -TimeoutSec 2
+      $result.indexes += [ordered]@{ name = $index; exists = ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) }
+    } catch {
+      $result.indexes += [ordered]@{ name = $index; exists = $false; error = $_.Exception.Message }
+    }
+  }
+  return $result
+}
+
+function Write-SmokeReport {
+  param([object]$Report)
+  if (-not $NoWriteReport -and $ReportPath) {
+    $dir = Split-Path -Parent $ReportPath
+    if ($dir -and -not (Test-Path $dir)) {
+      New-Item -ItemType Directory -Path $dir | Out-Null
+    }
+    $Report | ConvertTo-Json -Depth 20 | Set-Content -Path $ReportPath -Encoding UTF8
+  }
+  $Report | ConvertTo-Json -Depth 20
+}
+
+$steps = @()
 $kafkaOk = $false
 $kafkaTopics = @()
 $kafkaLag = $null
 $topicsTool = Test-KafkaTool "kafka-topics.bat"
 $groupsTool = Test-KafkaTool "kafka-consumer-groups.bat"
-if ($topicsTool) {
+$kafkaEndpoint = Get-HostPort -Endpoint $KafkaBootstrap -DefaultPort 9092
+$kafkaReachable = Test-TcpEndpoint -HostName $kafkaEndpoint.Host -Port $kafkaEndpoint.Port
+if (-not $kafkaReachable) {
+  if ($ReadOnlyProbe) {
+    Add-Step "kafka tcp $KafkaBootstrap reachable" $false "tcp not reachable"
+  } elseif ($topicsTool -or $groupsTool) {
+    Assert-True "kafka tcp $KafkaBootstrap reachable" $false
+  }
+}
+if ($kafkaReachable -and $topicsTool) {
   try {
     $kafkaTopics = @(& $topicsTool --bootstrap-server $KafkaBootstrap --list 2>$null)
-    $kafkaOk = $kafkaTopics -contains "post.published"
-    Assert-True "kafka post.published topic available" $kafkaOk
+    $kafkaOk = $kafkaTopics -contains $KafkaTopic
+    if ($ReadOnlyProbe) {
+      if ($kafkaOk) {
+        Add-Step "kafka $KafkaTopic topic available" $true
+      } else {
+        Add-Step "kafka $KafkaTopic topic available" $false "topic not found"
+      }
+    } else {
+      Assert-True "kafka $KafkaTopic topic available" $kafkaOk
+    }
   } catch {
-    Assert-True "kafka post.published topic available" $false
+    if ($ReadOnlyProbe) {
+      Add-Step "kafka $KafkaTopic topic available" $false $_.Exception.Message
+    } else {
+      Assert-True "kafka $KafkaTopic topic available" $false
+    }
+  }
+} elseif ($ReadOnlyProbe) {
+  if ($kafkaReachable) {
+    Add-Step "kafka $KafkaTopic topic available" $false "tool not found: $(Join-Path $KafkaHome "bin\windows\kafka-topics.bat")"
   }
 }
 
-$steps = @()
+if ($ReadOnlyProbe) {
+  if (-not $kafkaReachable) {
+    Add-Step "kafka $KafkaConsumerGroup consumer group row" $false "tcp not reachable"
+  } elseif ($groupsTool) {
+    try {
+      $groupLines = @(& $groupsTool --bootstrap-server $KafkaBootstrap --describe --group $KafkaConsumerGroup 2>$null)
+      $dataLine = $groupLines | Where-Object { $_ -match [Regex]::Escape($KafkaTopic) } | Select-Object -First 1
+      if ($dataLine) {
+        $kafkaLag = Get-KafkaLagFromLine $dataLine
+        Add-Step "kafka $KafkaConsumerGroup consumer group row" $true
+      } else {
+        Add-Step "kafka $KafkaConsumerGroup consumer group row" $false "topic row not found"
+      }
+    } catch {
+      Add-Step "kafka $KafkaConsumerGroup consumer group row" $false $_.Exception.Message
+    }
+  } else {
+    Add-Step "kafka $KafkaConsumerGroup consumer group row" $false "tool not found: $(Join-Path $KafkaHome "bin\windows\kafka-consumer-groups.bat")"
+  }
+}
+
+$esProbe = Invoke-EsReadOnlyProbe
+
+if ($ReadOnlyProbe) {
+  $readinessStatus = $null
+  $readinessComponents = $null
+  try {
+    $readiness = Invoke-RestMethod -Method GET -Uri "$BaseUrl/api/v1/health/readiness" -TimeoutSec 3
+    $readinessStatus = $readiness.status
+    $readinessComponents = $readiness.components
+  } catch {
+    $steps += [ordered]@{ name = "readiness read-only probe"; ok = $false; error = $_.Exception.Message }
+  }
+  $esMissingIndexes = @($esProbe.indexes | Where-Object { -not $_.exists }).Count
+  $report = [ordered]@{
+    ok = ($readinessStatus -eq "UP" -and $kafkaOk -and $esProbe.available -and $esMissingIndexes -eq 0)
+    readOnlyProbe = $true
+    baseUrl = $BaseUrl
+    timestamp = (Get-Date).ToString("s")
+    readinessStatus = $readinessStatus
+    readinessComponents = $readinessComponents
+    kafkaOk = $kafkaOk
+    kafkaTopicCount = @($kafkaTopics).Count
+    kafkaLag = $kafkaLag
+    elasticsearch = $esProbe
+    steps = $steps
+  }
+  Write-SmokeReport $report
+  return
+}
+
 $suffix = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-$authorEmail = "smoke-author-$suffix@offerlab.local"
-$actorEmail = "smoke-actor-$suffix@offerlab.local"
+$authorEmail = "flow-author-$suffix@offerlab.local"
+$actorEmail = "flow-actor-$suffix@offerlab.local"
 $password = "password123"
 
-$authorRegister = Invoke-Json "POST" "/api/v1/auth/register" @{ email = $authorEmail; password = $password; nickname = "SmokeAuthor" }
+$authorRegister = Invoke-Json "POST" "/api/v1/auth/register" @{ email = $authorEmail; password = $password; nickname = "ReviewAuthor" }
 Assert-Ok "register author" $authorRegister
 
-$actorRegister = Invoke-Json "POST" "/api/v1/auth/register" @{ email = $actorEmail; password = $password; nickname = "SmokeActor" }
+$actorRegister = Invoke-Json "POST" "/api/v1/auth/register" @{ email = $actorEmail; password = $password; nickname = "ReviewActor" }
 Assert-Ok "register actor" $actorRegister
 
 $authorLogin = Invoke-Json "POST" "/api/v1/auth/login" @{ email = $authorEmail; password = $password }
@@ -106,13 +277,16 @@ if ($AdminEmail) {
 $follow = Invoke-Json "POST" "/api/v1/users/$($authorRegister.data.uid)/follow" $null $actorToken
 Assert-Ok "actor follows author" $follow
 
+$postContent = "Java backend interview review keyword $suffix. Round one covered JVM memory, Redis cache breakdown, MySQL index tuning, Kafka fanout, failure recovery, and a concrete OfferLab review summary with lessons learned."
+Assert-True "live flow post content satisfies interview length" ($postContent.Trim().Length -ge 120)
+
 $postBody = @{
   postType = 1
-  title = "Smoke OfferLab $suffix"
-  content = "Smoke content with @SmokeActor and Java backend search keyword $suffix"
+  title = "OfferLab review $suffix"
+  content = $postContent
   visibility = 1
-  extJson = '{"company":"SmokeCo","position":"Backend","yearsOfExp":3,"interviewResult":0}'
-  tagNames = @("Java", "Smoke")
+  extJson = '{"company":"NebulaTech","position":"Backend","yearsOfExp":3,"interviewResult":0}'
+  tagNames = @("Java", "Backend")
 }
 $publish = Invoke-Json "POST" "/api/v1/posts" $postBody $authorToken
 Assert-Ok "publish post" $publish
@@ -123,7 +297,7 @@ Assert-Ok "post detail" $detail
 Assert-True "post detail has author" ($null -ne $detail.data.author -and $detail.data.author.uid -eq $authorRegister.data.uid)
 Assert-True "post detail has counter" ($null -ne $detail.data.counter)
 
-$comment = Invoke-Json "POST" "/api/v1/posts/$postId/comments" @{ content = "Smoke comment $suffix" } $actorToken
+$comment = Invoke-Json "POST" "/api/v1/posts/$postId/comments" @{ content = "Follow up comment $suffix" } $actorToken
 Assert-Ok "comment post" $comment
 $commentId = $comment.data.commentId
 
@@ -141,7 +315,7 @@ $commentLike = Invoke-Json "POST" "/api/v1/comments/$commentId/like" $null $auth
 Assert-Ok "like comment" $commentLike
 
 $reply = Invoke-Json "POST" "/api/v1/posts/$postId/comments" @{
-  content = "Smoke reply $suffix"
+  content = "Author reply $suffix"
   parentId = $commentId
   replyToUid = $actorRegister.data.uid
 } $authorToken
@@ -214,7 +388,7 @@ $trend = Invoke-Json "GET" "/api/v1/dashboard/trend?range=7d"
 Assert-Ok "trend dashboard" $trend
 
 $intent = Invoke-Json "PUT" "/api/v1/users/me/intent" @{
-  targetCompanies = @("SmokeCo")
+  targetCompanies = @("NebulaTech")
   targetPositions = @("Backend")
   yearsOfExp = 3
   expectedCity = "Shanghai"
@@ -232,7 +406,7 @@ Assert-True "recommend feed explains reason" ($null -ne $firstRecommendReason)
 $recommendFeedback = Invoke-Json "POST" "/api/v1/feeds/feedback" @{
   postId = $postId
   action = "not_interested"
-  reason = "smoke-feedback"
+  reason = "live-flow-feedback"
 } $authorToken
 Assert-Ok "record recommend feedback" $recommendFeedback
 
@@ -257,7 +431,7 @@ $searchEmpty = Invoke-Json "GET" "/api/v1/search/posts?q=NoSuchOfferLabKeyword$s
 Assert-Ok "search empty state api" $searchEmpty
 Assert-True "search empty returns no items" (@($searchEmpty.data.items).Count -eq 0)
 
-$userSearch = Invoke-Json "GET" "/api/v1/users/search?q=SmokeActor&size=5"
+$userSearch = Invoke-Json "GET" "/api/v1/users/search?q=ReviewActor&size=5"
 Assert-Ok "search users" $userSearch
 
 $recommendedUsers = Invoke-Json "GET" "/api/v1/users/search?size=5"
@@ -281,7 +455,7 @@ Assert-Ok "privacy intent hidden" $hiddenIntent
 
 $postReport = Invoke-Json "POST" "/api/v1/posts/$postId/reports" @{
   reason = "SPAM"
-  detail = "Smoke post moderation report $suffix"
+  detail = "Manual post moderation report $suffix"
 } $actorToken
 Assert-Ok "report post" $postReport
 $postReportId = $postReport.data.reportId
@@ -293,14 +467,14 @@ Assert-True "admin sees post report" ($null -ne $pendingPostReport)
 
 $rejectPostReport = Invoke-Json "POST" "/api/v1/posts/admin/reports/$postReportId/review" @{
   approved = $false
-  note = "Smoke reject"
+  note = "Reject duplicate report"
 } $adminToken
 Assert-Ok "reject post report" $rejectPostReport
 Assert-True "post report rejected" ($rejectPostReport.data.reportStatus -eq 2)
 
 $commentReport = Invoke-Json "POST" "/api/v1/comments/$commentId/reports" @{
   reason = "ABUSE"
-  detail = "Smoke comment moderation report $suffix"
+  detail = "Manual comment moderation report $suffix"
 } $authorToken
 Assert-Ok "report comment" $commentReport
 $commentReportId = $commentReport.data.reportId
@@ -312,7 +486,7 @@ Assert-True "admin sees comment report" ($null -ne $pendingCommentReport)
 
 $approveCommentReport = Invoke-Json "POST" "/api/v1/comments/admin/reports/$commentReportId/review" @{
   approved = $true
-  note = "Smoke hide comment"
+  note = "Hide abusive comment"
 } $adminToken
 Assert-Ok "approve comment report" $approveCommentReport
 Assert-True "comment report approved" ($approveCommentReport.data.reportStatus -eq 1)
@@ -341,19 +515,25 @@ Assert-Ok "ops status" $ops
 $outbox = Invoke-Json "GET" "/api/v1/ops/outbox?limit=10" $null $adminToken
 Assert-Ok "outbox list" $outbox
 
-if ($groupsTool) {
+$searchRetryTasks = Invoke-Json "GET" "/api/v1/ops/search-index-retry-tasks?limit=10" $null $adminToken
+Assert-Ok "search index retry task list" $searchRetryTasks
+
+$notificationRetryTasks = Invoke-Json "GET" "/api/v1/ops/notification-retry-tasks?limit=10" $null $adminToken
+Assert-Ok "notification retry task list" $notificationRetryTasks
+
+if ($groupsTool -and $kafkaReachable) {
   try {
-    $groupLines = @(& $groupsTool --bootstrap-server $KafkaBootstrap --describe --group offerlab-feed-fanout 2>$null)
-    $dataLine = $groupLines | Where-Object { $_ -match "post\.published" } | Select-Object -First 1
+    $groupLines = @(& $groupsTool --bootstrap-server $KafkaBootstrap --describe --group $KafkaConsumerGroup 2>$null)
+    $dataLine = $groupLines | Where-Object { $_ -match [Regex]::Escape($KafkaTopic) } | Select-Object -First 1
     if ($dataLine) {
-      $parts = $dataLine -split "\s+"
-      $lagText = @($parts | Where-Object { $_ -match "^\d+$" })[-1]
-      $kafkaLag = [int]$lagText
-      Assert-True "kafka feed fanout lag zero" ($kafkaLag -eq 0)
+      $kafkaLag = Get-KafkaLagFromLine $dataLine
+      Assert-True "kafka $KafkaConsumerGroup lag zero" ($kafkaLag -eq 0)
     }
   } catch {
-    Assert-True "kafka feed fanout lag zero" $false
+    Assert-True "kafka $KafkaConsumerGroup lag zero" $false
   }
+} elseif ($groupsTool) {
+  Assert-True "kafka $KafkaConsumerGroup lag zero" $false
 }
 
 $report = [ordered]@{
@@ -391,6 +571,7 @@ $report = [ordered]@{
   kafkaOk = $kafkaOk
   kafkaTopicCount = @($kafkaTopics).Count
   kafkaLag = $kafkaLag
+  elasticsearch = $esProbe
   searchAuthorNickname = $firstSearchItem.author.nickname
   interactionLiked = $interactionState.data.liked
   interactionFavorited = $interactionState.data.favorited
@@ -404,12 +585,9 @@ $report = [ordered]@{
   commentReportApproved = ($approveCommentReport.data.reportStatus -eq 1)
   moderatedCommentHidden = ($null -eq $hiddenModeratedComment)
   outboxRows = @($outbox.data).Count
+  searchIndexRetryRows = @($searchRetryTasks.data).Count
+  notificationRetryRows = @($notificationRetryTasks.data).Count
   steps = $steps
 }
 
-$dir = Split-Path -Parent $ReportPath
-if ($dir -and -not (Test-Path $dir)) {
-  New-Item -ItemType Directory -Path $dir | Out-Null
-}
-$report | ConvertTo-Json -Depth 20 | Set-Content -Path $ReportPath -Encoding UTF8
-$report | ConvertTo-Json -Depth 20
+Write-SmokeReport $report

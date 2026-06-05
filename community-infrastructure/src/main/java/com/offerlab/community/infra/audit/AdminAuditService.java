@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.offerlab.community.common.exception.SystemException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import lombok.RequiredArgsConstructor;
@@ -29,22 +31,31 @@ public class AdminAuditService {
     public void record(Long operatorUid, String action, String resourceType, Object resourceId,
                        Object before, Object after, String remark) {
         try {
-            if (mapper.tableExists() <= 0) {
+            if (!auditTableWritable(action, resourceType, resourceId)) {
                 return;
             }
-            AdminAuditLog log = new AdminAuditLog();
-            log.setId(idGen.nextId());
-            log.setOperatorUid(operatorUid);
-            log.setAction(limit(action, 64));
-            log.setResourceType(limit(resourceType, 64));
-            log.setResourceId(resourceId == null ? null : limit(String.valueOf(resourceId), 64));
-            log.setBeforeJson(toJson(before));
-            log.setAfterJson(toJson(after));
-            log.setRemark(limit(remark, 1000));
-            mapper.insert(log);
+            mapper.insert(buildLog(operatorUid, action, resourceType, resourceId, before, after, remark));
         } catch (Exception e) {
             log.warn("record admin audit failed: action={} resourceType={} resourceId={}",
                     action, resourceType, resourceId, e);
+        }
+    }
+
+    public void requireWritable(String action, String resourceType, Object resourceId) {
+        if (!auditTableWritable(action, resourceType, resourceId)) {
+            throw auditRequiredException(action, resourceType, resourceId, null);
+        }
+    }
+
+    public void recordRequired(Long operatorUid, String action, String resourceType, Object resourceId,
+                               Object before, Object after, String remark) {
+        try {
+            requireWritable(action, resourceType, resourceId);
+            mapper.insert(buildLog(operatorUid, action, resourceType, resourceId, before, after, remark));
+        } catch (SystemException e) {
+            throw e;
+        } catch (Exception e) {
+            throw auditRequiredException(action, resourceType, resourceId, e);
         }
     }
 
@@ -107,6 +118,39 @@ public class AdminAuditService {
             log.warn("admin audit table check failed, returning empty audit view: {}", e.getMessage());
             return false;
         }
+    }
+
+    private AdminAuditLog buildLog(Long operatorUid, String action, String resourceType, Object resourceId,
+                                   Object before, Object after, String remark) throws Exception {
+        AdminAuditLog auditLog = new AdminAuditLog();
+        auditLog.setId(idGen.nextId());
+        auditLog.setOperatorUid(operatorUid);
+        auditLog.setAction(limit(action, 64));
+        auditLog.setResourceType(limit(resourceType, 64));
+        auditLog.setResourceId(resourceId == null ? null : limit(String.valueOf(resourceId), 64));
+        auditLog.setBeforeJson(toJson(before));
+        auditLog.setAfterJson(toJson(after));
+        auditLog.setRemark(limit(remark, 1000));
+        return auditLog;
+    }
+
+    private boolean auditTableWritable(String action, String resourceType, Object resourceId) {
+        try {
+            return mapper.tableExists() > 0;
+        } catch (RuntimeException e) {
+            log.warn("admin audit table check failed: action={} resourceType={} resourceId={}",
+                    action, resourceType, resourceId, e);
+            return false;
+        }
+    }
+
+    private SystemException auditRequiredException(String action, String resourceType, Object resourceId, Throwable cause) {
+        String message = "Required admin audit is not writable: action=" + clean(action)
+                + " resourceType=" + clean(resourceType)
+                + " resourceId=" + (resourceId == null ? "" : resourceId);
+        return cause == null
+                ? new SystemException(ErrorCode.DATABASE_ERROR.getCode(), message)
+                : new SystemException(message, cause);
     }
 
     private String toJson(Object value) throws Exception {

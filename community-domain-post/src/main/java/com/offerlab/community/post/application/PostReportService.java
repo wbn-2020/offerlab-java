@@ -7,6 +7,7 @@ import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.domain.model.Post;
@@ -74,9 +75,17 @@ public class PostReportService {
     }
 
     public List<PostReportDTO> listRecent(Integer status, int limit) {
+        return listRecent(status, limit, false);
+    }
+
+    public List<PostReportDTO> listRecent(Integer status, int limit, boolean includeTestData) {
         Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
-        return reportMapper.selectRecent(effectiveStatus, clampLimit(limit)).stream()
+        int safeLimit = clampLimit(limit);
+        int queryLimit = includeTestData ? safeLimit : clampLimit(safeLimit * 5);
+        return reportMapper.selectRecent(effectiveStatus, queryLimit).stream()
                 .map(this::toDto)
+                .filter(dto -> includeTestData || !isSyntheticReport(dto))
+                .limit(safeLimit)
                 .toList();
     }
 
@@ -166,6 +175,16 @@ public class PostReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private boolean isSyntheticReport(PostReportDTO dto) {
+        if (dto == null) {
+            return false;
+        }
+        return PublicContentFilter.isSyntheticText(dto.getPostTitle())
+                || PublicContentFilter.isSyntheticText(dto.getPostSummary())
+                || PublicContentFilter.isSyntheticText(dto.getReason())
+                || PublicContentFilter.isSyntheticText(dto.getDetail());
     }
 
     private String summary(String value) {

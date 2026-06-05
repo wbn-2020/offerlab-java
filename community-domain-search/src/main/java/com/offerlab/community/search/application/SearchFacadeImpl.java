@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
@@ -64,16 +65,59 @@ public class SearchFacadeImpl implements SearchFacade {
         boolean firstPage = parseCursor(cursor) <= 0;
         PageResult<PostBriefDTO> result;
         if (!"hot".equals(normalizedSort) && postSearchIndexer.ensurePostIndex()) {
-            Optional<PageResult<PostBriefDTO>> esResult = searchByElasticsearch(keyword, company, position, type, normalizedSort, cursor, limit);
+            Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(keyword, company, position, type, normalizedSort, cursor, limit);
             if (esResult.isPresent()) {
-                result = esResult.get();
+                ElasticsearchSearchPage esPage = esResult.get();
+                result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit());
+                boolean emptyFirstPage = firstPage && isEmptyPage(result);
+                boolean sparseAfterVisibilityFilter = isSparseAfterVisibilityFiltering(esPage, limit);
+                if (emptyFirstPage || sparseAfterVisibilityFilter) {
+                    PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit);
+                    if (shouldUseMysqlFallback(result, mysqlFallback)) {
+                        result = withSearchMetadata(mysqlFallback, "mysql", true,
+                                emptyFirstPage ? "elasticsearch_empty" : "elasticsearch_visibility_filtered",
+                                fallbackScanLimit(limit));
+                    }
+                }
                 searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
                 return result;
             }
         }
         result = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit);
+        result = withSearchMetadata(result, "mysql", !"hot".equals(normalizedSort),
+                "hot".equals(normalizedSort) ? "hot_sort_mysql" : "elasticsearch_unavailable",
+                fallbackScanLimit(limit));
         searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
         return result;
+    }
+
+    private PageResult<PostBriefDTO> withSearchMetadata(PageResult<PostBriefDTO> result, String source,
+                                                        boolean degraded, String fallbackReason, int scanLimit) {
+        return result.withMetadata(source, degraded, fallbackReason, scanLimit);
+    }
+
+    private boolean isEmptyPage(PageResult<PostBriefDTO> page) {
+        return page == null || page.getItems() == null || page.getItems().isEmpty();
+    }
+
+    private boolean isSparseAfterVisibilityFiltering(ElasticsearchSearchPage esPage, int limit) {
+        return esPage != null
+                && esPage.rawHitCount() >= esPage.scanLimit()
+                && itemCount(esPage.page()) < limit;
+    }
+
+    private boolean shouldUseMysqlFallback(PageResult<PostBriefDTO> esPage, PageResult<PostBriefDTO> mysqlFallback) {
+        if (isEmptyPage(mysqlFallback)) {
+            return false;
+        }
+        if (isEmptyPage(esPage)) {
+            return true;
+        }
+        return itemCount(mysqlFallback) > itemCount(esPage) || Boolean.TRUE.equals(mysqlFallback.getHasMore());
+    }
+
+    private int itemCount(PageResult<PostBriefDTO> page) {
+        return page == null || page.getItems() == null ? 0 : page.getItems().size();
     }
 
     @Override
@@ -106,7 +150,7 @@ public class SearchFacadeImpl implements SearchFacade {
         tagMapper.selectActiveTags().stream()
                 .sorted(Comparator.comparing(TagPO::getUseCount, Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(TagPO::getTagName)
-                .filter(name -> name != null && !name.isBlank())
+                .filter(name -> name != null && !name.isBlank() && !PublicContentFilter.isSyntheticText(name))
                 .limit(limit)
                 .forEach(result::add);
         LocalDateTime since = LocalDateTime.now().minusDays(90);
@@ -116,8 +160,9 @@ public class SearchFacadeImpl implements SearchFacade {
         return result.stream().limit(limit).toList();
     }
 
-    private Optional<PageResult<PostBriefDTO>> searchByElasticsearch(String keyword, String company, String position,
-                                                                     Integer type, String sort, String cursor, int limit) {
+    private Optional<ElasticsearchSearchPage> searchByElasticsearch(String keyword, String company, String position,
+                                                                    Integer type, String sort, String cursor, int limit) {
+        int scanLimit = elasticsearchScanLimit(limit);
         Map<String, Object> body = new HashMap<>();
         body.put("query", buildEsQuery(keyword, company, position, type, cursor));
         body.put("sort", buildEsSort(sort));
@@ -129,9 +174,9 @@ public class SearchFacadeImpl implements SearchFacade {
                         "content", Map.of("fragment_size", 150, "number_of_fragments", 1)
                 )
         ));
-        body.put("size", limit);
+        body.put("size", scanLimit);
         return elasticsearch.search(elasticsearch.postIndex(), body)
-                .map(json -> toPageResult(json, limit));
+                .map(json -> toElasticsearchPage(json, limit, scanLimit));
     }
 
     private List<Object> buildEsSort(String sort) {
@@ -177,10 +222,10 @@ public class SearchFacadeImpl implements SearchFacade {
         return Map.of("bool", Map.of("must", must, "filter", filter));
     }
 
-    private PageResult<PostBriefDTO> toPageResult(JsonNode json, int limit) {
+    private ElasticsearchSearchPage toElasticsearchPage(JsonNode json, int limit, int scanLimit) {
         JsonNode hits = json.path("hits").path("hits");
         if (!hits.isArray() || hits.isEmpty()) {
-            return PageResult.empty();
+            return new ElasticsearchSearchPage(PageResult.empty(), 0, scanLimit);
         }
         List<PostBriefDTO> items = new ArrayList<>();
         for (JsonNode hit : hits) {
@@ -201,11 +246,13 @@ public class SearchFacadeImpl implements SearchFacade {
                     .build());
         }
         List<PostBriefDTO> visibleItems = filterVisibleSearchResults(items);
-        boolean hasMore = items.size() == limit;
-        String next = hasMore && !items.isEmpty() && items.get(items.size() - 1).getCreateTime() != null
-                ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+        boolean hasMore = visibleItems.size() > limit;
+        List<PostBriefDTO> pageItems = hasMore ? visibleItems.subList(0, limit) : visibleItems;
+        PostBriefDTO cursorItem = pageItems.isEmpty() ? null : pageItems.get(pageItems.size() - 1);
+        String next = hasMore && cursorItem.getCreateTime() != null
+                ? String.valueOf(cursorItem.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
-        return PageResult.of(visibleItems, next, hasMore);
+        return new ElasticsearchSearchPage(PageResult.of(pageItems, next, hasMore), items.size(), scanLimit);
     }
 
     private List<PostBriefDTO> filterVisibleSearchResults(List<PostBriefDTO> esItems) {
@@ -256,6 +303,11 @@ public class SearchFacadeImpl implements SearchFacade {
             JsonNode hits = json.path("hits").path("hits");
             for (JsonNode hit : hits) {
                 JsonNode source = hit.path("_source");
+                if (PublicContentFilter.isSyntheticText(source.path("title").asText(null))
+                        || PublicContentFilter.isSyntheticText(source.path("company").asText(null))
+                        || PublicContentFilter.isSyntheticText(source.path("position").asText(null))) {
+                    continue;
+                }
                 addIfMatches(result, source.path("company").asText(null), prefix);
                 addIfMatches(result, source.path("position").asText(null), prefix);
                 addIfMatches(result, source.path("title").asText(null), prefix);
@@ -277,6 +329,11 @@ public class SearchFacadeImpl implements SearchFacade {
         Set<String> result = new LinkedHashSet<>();
         for (PostPO post : candidates) {
             JsonNode ext = parseExt(extByPostId.get(post.getId()));
+            if (PublicContentFilter.isSyntheticText(post.getTitle())
+                    || PublicContentFilter.isSyntheticText(post.getContent())
+                    || PublicContentFilter.isSyntheticText(extByPostId.get(post.getId()))) {
+                continue;
+            }
             addIfMatches(result, ext.path("company").asText(null), p);
             addIfMatches(result, ext.path("position").asText(null), p);
             addIfMatches(result, post.getTitle(), p);
@@ -321,6 +378,9 @@ public class SearchFacadeImpl implements SearchFacade {
                 .createTime(p.getCreateTime())
                 .build()).toList();
         items = enrich(items);
+        items = items.stream()
+                .filter(post -> !PublicContentFilter.isSyntheticPost(post))
+                .toList();
         if ("hot".equals(sort)) {
             items = items.stream()
                     .sorted(Comparator.comparingDouble(this::hotScore).reversed()
@@ -328,7 +388,7 @@ public class SearchFacadeImpl implements SearchFacade {
                     .toList();
         }
         items = items.stream().limit(limit).toList();
-        String next = hasMore
+        String next = hasMore && !items.isEmpty()
                 ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
         return PageResult.of(items, next, hasMore);
@@ -361,6 +421,13 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private int fallbackScanLimit(int limit) {
         return Math.min(Math.max(limit + 1, limit * 2), MYSQL_FALLBACK_MAX_SCAN);
+    }
+
+    private int elasticsearchScanLimit(int limit) {
+        return Math.min(Math.max(limit + 1, limit * 2), MYSQL_FALLBACK_MAX_SCAN);
+    }
+
+    private record ElasticsearchSearchPage(PageResult<PostBriefDTO> page, int rawHitCount, int scanLimit) {
     }
 
     private String blankToNull(String value) {
@@ -454,7 +521,7 @@ public class SearchFacadeImpl implements SearchFacade {
             return;
         }
         String text = String.valueOf(value).trim();
-        if (!text.isBlank()) {
+        if (!text.isBlank() && !PublicContentFilter.isSyntheticText(text)) {
             result.add(text);
         }
     }

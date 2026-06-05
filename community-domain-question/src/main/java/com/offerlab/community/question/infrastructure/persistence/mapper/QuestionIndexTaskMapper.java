@@ -85,6 +85,16 @@ public interface QuestionIndexTaskMapper extends BaseMapper<QuestionIndexTaskPO>
     @Select("""
             SELECT *
             FROM t_question_index_task
+            WHERE task_type = #{taskType}
+              AND task_status IN ('PENDING', 'RUNNING')
+            ORDER BY create_time DESC
+            LIMIT 1
+            """)
+    QuestionIndexTaskPO findActiveRebuildTask(@Param("taskType") String taskType);
+
+    @Select("""
+            SELECT *
+            FROM t_question_index_task
             ORDER BY create_time DESC
             LIMIT #{limit}
             """)

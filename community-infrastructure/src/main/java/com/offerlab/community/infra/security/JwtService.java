@@ -68,6 +68,10 @@ public class JwtService {
      * 校验并返回 uid。token 无效或在黑名单中则返回 null
      */
     public Long parseUid(String token) {
+        return parse(token).uid();
+    }
+
+    public JwtAuthResult parse(String token) {
         try {
             Claims claims = Jwts.parser()
                     .verifyWith(key())
@@ -75,11 +79,11 @@ public class JwtService {
                     .parseSignedClaims(token)
                     .getPayload();
             String sub = claims.getSubject();
-            if (sub == null) return null;
+            if (sub == null) return JwtAuthResult.invalid();
             Long uid = Long.parseLong(sub);
             try {
                 if (Boolean.TRUE.equals(redis.hasKey("auth:blacklist:" + token))) {
-                    return null;
+                    return JwtAuthResult.invalid();
                 }
                 String revokedBefore = redis.opsForValue().get(revokedBeforeKey(uid));
                 Number issuedAtMillis = claims.get("iatMillis", Number.class);
@@ -87,14 +91,15 @@ public class JwtService {
                         ? issuedAtMillis.longValue()
                         : claims.getIssuedAt() == null ? 0L : claims.getIssuedAt().getTime();
                 if (revokedBefore != null && issuedAt <= Long.parseLong(revokedBefore)) {
-                    return null;
+                    return JwtAuthResult.invalid();
                 }
             } catch (Exception redisFailure) {
                 log.warn("jwt redis revocation check degraded: uid={} reason={}", uid, redisFailure.getMessage());
+                return JwtAuthResult.degraded(uid);
             }
-            return uid;
+            return JwtAuthResult.authenticated(uid);
         } catch (Exception e) {
-            return null;
+            return JwtAuthResult.invalid();
         }
     }
 

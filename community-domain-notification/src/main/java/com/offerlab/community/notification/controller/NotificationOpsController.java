@@ -9,7 +9,13 @@ import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationRetryTaskMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationRetryTaskPO;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,6 +30,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/ops")
 @RequiredArgsConstructor
+@Validated
 public class NotificationOpsController {
 
     private final NotificationRetryService retryService;
@@ -54,7 +61,8 @@ public class NotificationOpsController {
     }
 
     @PostMapping("/notification-retry-tasks/{id}/replay")
-    public Result<Map<String, Object>> replayRetryTask(@PathVariable Long id) {
+    public Result<Map<String, Object>> replayRetryTask(@PathVariable Long id,
+                                                       @Valid @RequestBody(required = false) ActionRemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
         NotificationRetryTaskPO task = retryService.findById(id);
@@ -64,28 +72,70 @@ public class NotificationOpsController {
         if (task.getTaskStatus() == null || task.getTaskStatus() != NotificationRetryTaskMapper.STATUS_FAILED) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
+        adminAuditService.requireWritable("NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", id);
         boolean replayed = retryService.replayFailed(id);
-        adminAuditService.record(uid, "NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", id,
-                task, Map.of("replayed", replayed), null);
+        adminAuditService.recordRequired(uid, "NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", id,
+                task, Map.of("replayed", replayed), cleanRemark(request == null ? null : request.remark()));
         return Result.ok(Map.of("id", id, "replayed", replayed));
     }
 
     @PostMapping("/notification-retry-tasks/replay-batch")
-    public Result<Map<String, Object>> replayRetryTasks(@RequestBody RetryTaskBatchRequest request) {
+    public Result<Map<String, Object>> replayRetryTasks(@Valid @RequestBody RetryTaskBatchRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
-        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids().stream()
-                .filter(id -> id != null && id > 0)
+        List<Long> ids = request.ids().stream()
                 .distinct()
-                .limit(100)
                 .toList();
-        if (ids.isEmpty()) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
+        adminAuditService.requireWritable("NOTIF_RETRY_REPLAY_BATCH", "NOTIF_RETRY_TASK", null);
         int replayed = retryService.replayFailedBatch(ids);
-        adminAuditService.record(uid, "NOTIF_RETRY_REPLAY_BATCH", "NOTIF_RETRY_TASK", null,
-                ids, Map.of("replayed", replayed), null);
+        adminAuditService.recordRequired(uid, "NOTIF_RETRY_REPLAY_BATCH", "NOTIF_RETRY_TASK", null,
+                ids, Map.of("replayed", replayed), cleanRemark(request.remark()));
         return Result.ok(Map.of("requested", ids.size(), "replayed", replayed));
+    }
+
+    @PostMapping("/notification-retry-tasks/replay-batch/preview")
+    public Result<Map<String, Object>> previewReplayRetryTasks(@Valid @RequestBody RetryTaskBatchRequest request) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        List<Long> ids = request.ids().stream()
+                .distinct()
+                .toList();
+        return Result.ok(previewRetryBatch(ids));
+    }
+
+    private Map<String, Object> previewRetryBatch(List<Long> ids) {
+        List<Map<String, Object>> items = ids.stream()
+                .map(id -> {
+                    NotificationRetryTaskPO task = retryService.findById(id);
+                    Map<String, Object> item = new java.util.LinkedHashMap<>();
+                    item.put("id", id);
+                    if (task == null) {
+                        item.put("eligible", false);
+                        item.put("reason", "NOT_FOUND");
+                        item.put("reasonText", "补偿任务不存在");
+                        return item;
+                    }
+                    boolean eligible = task.getTaskStatus() != null && task.getTaskStatus() == NotificationRetryTaskMapper.STATUS_FAILED;
+                    item.put("eligible", eligible);
+                    item.put("reason", eligible ? "READY" : "STATUS_NOT_FAILED");
+                    item.put("reasonText", eligible ? "失败任务，可重放" : "当前状态不是失败，不会被重放");
+                    item.put("status", task.getTaskStatus());
+                    item.put("statusText", statusName(task.getTaskStatus()));
+                    item.put("objectLabel", "receiver:" + task.getReceiverUid());
+                    item.put("targetId", task.getTargetId());
+                    item.put("retryCount", task.getRetryCount());
+                    return item;
+                })
+                .toList();
+        long eligible = items.stream()
+                .filter(item -> Boolean.TRUE.equals(item.get("eligible")))
+                .count();
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("operation", "NOTIF_RETRY_REPLAY_BATCH");
+        result.put("requested", ids.size());
+        result.put("eligible", eligible);
+        result.put("skipped", ids.size() - eligible);
+        result.put("items", items);
+        return result;
     }
 
     private static Integer normalizeStatus(Integer status) {
@@ -101,6 +151,30 @@ public class NotificationOpsController {
         throw new BizException(ErrorCode.PARAM_ERROR);
     }
 
-    public record RetryTaskBatchRequest(List<Long> ids) {
+    private static String statusName(Object status) {
+        int value = status instanceof Number number ? number.intValue() : -1;
+        return switch (value) {
+            case NotificationRetryTaskMapper.STATUS_PENDING -> "pending";
+            case NotificationRetryTaskMapper.STATUS_DONE -> "done";
+            case NotificationRetryTaskMapper.STATUS_FAILED -> "failed";
+            case NotificationRetryTaskMapper.STATUS_RUNNING -> "running";
+            default -> "unknown";
+        };
+    }
+
+    public record RetryTaskBatchRequest(
+            @NotEmpty @Size(max = 100) List<@NotNull @Positive Long> ids,
+            @Size(max = 500) String remark) {
+    }
+
+    public record ActionRemarkRequest(@Size(max = 500) String remark) {
+    }
+
+    private static String cleanRemark(String remark) {
+        if (remark == null || remark.trim().isEmpty()) {
+            return null;
+        }
+        String value = remark.trim();
+        return value.length() > 500 ? value.substring(0, 500) : value;
     }
 }

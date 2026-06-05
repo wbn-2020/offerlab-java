@@ -138,9 +138,10 @@ public class InteractionController {
 
     @GetMapping("/comments/admin/reports")
     public Result<List<CommentReportDTO>> listCommentReports(@RequestParam(required = false) Integer status,
-                                                             @RequestParam(defaultValue = "20") int limit) {
+                                                             @RequestParam(defaultValue = "20") int limit,
+                                                             @RequestParam(defaultValue = "false") boolean includeTestData) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        return Result.ok(reportService.listRecent(status, limit));
+        return Result.ok(reportService.listRecent(status, limit, includeTestData));
     }
 
     @PostMapping("/comments/admin/reports/{reportId}/review")

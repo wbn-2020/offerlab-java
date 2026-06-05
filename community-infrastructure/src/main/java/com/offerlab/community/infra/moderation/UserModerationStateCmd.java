@@ -8,4 +8,5 @@ public class UserModerationStateCmd {
     private Integer muteHours;
     private Integer banHours;
     private String reason;
+    private String auditRemark;
 }

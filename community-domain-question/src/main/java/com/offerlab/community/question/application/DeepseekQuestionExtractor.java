@@ -39,23 +39,43 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
     private String allowedHosts;
     @Value("${offerlab.ai.deepseek.extract-max-prompt-chars:" + DeepseekSafety.DEFAULT_MAX_PROMPT_CHARS + "}")
     private int maxPromptChars;
+    @Value("${offerlab.ai.deepseek.prompt-cost-micros-per-1k:0}")
+    private long promptCostMicrosPer1k;
+    @Value("${offerlab.ai.deepseek.completion-cost-micros-per-1k:0}")
+    private long completionCostMicrosPer1k;
 
     @Override
     public List<ExtractedQuestion> extract(PostDTO post) {
+        return extractWithMetrics(post).questions();
+    }
+
+    @Override
+    public QuestionExtractionResult extractWithMetrics(PostDTO post) {
         if (!enabled || apiKey == null || apiKey.isBlank()) {
-            return ruleBasedQuestionExtractor.extract(post);
+            return QuestionExtractionResult.rules(ruleBasedQuestionExtractor.extract(post));
         }
         try {
-            List<ExtractedQuestion> result = callDeepseek(post);
-            return result.isEmpty() ? ruleBasedQuestionExtractor.extract(post) : result;
+            DeepseekExtraction result = callDeepseek(post);
+            if (result.questions().isEmpty()) {
+                return fallback(post, "EMPTY_DEEPSEEK_RESULT");
+            }
+            return new QuestionExtractionResult(
+                    result.questions(),
+                    "deepseek",
+                    false,
+                    result.promptTokens(),
+                    result.completionTokens(),
+                    estimateCostMicros(result.promptTokens(), result.completionTokens()),
+                    null
+            );
         } catch (Exception e) {
             log.warn("deepseek question extraction failed, fallback to rule extractor: postId={} error={}",
                     post == null ? null : post.getId(), e.getMessage());
-            return ruleBasedQuestionExtractor.extract(post);
+            return fallback(post, normalizeErrorCode(e));
         }
     }
 
-    private List<ExtractedQuestion> callDeepseek(PostDTO post) throws Exception {
+    private DeepseekExtraction callDeepseek(PostDTO post) throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("temperature", 0.1);
@@ -81,11 +101,14 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
             throw new IllegalStateException("Deepseek HTTP " + response.statusCode());
         }
         JsonNode root = objectMapper.readTree(response.body());
+        JsonNode usage = root.path("usage");
+        int promptTokens = Math.max(0, usage.path("prompt_tokens").asInt(0));
+        int completionTokens = Math.max(0, usage.path("completion_tokens").asInt(0));
         String content = root.path("choices").path(0).path("message").path("content").asText("");
         JsonNode parsed = objectMapper.readTree(content);
         JsonNode questions = parsed.path("questions");
         if (!questions.isArray()) {
-            return List.of();
+            return new DeepseekExtraction(List.of(), promptTokens, completionTokens);
         }
         List<ExtractedQuestion> result = new ArrayList<>();
         for (JsonNode node : questions) {
@@ -110,7 +133,39 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
                 break;
             }
         }
-        return result;
+        return new DeepseekExtraction(result, promptTokens, completionTokens);
+    }
+
+    private QuestionExtractionResult fallback(PostDTO post, String errorCode) {
+        return new QuestionExtractionResult(
+                ruleBasedQuestionExtractor.extract(post),
+                "rules",
+                true,
+                0,
+                0,
+                0L,
+                errorCode
+        );
+    }
+
+    private long estimateCostMicros(int promptTokens, int completionTokens) {
+        long promptCost = (Math.max(0L, promptTokens) * Math.max(0L, promptCostMicrosPer1k)) / 1000L;
+        long completionCost = (Math.max(0L, completionTokens) * Math.max(0L, completionCostMicrosPer1k)) / 1000L;
+        return promptCost + completionCost;
+    }
+
+    private String normalizeErrorCode(Exception e) {
+        String message = e == null ? "" : e.getMessage();
+        if (message != null && message.startsWith("Deepseek HTTP ")) {
+            return "DEEPSEEK_HTTP_" + message.substring("Deepseek HTTP ".length()).trim();
+        }
+        if (e instanceof java.net.http.HttpTimeoutException || message != null && message.toLowerCase().contains("timeout")) {
+            return "DEEPSEEK_TIMEOUT";
+        }
+        if (message != null && message.toLowerCase().contains("not allowed")) {
+            return "DEEPSEEK_CONFIG_BLOCKED";
+        }
+        return "DEEPSEEK_EXCEPTION";
     }
 
     private String prompt(PostDTO post) {
@@ -129,5 +184,8 @@ public class DeepseekQuestionExtractor implements QuestionExtractor {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private record DeepseekExtraction(List<ExtractedQuestion> questions, int promptTokens, int completionTokens) {
     }
 }

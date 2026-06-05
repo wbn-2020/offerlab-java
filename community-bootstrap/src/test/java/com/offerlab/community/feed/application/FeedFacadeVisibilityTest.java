@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -80,6 +81,90 @@ class FeedFacadeVisibilityTest {
         assertTrue(page.getHasMore());
         assertEquals("900", page.getNextCursor());
         verify(postFacade).batchGetPosts(List.of(100L, 101L), 7L);
+    }
+
+    @Test
+    void latestFeedUsesDatabaseLatestSoFreshPublishedPostsDoNotDependOnRedisFanout() {
+        PostBriefDTO fresh = PostBriefDTO.builder()
+                .id(202L)
+                .authorId(22L)
+                .title("fresh published post")
+                .summary("fresh")
+                .createTime(LocalDateTime.now())
+                .build();
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(fresh), null, false));
+        when(postFacade.batchGetCounters(List.of(202L))).thenReturn(Map.of(
+                202L, PostCounterDTO.builder().postId(202L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(22L))).thenReturn(Map.of(
+                22L, UserBriefDTO.builder().uid(22L).nickname("author").build()));
+
+        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(202L, page.getItems().get(0).getPost().getId());
+        assertEquals(Boolean.FALSE, page.getHasMore());
+    }
+
+    @Test
+    void latestFeedFirstPageMergesRedisGlobalLatestWithDatabaseFallback() {
+        PostBriefDTO dbPost = PostBriefDTO.builder()
+                .id(301L)
+                .authorId(31L)
+                .title("database latest")
+                .summary("db")
+                .createTime(LocalDateTime.of(2026, 1, 1, 0, 0))
+                .build();
+        PostBriefDTO redisPost = PostBriefDTO.builder()
+                .id(302L)
+                .authorId(32L)
+                .title("redis fanout latest")
+                .summary("redis")
+                .createTime(LocalDateTime.of(2025, 12, 31, 23, 0))
+                .build();
+        ZSetOperations.TypedTuple<String> redisTuple = tuple("302", 1_800_000_000_000D);
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(dbPost), "db-cursor", true));
+        when(feedRedis.readGlobalLatest(Double.MAX_VALUE, 2)).thenReturn(Set.of(redisTuple));
+        when(postFacade.batchGetPosts(List.of(302L), null)).thenReturn(Map.of(302L, redisPost));
+        when(postFacade.batchGetCounters(List.of(301L))).thenReturn(Map.of(
+                301L, PostCounterDTO.builder().postId(301L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(postFacade.batchGetCounters(List.of(302L))).thenReturn(Map.of(
+                302L, PostCounterDTO.builder().postId(302L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(31L))).thenReturn(Map.of(
+                31L, UserBriefDTO.builder().uid(31L).nickname("db-author").build()));
+        when(userFacade.batchGetUserBriefs(Set.of(32L))).thenReturn(Map.of(
+                32L, UserBriefDTO.builder().uid(32L).nickname("redis-author").build()));
+
+        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2);
+
+        assertEquals(2, page.getItems().size());
+        assertEquals(302L, page.getItems().get(0).getPost().getId());
+        assertEquals(301L, page.getItems().get(1).getPost().getId());
+        assertEquals("db-cursor", page.getNextCursor());
+        assertEquals(Boolean.TRUE, page.getHasMore());
+    }
+
+    @Test
+    void latestFeedFirstPageFallsBackToDatabaseWhenRedisLatestFails() {
+        PostBriefDTO dbPost = PostBriefDTO.builder()
+                .id(401L)
+                .authorId(41L)
+                .title("database fallback")
+                .summary("db")
+                .createTime(LocalDateTime.of(2026, 1, 2, 0, 0))
+                .build();
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(dbPost), "db-fallback", false));
+        doThrow(new RuntimeException("redis down")).when(feedRedis).readGlobalLatest(Double.MAX_VALUE, 2);
+        when(postFacade.batchGetCounters(List.of(401L))).thenReturn(Map.of(
+                401L, PostCounterDTO.builder().postId(401L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(41L))).thenReturn(Map.of(
+                41L, UserBriefDTO.builder().uid(41L).nickname("db-author").build()));
+
+        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(401L, page.getItems().get(0).getPost().getId());
+        assertEquals("db-fallback", page.getNextCursor());
+        assertEquals(Boolean.FALSE, page.getHasMore());
     }
 
     @SuppressWarnings("unchecked")
