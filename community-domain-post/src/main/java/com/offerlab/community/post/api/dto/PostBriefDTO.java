@@ -24,6 +24,7 @@ public class PostBriefDTO {
     private String highlightSummary;
     private String coverUrl;
     private String extJson;
+    private Integer domain;
     private List<TagDTO> tags;
     private PostCounterDTO counter;
     private LocalDateTime createTime;
