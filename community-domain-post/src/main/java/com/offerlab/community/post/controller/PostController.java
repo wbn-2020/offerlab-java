@@ -94,6 +94,7 @@ public class PostController {
         Long id = postFacade.publishPost(PostCreateCmd.builder()
                 .authorId(uid)
                 .postType(req.getPostType())
+                .domain(req.getDomain())
                 .title(req.getTitle())
                 .content(req.getContent())
                 .coverUrl(req.getCoverUrl())
@@ -123,6 +124,7 @@ public class PostController {
                 .operatorUid(uid)
                 .title(req.getTitle())
                 .content(req.getContent())
+                .domain(req.getDomain())
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
@@ -161,11 +163,12 @@ public class PostController {
                                                  @RequestParam(required = false, name = "tag") Long tag,
                                                  @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(required = false) Boolean featured,
+                                                 @RequestParam(required = false) Integer domain,
                                                  @RequestParam(defaultValue = "false") boolean includeTestData,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
         Long effectiveTagId = tagId != null ? tagId : tag;
-        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured, cursor, size, includeTestData));
+        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured, domain, cursor, size, includeTestData));
     }
 
     @PublicApi
@@ -234,6 +237,8 @@ public class PostController {
     public static class PublishReq {
         @NotNull
         private Integer postType;
+        /** 领域编码，1-技术 2-职场 3-阅读 4-生活 5-投资理财。为空时服务端默认 TECH */
+        private Integer domain;
         @NotBlank
         @Size(max = 255)
         private String title;
@@ -265,6 +270,7 @@ public class PostController {
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
+        private Integer domain;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private List<Long> tags;
