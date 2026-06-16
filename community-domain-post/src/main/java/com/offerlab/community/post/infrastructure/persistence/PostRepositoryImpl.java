@@ -24,6 +24,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 @Repository
 @RequiredArgsConstructor
 public class PostRepositoryImpl implements PostRepository {
@@ -196,6 +199,18 @@ public class PostRepositoryImpl implements PostRepository {
     }
 
     private static Post toDomain(PostPO po, PostExtensionPO ext) {
+        Integer domain = null;
+        if (ext != null && ext.getExtJson() != null) {
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                JsonNode root = mapper.readTree(ext.getExtJson());
+                if (root.has("domain")) {
+                    domain = root.get("domain").asInt();
+                }
+            } catch (Exception e) {
+                // ignore parse errors
+            }
+        }
         return Post.builder()
                 .id(po.getId())
                 .authorId(po.getAuthorId())
@@ -209,6 +224,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .updateTime(po.getUpdateTime())
                 .extJson(ext == null ? null : ext.getExtJson())
                 .version(po.getVersion())
+                .domain(domain)
                 .build();
     }
 }

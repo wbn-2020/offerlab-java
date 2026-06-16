@@ -200,15 +200,23 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
-    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size) {
-        return listPosts(authorId, tagId, postType, featured, cursor, size, false);
+    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
+        return listPosts(authorId, tagId, postType, featured, domain, cursor, size, false);
     }
 
     @Override
-    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured,
+    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
                                              long cursor, int size, boolean includeTestData) {
         int limit = pageSize(size);
         List<Post> list = scanPublicPosts(authorId, tagId, postType, featured, cursor, limit);
+
+        // In-memory domain filter for Phase 1
+        if (domain != null) {
+            list = list.stream()
+                    .filter(p -> p.getDomain() != null && p.getDomain().equals(domain))
+                    .toList();
+        }
+
         return paged(list, limit, includeTestData);
     }
 
@@ -222,7 +230,7 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public PageResult<PostBriefDTO> getPostsByTag(Long tagId, Integer postType, Boolean featured, long cursor, int size) {
-        return listPosts(null, tagId, postType, featured, cursor, size);
+        return listPosts(null, tagId, postType, featured, null, cursor, size);
     }
 
     private PageResult<PostBriefDTO> paged(List<Post> list, int size) {

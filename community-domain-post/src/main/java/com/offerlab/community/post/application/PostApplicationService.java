@@ -32,6 +32,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -57,6 +61,7 @@ public class PostApplicationService {
         long id = idGen.nextId();
         List<Long> resolvedTagIds = resolveTagIds(input.tagIds(), input.tagNames());
         requireResolvedTagCount(input.postType(), resolvedTagIds);
+        String enrichedExtJson = mergeDomainToExtJson(input.extJson(), cmd.getDomain());
         boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired());
         Post post = Post.builder()
                 .id(id)
@@ -67,8 +72,9 @@ public class PostApplicationService {
                 .coverUrl(cmd.getCoverUrl())
                 .visibility(cmd.getVisibility() == null ? Post.VIS_PUBLIC : cmd.getVisibility())
                 .postStatus(reviewRequired ? Post.STATUS_REVIEWING : Post.STATUS_PUBLISHED)
-                .extJson(input.extJson())
+                .extJson(enrichedExtJson)
                 .tagIds(resolvedTagIds)
+                .domain(cmd.getDomain())
                 .build();
         postRepo.save(post);
         counterMapper.initIfAbsent(id);
@@ -112,13 +118,15 @@ public class PostApplicationService {
         if (tagsProvided) {
             requireResolvedTagCount(input.postType(), resolvedTagIds);
         }
+        String enrichedExtJson = mergeDomainToExtJson(input.extJson(), cmd.getDomain());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
         versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
-                input.title(), input.content(), nextCoverUrl, nextVisibility, input.extJson(), resolvedTagIds, tagsProvided);
+                input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided);
 
         post.setVisibility(nextVisibility);
-        post.setExtJson(input.extJson());
+        post.setExtJson(enrichedExtJson);
+        post.setDomain(cmd.getDomain());
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
@@ -162,6 +170,28 @@ public class PostApplicationService {
     public void incrView(Long postId) {
         counterMapper.incrView(postId, 1);
         afterCommit.execute(() -> postCounterRedis.incrView(postId, 1), "post view counter:" + postId);
+    }
+
+    private String mergeDomainToExtJson(String extJson, Integer domain) {
+        if (domain == null) return extJson;
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root;
+            if (extJson != null && !extJson.isBlank()) {
+                root = mapper.readTree(extJson);
+                if (root instanceof ObjectNode obj) {
+                    obj.put("domain", domain);
+                    return mapper.writeValueAsString(obj);
+                }
+            }
+            // No existing extJson, create new
+            ObjectNode obj = mapper.createObjectNode();
+            obj.put("domain", domain);
+            return mapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            // If can't parse, return original
+            return extJson;
+        }
     }
 
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {
