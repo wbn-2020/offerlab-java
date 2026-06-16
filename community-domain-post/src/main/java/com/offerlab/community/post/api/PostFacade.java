@@ -45,13 +45,13 @@ public interface PostFacade {
 
 
     List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit);
-    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size);
+    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size);
 
-    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured,
+    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
                                        long cursor, int size, boolean includeTestData);
 
     default PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
-        return listPosts(authorId, tagId, postType, null, cursor, size);
+        return listPosts(authorId, tagId, postType, null, null, cursor, size);
     }
 
     List<TagDTO> listTags();
