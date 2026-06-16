@@ -18,10 +18,13 @@ class PostDraftGuardTest {
         String controller = read("src/main/java/com/offerlab/community/post/controller/PostDraftController.java");
         String postController = read("src/main/java/com/offerlab/community/post/controller/PostController.java");
         String service = read("src/main/java/com/offerlab/community/post/application/PostDraftService.java");
+        String validator = read("src/main/java/com/offerlab/community/post/application/PostPublishQualityValidator.java");
         String mapper = read("src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/PostDraftMapper.java");
         String po = read("src/main/java/com/offerlab/community/post/infrastructure/persistence/po/PostDraftPO.java");
         String dto = read("src/main/java/com/offerlab/community/post/api/dto/PostDraftDTO.java");
         String cmd = read("src/main/java/com/offerlab/community/post/api/dto/PostDraftCmd.java");
+        String createCmd = read("src/main/java/com/offerlab/community/post/api/dto/PostCreateCmd.java");
+        String limits = read("src/main/java/com/offerlab/community/post/api/dto/PostContentLimits.java");
 
         assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS t_post_draft"), "migration must create the draft table");
         assertTrue(migration.contains("source_post_id"), "drafts for editing existing posts must keep source_post_id");
@@ -54,6 +57,14 @@ class PostDraftGuardTest {
         assertTrue(mapper.contains("AND is_deleted = 0"), "mapper queries must ignore deleted drafts");
         assertTrue(postController.contains("private Long draftId"), "publish/update requests must accept draftId");
         assertTrue(postController.contains("draftService.deleteIfOwned(uid, req.getDraftId())"), "publishing must clear only the caller's draft");
+        assertTrue(limits.contains("MAX_CONTENT_LEN = 50000"), "post body limit must match the frontend editor");
+        assertTrue(limits.contains("MAX_EXT_JSON_LEN = 20000"), "extension JSON limit must remain bounded separately");
+        assertTrue(cmd.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "draft command must use the shared body limit");
+        assertTrue(createCmd.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "publish command must use the shared body limit");
+        assertTrue(controller.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "draft request must use the shared body limit");
+        assertTrue(postController.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "publish/update requests must use the shared body limit");
+        assertTrue(service.contains("PostContentLimits.MAX_CONTENT_LEN"), "draft persistence must not truncate below the shared body limit");
+        assertTrue(validator.contains("MAX_CONTENT_LEN = PostContentLimits.MAX_CONTENT_LEN"), "quality validation must use the shared body limit");
     }
 
     private static String read(String path) throws Exception {

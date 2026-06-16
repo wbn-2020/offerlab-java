@@ -14,22 +14,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PostSmokeScriptGuardTest {
 
     @Test
-    void smokeScriptPublishesInterviewPostWithEnoughContent() throws Exception {
+    void smokeScriptPublishesCommunityProjectReviewWithEnoughContent() throws Exception {
         String script = readProjectFile("scripts/smoke-offerlab.ps1");
         Matcher matcher = Pattern.compile("\\$postContent\\s*=\\s*\"([^\"]+)\"").matcher(script);
 
         assertTrue(matcher.find(), "smoke script must keep post content in a reviewable variable");
         String content = matcher.group(1).replace("$suffix", "1234567890123").trim();
-        assertTrue(content.length() >= 120, "smoke interview content must satisfy the 120 character rule");
+        assertTrue(content.length() >= 80, "smoke project review content must satisfy the community content rule");
         assertTrue(script.contains("content = $postContent"), "post body must use the guarded smoke content");
-        assertTrue(script.contains("live flow post content satisfies interview length"),
+        assertTrue(script.contains("live flow project review content satisfies community length"),
                 "smoke script must fail early if guarded content becomes too short");
+        assertTrue(script.contains("postType = 11"), "smoke script must publish a project review content type");
+        assertTrue(script.contains("\"contentType\":\"PROJECT_REVIEW\""), "smoke script must write community content metadata");
         assertFalse(script.contains("Smoke content with @SmokeActor"),
                 "old short smoke content must not come back");
         assertFalse(script.contains("$postContent = \"Smoke"),
                 "public smoke content must not use synthetic filter keywords");
         assertFalse(script.contains("title = \"Smoke"),
                 "public smoke title must not use synthetic filter keywords");
+        assertFalse(script.contains("interview review keyword"),
+                "public smoke content must not recreate old interview-positioning data");
+        assertFalse(script.contains("\"interviewResult\""),
+                "public smoke metadata must not write old interview result fields");
         assertFalse(script.contains("SmokeCo"),
                 "public smoke company must not use synthetic filter keywords");
         assertFalse(script.contains("nickname = \"Smoke"),

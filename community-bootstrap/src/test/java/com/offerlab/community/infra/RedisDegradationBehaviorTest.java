@@ -61,6 +61,21 @@ class RedisDegradationBehaviorTest {
     }
 
     @Test
+    void multiLevelCacheLoadsFromSourceWhenRedissonIsNotConfigured() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOps = mock(ValueOperations.class);
+        String key = "test:cache:no-redisson:" + UUID.randomUUID();
+
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get(key)).thenReturn(null);
+
+        MultiLevelCacheImpl<String> cache = new MultiLevelCacheImpl<>(redisTemplate, (RedissonClient) null, new ObjectMapper());
+
+        assertEquals("from-db", cache.get(key, ignored -> "from-db", String.class));
+    }
+
+    @Test
     void multiLevelCacheEvictAndPutDoNotPropagateRedisFailure() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")

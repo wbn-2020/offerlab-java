@@ -1,6 +1,7 @@
 package com.offerlab.community.search.controller;
 
 import com.offerlab.community.common.result.Result;
+import com.offerlab.community.common.utils.RiskConfirmation;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
@@ -35,12 +36,14 @@ public class SearchAdminController {
             @Valid @RequestBody(required = false) RebuildRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireAdmin(uid);
+        String remark = RiskConfirmation.requireCritical(request == null ? null : request.remark(),
+                request == null ? null : request.confirmationPhrase());
         adminAuditService.requireWritable("POST_INDEX_REBUILD_TASK", "SEARCH_INDEX", null);
         SearchIndexTaskService.SearchIndexTask task = taskService.submitRebuildTask(uid);
         adminAuditService.recordRequired(uid, "POST_INDEX_REBUILD_TASK", "SEARCH_INDEX", task.getTaskId(),
                 null,
                 Map.of("taskId", task.getTaskId(), "type", task.getType(), "status", task.getStatus()),
-                cleanRemark(request == null ? null : request.remark()));
+                remark);
         return Result.ok(task);
     }
 
@@ -56,7 +59,8 @@ public class SearchAdminController {
         return Result.ok(taskService.listRecentTasks(limit));
     }
 
-    public record RebuildRequest(@Size(max = 500) String remark) {
+    public record RebuildRequest(@Size(max = 500) String remark,
+                                 @Size(max = 32) String confirmationPhrase) {
     }
 
     private static String cleanRemark(String remark) {

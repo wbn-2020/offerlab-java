@@ -9,6 +9,8 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
@@ -111,6 +113,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
     private final QuestionSearchIndexer questionSearchIndexer;
     private final QuestionPrepAssembler prepAssembler;
     private final AfterCommitExecutor afterCommit;
+    private final ReviewQueuePublisher reviewQueuePublisher;
 
     @Override
     @Transactional
@@ -209,7 +212,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
 
     @Override
     public AiTaskDetailDTO getTaskDetail(Long taskId) {
-        AiExtractTaskPO task = taskMapper.selectById(taskId);
+        AiExtractTaskPO task = selectTaskById(taskId);
         if (task == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
@@ -236,17 +239,36 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Override
     @Transactional
     public AiTaskDTO retryTask(Long taskId) {
-        AiExtractTaskPO task = taskMapper.selectById(taskId);
+        AiExtractTaskPO task = selectTaskById(taskId);
         if (task == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        taskMapper.markForRetry(taskId);
+        markTaskForRetry(taskId);
+        reviewQueuePublisher.resolve("AI_TASK_FAILED", taskId, "closed", "task retried", "AI task retry requested", null);
         events.publishEvent(QuestionExtractRequestedEvent.builder()
                 .taskId(taskId)
                 .postId(task.getPostId())
                 .manual(true)
                 .build());
-        return toTaskDto(taskMapper.selectById(taskId));
+        return toTaskDto(selectTaskById(taskId));
+    }
+
+    private AiExtractTaskPO selectTaskById(Long taskId) {
+        try {
+            return taskMapper.selectById(taskId);
+        } catch (RuntimeException e) {
+            log.warn("AI task metrics columns may be missing; fallback to compatible task detail query: taskId={}", taskId, e);
+            return taskMapper.selectByIdCompat(taskId);
+        }
+    }
+
+    private int markTaskForRetry(Long taskId) {
+        try {
+            return taskMapper.markForRetry(taskId);
+        } catch (RuntimeException e) {
+            log.warn("AI task metrics columns may be missing; fallback to compatible retry update: taskId={}", taskId, e);
+            return taskMapper.markForRetryCompat(taskId);
+        }
     }
 
     @Override
@@ -323,6 +345,28 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Override
     public QuestionDetailDTO getQuestionDetail(Long questionId, Long viewerUid, boolean admin) {
         return loadQuestionDetail(questionId, viewerUid, admin);
+    }
+
+    @Override
+    public List<QuestionDTO> getVisibleQuestionsByIds(List<Long> questionIds, Long viewerUid) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = questionIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .collect(Collectors.toCollection(LinkedHashSet::new))
+                .stream()
+                .toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, InterviewQuestionPO> byId = questionMapper.selectVisibleByIds(ids, false).stream()
+                .collect(Collectors.toMap(InterviewQuestionPO::getId, row -> row, (a, b) -> a));
+        return toQuestionDtos(ids.stream()
+                .map(byId::get)
+                .filter(Objects::nonNull)
+                .toList(), viewerUid);
     }
 
     @Override
@@ -667,6 +711,13 @@ public class QuestionFacadeImpl implements QuestionFacade {
         }
         evictQuestionDetail(questionId);
         afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index review:" + questionId);
+        if (status != QuestionConstants.QUESTION_PENDING) {
+            reviewQueuePublisher.resolve("QUESTION_PENDING", questionId,
+                    status == QuestionConstants.QUESTION_APPROVED ? "approved" : "rejected",
+                    status == QuestionConstants.QUESTION_APPROVED ? "question approved" : "question hidden",
+                    "question review status=" + status,
+                    null);
+        }
         return Map.of("questionId", questionId, "status", status);
     }
 
@@ -1032,6 +1083,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
             po.setStatus(decision.status());
             po.setQualityReason(appendReviewReason(po.getQualityReason(), decision.reason()));
             questionMapper.insert(po);
+            if (po.getStatus() != null && po.getStatus() == QuestionConstants.QUESTION_PENDING) {
+                publishPendingQuestionQueueItem(po);
+            }
             changedHashes.add(normalizedHash);
             if (po.getCompany() != null && !po.getCompany().isBlank()) {
                 affectedCompanies.add(po.getCompany());
@@ -1137,6 +1191,48 @@ public class QuestionFacadeImpl implements QuestionFacade {
         task.setErrorMessage(limit(message, 1000));
         task.setUpdateTime(LocalDateTime.now());
         taskMapper.updateById(task);
+        publishFailedAiTaskQueueItem(task);
+    }
+
+    private void publishPendingQuestionQueueItem(InterviewQuestionPO question) {
+        if (question == null || question.getId() == null) {
+            return;
+        }
+        String title = "待审知识卡：" + limit(clean(question.getQuestionText()), 160);
+        String summary = String.join(" / ", List.of(
+                "来源帖子：" + question.getSourcePostId(),
+                "技术栈：" + clean(question.getCompany()),
+                "场景：" + clean(question.getPosition()),
+                "原因：" + clean(question.getQualityReason())
+        )).trim();
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "QUESTION_PENDING",
+                question.getId(),
+                title,
+                summary,
+                "medium",
+                question.getSourceAuthorUid(),
+                50,
+                "{\"postId\":" + question.getSourcePostId() + "}",
+                "question auto review pending"
+        ));
+    }
+
+    private void publishFailedAiTaskQueueItem(AiExtractTaskPO task) {
+        if (task == null || task.getId() == null) {
+            return;
+        }
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "AI_TASK_FAILED",
+                task.getId(),
+                "AI 提取任务失败：" + task.getId(),
+                "帖子：" + task.getPostId() + " / 错误：" + limit(clean(task.getErrorMessage()), 240),
+                safeInt(task.getRetryCount(), 0) >= 3 ? "critical" : "high",
+                null,
+                safeInt(task.getRetryCount(), 0) >= 3 ? 95 : 85,
+                "{\"postId\":" + task.getPostId() + ",\"taskType\":\"" + clean(task.getTaskType()) + "\"}",
+                "AI extract task failed"
+        ));
     }
 
     private void publishExtractionFinished(AiExtractTaskPO task, PostDTO post, boolean success, int questionCount, String errorMessage) {
@@ -1407,15 +1503,15 @@ public class QuestionFacadeImpl implements QuestionFacade {
             actions.add("优先清理 " + review + " 道待复习题，先把本周遗留问题收口");
         }
         if (focusTags != null && !focusTags.isEmpty()) {
-            actions.add("围绕 " + focusTags.get(0).getName() + " 做一轮专项模拟面试");
+            actions.add("围绕 " + focusTags.get(0).getName() + " 做一轮专项练习");
         }
         if (mistakes != null && !mistakes.isEmpty()) {
             actions.add("针对 " + mistakeReasonLabel(mistakes.get(0).getReason()) + " 错因补一张回答卡片");
         }
         if (mockCompleted <= 0) {
-            actions.add("安排至少 1 场模拟面试，补齐表达和限时输出反馈");
+            actions.add("安排至少 1 场专项练习，补齐表达和限时输出反馈");
         } else if (mockAverageScore > 0 && mockAverageScore < 70) {
-            actions.add("复盘本周模拟面试低分题，把 2 分以下答案加入待复习");
+            actions.add("复盘本周专项练习低分题，把 2 分以下答案加入待复习");
         }
         if (mastered <= 0) {
             actions.add("本周至少标记 3 道已掌握题，形成可见进度");
@@ -2062,9 +2158,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
     private String interviewResultLabel(Object value) {
         int code = value instanceof Number number ? number.intValue() : safeParseInt(value);
         return switch (code) {
-            case 1 -> "已 offer";
-            case 2 -> "待结果";
-            case 3 -> "已挂";
+            case 1 -> "已通过";
+            case 2 -> "待反馈";
+            case 3 -> "未通过";
             default -> "未选择";
         };
     }

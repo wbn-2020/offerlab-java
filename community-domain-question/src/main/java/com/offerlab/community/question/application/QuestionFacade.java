@@ -48,6 +48,8 @@ public interface QuestionFacade {
 
     QuestionDetailDTO getQuestionDetail(Long questionId, Long viewerUid, boolean admin);
 
+    List<QuestionDTO> getVisibleQuestionsByIds(List<Long> questionIds, Long viewerUid);
+
     List<PostBriefDTO> getRelatedPosts(Long questionId);
 
     Map<String, Object> favorite(Long questionId, Long uid, boolean favorite);

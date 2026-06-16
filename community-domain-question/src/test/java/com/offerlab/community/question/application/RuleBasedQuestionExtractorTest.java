@@ -61,9 +61,18 @@ class RuleBasedQuestionExtractorTest {
         assertTrue(combined.contains("规则提取"));
         assertTrue(combined.contains("建议围绕"));
         assertTrue(combined.contains("可按三段式回答"));
+        assertTrue(combined.contains("Redis 如何保证缓存和数据库一致性"));
+        assertTrue(combined.contains("Kafka 消息会重复消费"));
+        assertTrue(combined.contains("运营复核"));
+        assertTrue(combined.contains("项目经验"));
+        assertFalse(combined.contains("æ"));
+        assertFalse(combined.contains("Ã"));
         assertFalse(combined.contains("锛"));
+        assertFalse(combined.contains("鐧"));
+        assertFalse(combined.contains("杩"));
         assertFalse(combined.contains("瑙"));
         assertFalse(combined.contains("鎻"));
+        assertFalse(combined.contains("�"));
         assertFalse(combined.contains("??"));
     }
 }

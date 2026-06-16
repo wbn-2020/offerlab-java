@@ -76,12 +76,12 @@ public class AdminPermissionService {
         if (environment.matchesProfiles("prod")) {
             return "LOCKED";
         }
-        return localOpenEnabled ? "LOCAL_OPEN" : "LOCKED";
+        return localOpenEnabled && isLocalBootstrapProfile() ? "LOCAL_OPEN" : "LOCKED";
     }
 
     public boolean isLocalOpenMode() {
         return localOpenEnabled
-                && !environment.matchesProfiles("prod")
+                && isLocalBootstrapProfile()
                 && adminUids.isEmpty()
                 && (!adminTableExists() || countAdminRows() == 0);
     }
@@ -120,6 +120,10 @@ public class AdminPermissionService {
         } catch (Exception e) {
             return 0;
         }
+    }
+
+    private boolean isLocalBootstrapProfile() {
+        return environment.matchesProfiles("local", "dev", "test");
     }
 
     public void requireStrictAdmin(Long uid) {

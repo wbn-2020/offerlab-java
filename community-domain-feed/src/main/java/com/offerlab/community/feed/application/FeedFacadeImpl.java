@@ -306,14 +306,14 @@ public class FeedFacadeImpl implements FeedFacade {
             return 0D;
         }
         JsonNode ext = parseExt(post.getExtJson());
-        String company = clean(ext.path("company").asText(""));
-        String position = clean(ext.path("position").asText(""));
+        String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
+        String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
         String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
         double score = 0D;
-        if (matchesAny(company, intent.getTargetCompanies())) {
+        if (matchesAny(engineeringArea, intent.getTargetCompanies())) {
             score += 28D;
         }
-        if (matchesAny(position, intent.getTargetPositions())) {
+        if (matchesAny(technicalScenario, intent.getTargetPositions())) {
             score += 22D;
         }
         if (matchesAny(content, intent.getTechStack())) {
@@ -325,27 +325,27 @@ public class FeedFacadeImpl implements FeedFacade {
     private List<String> recommendationReasons(PostBriefDTO post, PostCounterDTO counter, UserIntentDTO intent) {
         List<String> reasons = new ArrayList<>();
         JsonNode ext = parseExt(post.getExtJson());
-        String company = clean(ext.path("company").asText(""));
-        String position = clean(ext.path("position").asText(""));
+        String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
+        String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
         String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
-        if (intent != null && matchesAny(company, intent.getTargetCompanies())) {
-            reasons.add("匹配你的目标公司：" + company);
+        if (intent != null && matchesAny(engineeringArea, intent.getTargetCompanies())) {
+            reasons.add("覆盖你关注的工程场景：" + engineeringArea);
         }
-        if (intent != null && matchesAny(position, intent.getTargetPositions())) {
-            reasons.add("匹配你的目标岗位：" + position);
+        if (intent != null && matchesAny(technicalScenario, intent.getTargetPositions())) {
+            reasons.add("关联你关注的技术主题：" + technicalScenario);
         }
         if (intent != null && matchesAny(content, intent.getTechStack())) {
             reasons.add("包含你关注的技术栈");
         }
         long heat = counter == null ? 0L : safe(counter.getLikeCount()) + safe(counter.getFavoriteCount()) + safe(counter.getCommentCount());
         if (heat >= 3) {
-            reasons.add("近期互动热度较高");
+            reasons.add("近期社区互动热度较高");
         }
         if (post.getCreateTime() != null && Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours() <= 24) {
             reasons.add("24 小时内新发布");
         }
         if ((post.getTags() == null ? 0 : post.getTags().size()) >= 2) {
-            reasons.add("标签信息完整，便于快速判断");
+            reasons.add("技术标签完整，便于快速判断主题");
         }
         if (reasons.isEmpty()) {
             reasons.add("根据近期内容质量和活跃度推荐");
@@ -362,6 +362,28 @@ public class FeedFacadeImpl implements FeedFacade {
         } catch (Exception e) {
             return objectMapper.createObjectNode();
         }
+    }
+
+    private static String firstArrayValue(JsonNode ext, String field) {
+        JsonNode node = ext.path(field);
+        if (!node.isArray()) {
+            return "";
+        }
+        for (JsonNode item : node) {
+            String value = clean(item.asText(""));
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String firstNonBlank(String first, String fallback) {
+        String normalized = clean(first);
+        if (!normalized.isBlank()) {
+            return normalized;
+        }
+        return clean(fallback);
     }
 
     private static boolean matchesAny(String source, List<String> candidates) {

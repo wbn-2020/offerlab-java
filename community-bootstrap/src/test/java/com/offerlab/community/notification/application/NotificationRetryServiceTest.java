@@ -76,16 +76,71 @@ class NotificationRetryServiceTest {
                 Map.of("status", NotificationRetryTaskMapper.STATUS_RUNNING, "count", 6L)
         ));
         when(taskMapper.countDuePending()).thenReturn(7L);
+        NotificationRetryTaskPO failedTask = retryTask(2001L, 5, "{\"action\":\"comment\"}");
+        failedTask.setScene("comment");
+        failedTask.setLastError("notification table locked");
+        failedTask.setNextRetryTime(LocalDateTime.parse("2026-06-08T23:10:00"));
+        when(taskMapper.listRecent(NotificationRetryTaskMapper.STATUS_FAILED, 1)).thenReturn(List.of(failedTask));
+        when(taskMapper.listRecent(NotificationRetryTaskMapper.STATUS_PENDING, 1)).thenReturn(List.of());
 
         Map<String, Object> status = service.status();
 
         @SuppressWarnings("unchecked")
         Map<String, Long> byStatus = (Map<String, Long>) status.get("byStatus");
+        assertEquals("DEGRADED", status.get("status"));
+        assertEquals(true, status.get("available"));
+        assertEquals(true, status.get("attentionRequired"));
+        assertEquals("Notification retry queue has failed or due tasks", status.get("message"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> diagnostics = (Map<String, Object>) status.get("diagnostics");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> failedSample = (Map<String, Object>) diagnostics.get("failedSample");
+        assertEquals(2001L, failedSample.get("id"));
+        assertEquals("comment", failedSample.get("scene"));
+        assertEquals("notification table locked", diagnostics.get("latestError"));
+        assertEquals("Open /api/v1/notification-ops/retry-tasks?status=2, confirm notification dependencies, then replay failed test records first.",
+                diagnostics.get("recommendedAction"));
         assertEquals(3L, byStatus.get("pending"));
         assertEquals(4L, byStatus.get("done"));
         assertEquals(5L, byStatus.get("failed"));
         assertEquals(6L, byStatus.get("running"));
         assertEquals(7L, status.get("duePending"));
+    }
+
+    @Test
+    void statusKeepsUpAndZeroBucketsWhenTableIsAvailableButEmpty() {
+        when(taskMapper.countByStatus()).thenReturn(List.of());
+        when(taskMapper.countDuePending()).thenReturn(0L);
+
+        Map<String, Object> status = service.status();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Long> byStatus = (Map<String, Long>) status.get("byStatus");
+        assertEquals("UP", status.get("status"));
+        assertEquals(true, status.get("available"));
+        assertEquals(false, status.get("attentionRequired"));
+        assertEquals(0L, byStatus.get("pending"));
+        assertEquals(0L, byStatus.get("done"));
+        assertEquals(0L, byStatus.get("failed"));
+        assertEquals(0L, byStatus.get("running"));
+        assertEquals(0L, status.get("duePending"));
+    }
+
+    @Test
+    void statusReportsDownWhenTableIsUnavailable() {
+        when(taskMapper.tableExists()).thenThrow(new IllegalStateException("down"));
+
+        Map<String, Object> status = service.status();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Long> byStatus = (Map<String, Long>) status.get("byStatus");
+        assertEquals("DOWN", status.get("status"));
+        assertEquals(false, status.get("available"));
+        assertEquals(true, status.get("attentionRequired"));
+        assertEquals("notification retry table unavailable", status.get("message"));
+        assertEquals(0L, byStatus.get("pending"));
+        assertEquals(0L, byStatus.get("failed"));
+        assertEquals(0L, status.get("duePending"));
     }
 
     @Test

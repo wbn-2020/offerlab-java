@@ -19,12 +19,12 @@ public class PostDraftCmd {
     private Integer postType;
     @Size(max = 255)
     private String title;
-    @Size(max = 20000)
+    @Size(max = PostContentLimits.MAX_CONTENT_LEN)
     private String content;
     @Size(max = 512)
     private String coverUrl;
     private Integer visibility;
-    @Size(max = 20000)
+    @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
     private String extJson;
     private List<Long> tagIds;
     private List<String> tagNames;

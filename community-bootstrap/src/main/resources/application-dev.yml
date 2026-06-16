@@ -1,5 +1,8 @@
 # dev profile overrides.
 spring:
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfiguration
   data:
     redis:
       host: localhost
@@ -7,7 +10,7 @@ spring:
 
 logging:
   level:
-    com.offerlab.community: DEBUG
+    com.offerlab.community: ${OFFERLAB_LOG_LEVEL:INFO}
 
 springdoc:
   api-docs:
@@ -16,9 +19,11 @@ springdoc:
     enabled: true
 
 offerlab:
+  redis:
+    pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}
   kafka:
-    enabled: ${OFFERLAB_KAFKA_ENABLED:false}
+    enabled: ${OFFERLAB_KAFKA_ENABLED:true}
   elasticsearch:
-    enabled: ${ELASTICSEARCH_ENABLED:false}
+    enabled: ${ELASTICSEARCH_ENABLED:true}
   realtime:
     websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}

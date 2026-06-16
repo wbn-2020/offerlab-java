@@ -7,6 +7,8 @@ import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
@@ -42,6 +44,7 @@ public class PostReportService {
     private final MultiLevelCache<PostDTO> postDetailCache;
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
+    private final ReviewQueuePublisher reviewQueuePublisher;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
@@ -71,6 +74,7 @@ public class PostReportService {
         po.setDetail(clean(detail, MAX_DETAIL_LEN, null));
         po.setReportStatus(STATUS_PENDING);
         reportMapper.insert(po);
+        publishReportQueueItem(reportId, post, po);
         return reportId;
     }
 
@@ -120,9 +124,35 @@ public class PostReportService {
         }
 
         PostReportDTO dto = toDto(reportMapper.selectById(reportId));
-        adminAuditService.record(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
+        adminAuditService.recordRequired(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
                 "POST_REPORT", reportId, report, Map.of("approved", approved, "postId", report.getPostId()), reviewNote);
+        reviewQueuePublisher.resolve("POST_REPORT", reportId,
+                approved ? "approved" : "rejected",
+                approved ? "post taken down" : "report rejected",
+                reviewNote,
+                reviewerUid);
         return dto;
+    }
+
+    private void publishReportQueueItem(Long reportId, Post post, PostReportPO report) {
+        String title = post == null || !StringUtils.hasText(post.getTitle())
+                ? "帖子举报 " + report.getPostId()
+                : "帖子举报：" + post.getTitle();
+        String summary = String.join(" / ", List.of(
+                "原因：" + clean(report.getReason(), MAX_REASON_LEN, "OTHER"),
+                "说明：" + clean(report.getDetail(), 180, "")
+        )).trim();
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "POST_REPORT",
+                reportId,
+                title,
+                summary,
+                "high",
+                report.getReporterUid(),
+                80,
+                "{\"postId\":" + report.getPostId() + "}",
+                "post report created"
+        ));
     }
 
     private void takeDownPost(Long postId) {

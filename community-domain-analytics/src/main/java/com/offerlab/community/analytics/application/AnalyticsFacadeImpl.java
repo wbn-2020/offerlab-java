@@ -47,9 +47,13 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
         data.put("range", normalizedRange);
         data.put("days", days);
         data.put("totalPosts", total);
+        data.put("featuredPosts", postMapper.countFeaturedPostsSince(since));
+        data.put("activeAuthors", postMapper.countActiveAuthorsSince(since));
         data.put("publishTrend", fillTrend(days, postMapper.countPublishedByDate(since)));
         data.put("topCompanies", postMapper.countCompanies(since, 10));
         data.put("topTags", tagMapper.countTopTags(since, 10));
+        data.put("contentTypeDistribution", withPercentage(labelPostTypes(postMapper.countPostTypes(since, 10)), total));
+        data.put("featuredContent", postMapper.listFeaturedContent(since, 8));
         data.put("positionDistribution", withPercentage(postMapper.countPositions(since, 10), total));
         data.put("resultDistribution", postMapper.countInterviewResults(since, 10));
         return data;
@@ -110,6 +114,33 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
                     return copy;
                 })
                 .toList();
+    }
+
+    private static List<Map<String, Object>> labelPostTypes(List<Map<String, Object>> rows) {
+        return rows.stream()
+                .map(row -> {
+                    Map<String, Object> copy = new LinkedHashMap<>(row);
+                    copy.put("name", postTypeName(row.get("name")));
+                    return copy;
+                })
+                .toList();
+    }
+
+    private static String postTypeName(Object value) {
+        int type = value instanceof Number number ? number.intValue() : 0;
+        return switch (type) {
+            case 10 -> "技术文章";
+            case 11 -> "项目复盘";
+            case 12 -> "踩坑记录";
+            case 13 -> "问答求助";
+            case 14 -> "资源分享";
+            case 15 -> "经验笔记";
+            case 1 -> "历史经验";
+            case 2 -> "历史博客";
+            case 3 -> "历史题解";
+            case 4 -> "历史问答";
+            default -> "其他内容";
+        };
     }
 
     private static long asLong(Object value) {

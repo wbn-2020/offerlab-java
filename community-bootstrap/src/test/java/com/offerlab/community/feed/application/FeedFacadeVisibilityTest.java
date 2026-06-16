@@ -11,6 +11,7 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
+import com.offerlab.community.user.api.dto.UserIntentDTO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -165,6 +167,49 @@ class FeedFacadeVisibilityTest {
         assertEquals(401L, page.getItems().get(0).getPost().getId());
         assertEquals("db-fallback", page.getNextCursor());
         assertEquals(Boolean.FALSE, page.getHasMore());
+    }
+
+    @Test
+    void recommendFeedExplainsWithCommunitySignalsInsteadOfJobSearchTargets() {
+        PostBriefDTO post = PostBriefDTO.builder()
+                .id(501L)
+                .authorId(51L)
+                .title("Redis 缓存击穿治理复盘")
+                .summary("支付链路里的降级、限流和压测复盘")
+                .extJson("{\"contentType\":\"PROJECT_REVIEW\",\"techStacks\":[\"Redis\",\"Spring Boot\"],\"scenario\":\"支付链路\"}")
+                .counter(PostCounterDTO.builder()
+                        .postId(501L)
+                        .viewCount(12L)
+                        .likeCount(1L)
+                        .commentCount(1L)
+                        .favoriteCount(1L)
+                        .build())
+                .createTime(LocalDateTime.now())
+                .build();
+        when(postFacade.getLatest(0L, 3)).thenReturn(PageResult.of(List.of(post), null, false));
+        when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder()
+                .targetCompanies(List.of("Redis"))
+                .targetPositions(List.of("支付链路"))
+                .techStack(List.of("Redis"))
+                .build());
+        when(feedbackStore.hiddenPostIds(7L)).thenReturn(Set.of());
+        when(postFacade.batchGetCounters(List.of(501L))).thenReturn(Map.of(
+                501L, PostCounterDTO.builder().postId(501L).viewCount(12L).likeCount(1L).commentCount(1L).favoriteCount(1L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(51L))).thenReturn(Map.of(
+                51L, UserBriefDTO.builder().uid(51L).nickname("author").build()));
+        when(interactionFacade.hasLiked(7L, 501L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 501L)).thenReturn(false);
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 1);
+
+        List<String> reasons = page.getItems().get(0).getRecommendationReasons();
+        assertEquals(List.of(
+                "覆盖你关注的工程场景：Redis",
+                "关联你关注的技术主题：支付链路",
+                "包含你关注的技术栈"), reasons);
+        String joined = String.join(" ", reasons);
+        assertFalse(joined.contains("目标公司"));
+        assertFalse(joined.contains("目标岗位"));
     }
 
     @SuppressWarnings("unchecked")

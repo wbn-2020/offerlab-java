@@ -13,11 +13,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -51,7 +54,9 @@ class SearchAdminControllerApiTest {
                 .requireAdmin(11L);
 
         mvc.perform(post("/api/v1/search/admin/rebuild")
-                        .header("Authorization", "Bearer token"))
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"rebuild post index\",\"confirmationPhrase\":\"CONFIRM\"}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(ErrorCode.FORBIDDEN.getCode()));
 
@@ -70,7 +75,9 @@ class SearchAdminControllerApiTest {
         when(taskService.submitRebuildTask(7L)).thenReturn(task);
 
         mvc.perform(post("/api/v1/search/admin/rebuild")
-                        .header("Authorization", "Bearer token"))
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"rebuild post index\",\"confirmationPhrase\":\"CONFIRM\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.taskId").value("search-task-1"));
@@ -80,7 +87,28 @@ class SearchAdminControllerApiTest {
         verify(adminAuditService).recordRequired(7L, "POST_INDEX_REBUILD_TASK", "SEARCH_INDEX", "search-task-1",
                 null,
                 Map.of("taskId", "search-task-1", "type", "POST_INDEX_REBUILD", "status", "PENDING"),
-                null);
+                "rebuild post index");
+    }
+
+    @Test
+    void searchIndexRebuildRequiresServerSideRiskConfirmation() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        for (String body : List.of(
+                "{}",
+                "{\"remark\":\"rebuild post index\"}",
+                "{\"remark\":\"rebuild post index\",\"confirmationPhrase\":\"WRONG\"}"
+        )) {
+            mvc.perform(post("/api/v1/search/admin/rebuild")
+                            .header("Authorization", "Bearer token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+        }
+
+        verify(adminPermissionService, times(3)).requireAdmin(7L);
+        verifyNoInteractions(taskService, adminAuditService);
     }
 
     @Test
@@ -91,7 +119,9 @@ class SearchAdminControllerApiTest {
                 .requireWritable("POST_INDEX_REBUILD_TASK", "SEARCH_INDEX", null);
 
         mvc.perform(post("/api/v1/search/admin/rebuild")
-                        .header("Authorization", "Bearer token"))
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"rebuild post index\",\"confirmationPhrase\":\"CONFIRM\"}"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 

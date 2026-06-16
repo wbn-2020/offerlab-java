@@ -12,6 +12,21 @@ import java.util.List;
 @Mapper
 public interface AiExtractTaskMapper extends BaseMapper<AiExtractTaskPO> {
     @Select("""
+            SELECT id,
+                   post_id,
+                   task_type,
+                   task_status,
+                   retry_count,
+                   question_count,
+                   error_message,
+                   create_time,
+                   update_time
+            FROM t_ai_extract_task
+            WHERE id = #{id}
+            """)
+    AiExtractTaskPO selectByIdCompat(@Param("id") Long id);
+
+    @Select("""
             SELECT *
             FROM t_ai_extract_task
             WHERE post_id = #{postId}
@@ -64,6 +79,17 @@ public interface AiExtractTaskMapper extends BaseMapper<AiExtractTaskPO> {
               AND task_status = 3
             """)
     int markForRetry(@Param("id") Long id);
+
+    @Update("""
+            UPDATE t_ai_extract_task
+            SET task_status = 0,
+                retry_count = retry_count + 1,
+                error_message = NULL,
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND task_status = 3
+            """)
+    int markForRetryCompat(@Param("id") Long id);
 
     @Update("""
             UPDATE t_ai_extract_task

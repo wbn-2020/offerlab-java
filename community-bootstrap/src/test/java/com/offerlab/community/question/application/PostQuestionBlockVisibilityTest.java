@@ -53,6 +53,7 @@ class PostQuestionBlockVisibilityTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
     }

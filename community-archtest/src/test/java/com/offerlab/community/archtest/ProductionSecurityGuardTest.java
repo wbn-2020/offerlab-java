@@ -130,6 +130,15 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
+    void stagingProfileDoesNotAllowLocalOpenAdminMode() {
+        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), profiles("staging"));
+
+        assertFalse(service.isLocalOpenMode());
+        assertEquals("LOCKED", service.mode());
+        assertThrows(BizException.class, () -> service.requireAdmin(10001L));
+    }
+
+    @Test
     void prodConfigMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
         String prodConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
         String baseConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
@@ -144,6 +153,12 @@ class ProductionSecurityGuardTest {
         assertFalse(prodConfig.contains("local-open-enabled: true"), "prod must not enable local-open admin bootstrap");
         assertTrue(prodConfig.contains("secret: ${JWT_SECRET}"), "prod must require an external JWT secret");
         assertTrue(prodConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "prod must require explicit CORS origins");
+        assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfiguration"),
+                "dev profile must exclude Redisson auto configuration so Redis outages do not block local startup");
+        assertTrue(devConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}"),
+                "dev profile must disable Redis Pub/Sub by default and opt in through OFFERLAB_REDIS_PUBSUB_ENABLED");
+        assertTrue(baseConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}"),
+                "base profile must keep Redis Pub/Sub enabled by default unless explicitly overridden");
     }
 
     @Test

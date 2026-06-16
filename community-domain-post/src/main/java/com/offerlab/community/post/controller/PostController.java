@@ -10,6 +10,8 @@ import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.PostContentLimits;
+import com.offerlab.community.post.api.dto.PostContentTypeDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
@@ -18,7 +20,10 @@ import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
+import com.offerlab.community.post.application.PostFeaturedService;
+import com.offerlab.community.post.application.PostKnowledgeReviewService;
 import com.offerlab.community.post.application.PostReportService;
+import com.offerlab.community.post.domain.model.Post;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -46,9 +51,38 @@ public class PostController {
     private final PostFacade postFacade;
     private final PostApplicationService postService;
     private final PostReportService reportService;
+    private final PostFeaturedService featuredService;
+    private final PostKnowledgeReviewService knowledgeReviewService;
     private final PostDraftService draftService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
+
+    private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
+            new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "技术文章", "文章",
+                    "沉淀架构设计、技术方案、源码阅读和工程实践。", "例如：Spring Cloud Gateway 鉴权链路实践", 40, false),
+            new PostContentTypeDTO(Post.TYPE_PROJECT_REVIEW, "PROJECT_REVIEW", "项目复盘", "复盘",
+                    "复盘项目背景、架构取舍、关键问题、结果和经验。", "例如：CodeCoachAI 从 0 到 1 的后端架构复盘", 80, false),
+            new PostContentTypeDTO(Post.TYPE_PITFALL, "PITFALL", "踩坑记录", "踩坑",
+                    "记录排查过程、根因、修复方案和防复发建议。", "例如：一次 Redis 缓存击穿的定位记录", 60, false),
+            new PostContentTypeDTO(Post.TYPE_COMMUNITY_QUESTION, "QUESTION", "问答求助", "问答",
+                    "提出具体技术问题，补充上下文和已尝试方案。", "例如：MyBatis 分页失效应该从哪里排查？", 30, false),
+            new PostContentTypeDTO(Post.TYPE_RESOURCE, "RESOURCE", "资源分享", "资源",
+                    "分享学习路线、工具、模板、开源项目和参考资料。", "例如：Java 后端工程化学习资源合集", 30, false),
+            new PostContentTypeDTO(Post.TYPE_NOTE, "NOTE", "经验笔记", "笔记",
+                    "记录小而有用的经验、命令、配置和处理手法。", "例如：一次慢 SQL 优化的复盘笔记", 30, false),
+            new PostContentTypeDTO(Post.TYPE_SYSTEM_DESIGN, "SYSTEM_DESIGN", "系统设计", "设计",
+                    "拆解架构目标、容量估算、模块边界、数据模型和取舍。", "例如：从 0 设计一个消息通知系统", 80, false),
+            new PostContentTypeDTO(Post.TYPE_INTERVIEW_RECAP, "INTERVIEW_RECAP", "面试复盘", "复盘",
+                    "沉淀面试问题、追问路径、表达卡点和后续补强计划。", "例如：某厂 Java 后端二面复盘", 80, false),
+            new PostContentTypeDTO(Post.TYPE_INTERVIEW, "LEGACY_INTERVIEW", "历史经验", "旧经验",
+                    "旧版经验类型，保留给历史数据和知识卡链路。", "例如：某主题 Java 后端复盘", 120, true),
+            new PostContentTypeDTO(Post.TYPE_BLOG, "LEGACY_BLOG", "技术博客", "博客",
+                    "旧版技术博客类型。", "例如：Spring 事务传播机制总结", 40, true),
+            new PostContentTypeDTO(Post.TYPE_SOLUTION, "LEGACY_SOLUTION", "题解", "题解",
+                    "旧版题解类型。", "例如：一道并发题的解法整理", 40, true),
+            new PostContentTypeDTO(Post.TYPE_QA, "LEGACY_QA", "历史问答", "问答",
+                    "旧版问答类型。", "例如：如何梳理一个技术问题的上下文？", 40, true)
+    );
 
     @PostMapping
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
@@ -111,10 +145,11 @@ public class PostController {
     @GetMapping("/{postId}")
     public Result<PostDTO> get(@PathVariable Long postId) {
         PostDTO p = postFacade.getPost(postId);
-        // 只有实际可见的帖子才计浏览，避免不存在或不可见内容污染计数。
-        if (p != null) {
-            postService.incrView(postId);
+        if (p == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
+        // 只有实际可见的帖子才计浏览，避免不存在或不可见内容污染计数。
+        postService.incrView(postId);
         return Result.ok(p);
     }
 
@@ -125,10 +160,18 @@ public class PostController {
 
                                                  @RequestParam(required = false, name = "tag") Long tag,
                                                  @RequestParam(required = false, name = "type") Integer type,
+                                                 @RequestParam(required = false) Boolean featured,
+                                                 @RequestParam(defaultValue = "false") boolean includeTestData,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
         Long effectiveTagId = tagId != null ? tagId : tag;
-        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, cursor, size));
+        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured, cursor, size, includeTestData));
+    }
+
+    @PublicApi
+    @GetMapping("/content-types")
+    public Result<List<PostContentTypeDTO>> contentTypes() {
+        return Result.ok(CONTENT_TYPES);
     }
 
     @GetMapping("/{postId}/versions")
@@ -163,6 +206,30 @@ public class PostController {
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
 
+    @PostMapping("/admin/featured/{postId}")
+    public Result<Map<String, Object>> updateFeatured(@PathVariable Long postId,
+                                                      @Valid @RequestBody FeaturedReq req) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        return Result.ok(featuredService.updateFeatured(postId, Boolean.TRUE.equals(req.getFeatured()), uid, req.getNote()));
+    }
+
+    @PostMapping("/admin/knowledge/{postId}/review")
+    public Result<Map<String, Object>> reviewKnowledge(@PathVariable Long postId,
+                                                       @Valid @RequestBody KnowledgeReviewReq req) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        return Result.ok(knowledgeReviewService.applyReview(postId, uid,
+                new PostKnowledgeReviewService.KnowledgeReviewCmd(
+                        req.getSummary(),
+                        req.getFaqJson(),
+                        req.getKnowledgeCardJson(),
+                        req.getTechStacks(),
+                        req.getSuggestedTags(),
+                        req.getNote()
+                )));
+    }
+
     @Data
     public static class PublishReq {
         @NotNull
@@ -171,12 +238,12 @@ public class PostController {
         @Size(max = 255)
         private String title;
         @NotBlank
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;
@@ -193,12 +260,12 @@ public class PostController {
     public static class UpdateReq {
         @Size(max = 255)
         private String title;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;
@@ -252,5 +319,29 @@ public class PostController {
             }
             return null;
         }
+    }
+
+    @Data
+    public static class FeaturedReq {
+        @NotNull
+        private Boolean featured;
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
+    public static class KnowledgeReviewReq {
+        @Size(max = 500)
+        private String summary;
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN / 2)
+        private String faqJson;
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN / 2)
+        private String knowledgeCardJson;
+        @Size(max = 20)
+        private List<@Size(max = 64) String> techStacks;
+        @Size(max = 20)
+        private List<@Size(max = 64) String> suggestedTags;
+        @Size(max = 500)
+        private String note;
     }
 }

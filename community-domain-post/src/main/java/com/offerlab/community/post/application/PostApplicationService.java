@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
@@ -46,6 +47,8 @@ public class PostApplicationService {
     private final PostVersionHistoryService versionHistoryService;
     private final PostPublishQualityValidator qualityValidator;
     private final AfterCommitExecutor afterCommit;
+    private final CommunityTopicService communityTopicService;
+    private final MigrationCheckService migrationCheckService;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
@@ -80,6 +83,8 @@ public class PostApplicationService {
                     .visibility(post.getVisibility())
                     .postStatus(post.getPostStatus())
                     .timestamp(Instant.now().toEpochMilli())
+                    .tagIds(resolvedTagIds)
+                    .topicNotificationTargets(communityTopicService.notificationTargetsForPost(resolvedTagIds, cmd.getAuthorId()))
                     .build());
         }
         return id;
@@ -167,12 +172,13 @@ public class PostApplicationService {
                     .limit(20)
                     .toList();
             if (!requestedIds.isEmpty()) {
-                Set<Long> existingIds = tagMapper.selectBatchIds(requestedIds).stream()
+                Set<Long> existingIds = selectTagsByIds(requestedIds).stream()
+                        .filter(tag -> !java.util.Objects.equals(tag.getTagStatus(), 0))
                         .map(TagPO::getId)
                         .collect(Collectors.toCollection(HashSet::new));
                 for (Long id : requestedIds) {
                     if (!existingIds.contains(id)) {
-                        throw PostPublishQualityValidator.fieldError("tags", "标签不存在或已被删除");
+                        throw PostPublishQualityValidator.fieldError("tags", "标签不存在、已删除或已被禁用");
                     }
                     ids.add(id);
                 }
@@ -186,16 +192,16 @@ public class PostApplicationService {
                     .limit(20)
                     .toList();
             if (!names.isEmpty()) {
-                Set<String> existingNames = tagMapper.selectByNames(names).stream()
+                Set<String> existingNames = selectTagsByNames(names).stream()
                         .map(TagPO::getTagName)
                         .map(String::toLowerCase)
                         .collect(Collectors.toSet());
                 for (String name : names) {
                     if (!existingNames.contains(name.toLowerCase())) {
-                        tagMapper.insertIgnoreName(idGen.nextId(), name, 4);
+                        insertIgnoreName(idGen.nextId(), name, 4);
                     }
                 }
-                tagMapper.selectByNames(names).stream()
+                selectTagsByNames(names).stream()
                         .map(TagPO::getId)
                         .forEach(ids::add);
             }
@@ -207,16 +213,16 @@ public class PostApplicationService {
     }
 
     private void requireResolvedTagCount(Integer postType, List<Long> tagIds) {
-        int min = Post.TYPE_INTERVIEW == (postType == null ? 0 : postType) ? 2 : 1;
+        int min = Post.isInterviewType(postType) ? 2 : 1;
         if (tagIds == null || tagIds.size() < min) {
-            throw PostPublishQualityValidator.fieldError("tags", Post.TYPE_INTERVIEW == (postType == null ? 0 : postType)
-                    ? "面经至少需要 2 个有效技术标签"
+            throw PostPublishQualityValidator.fieldError("tags", Post.isInterviewType(postType)
+                    ? "历史经验至少需要 2 个有效技术标签"
                     : "至少需要 1 个有效标签");
         }
     }
 
     private List<Long> currentTagIds(Long postId) {
-        return tagMapper.selectTagsByPostIds(List.of(postId)).stream()
+        return selectTagsByPostIds(List.of(postId)).stream()
                 .map(PostTagView::getId)
                 .filter(id -> id != null && id > 0)
                 .distinct()
@@ -227,7 +233,7 @@ public class PostApplicationService {
         if (tagIds == null || tagIds.isEmpty()) {
             return List.of();
         }
-        Map<Long, TagPO> tags = tagMapper.selectBatchIds(tagIds).stream()
+        Map<Long, TagPO> tags = selectTagsByIds(tagIds).stream()
                 .collect(Collectors.toMap(TagPO::getId, tag -> tag));
         return tagIds.stream()
                 .map(tags::get)
@@ -256,6 +262,41 @@ public class PostApplicationService {
             if (inserted > 0 && !oldIds.contains(tagId)) {
                 postTagRefMapper.incrUseCount(tagId);
             }
+        }
+    }
+
+    private List<TagPO> selectTagsByIds(List<Long> tagIds) {
+        if (tagIds == null || tagIds.isEmpty()) {
+            return List.of();
+        }
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectByIds(tagIds)
+                : tagMapper.selectByIdsCompat(tagIds);
+    }
+
+    private List<PostTagView> selectTagsByPostIds(List<Long> postIds) {
+        if (postIds == null || postIds.isEmpty()) {
+            return List.of();
+        }
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectTagsByPostIds(postIds)
+                : tagMapper.selectTagsByPostIdsCompat(postIds);
+    }
+
+    private List<TagPO> selectTagsByNames(List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return List.of();
+        }
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectByNames(names)
+                : tagMapper.selectByNamesCompat(names);
+    }
+
+    private void insertIgnoreName(Long id, String name, int tagType) {
+        if (migrationCheckService.tagGovernanceReady()) {
+            tagMapper.insertIgnoreName(id, name, tagType);
+        } else {
+            tagMapper.insertIgnoreNameCompat(id, name, tagType);
         }
     }
 }

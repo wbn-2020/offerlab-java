@@ -48,6 +48,18 @@ class AuthControllerApiTest {
     }
 
     @Test
+    void loginAcceptsAccountFieldAndKeepsEmailCompatibility() throws Exception {
+        when(userService.login(eq("admin"), eq("secret123"), anyString())).thenReturn("jwt-token");
+
+        mvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"account\":\"admin\",\"password\":\"secret123\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.token").value("jwt-token"));
+    }
+
+    @Test
     void loginBusinessErrorUsesUnifiedResponse() throws Exception {
         when(userService.login(eq("u@example.com"), eq("bad-pass"), anyString()))
                 .thenThrow(new BizException(ErrorCode.PASSWORD_ERROR));

@@ -20,12 +20,15 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Repository
 @RequiredArgsConstructor
 public class PostRepositoryImpl implements PostRepository {
+
+    private static final int MAX_BATCH_FIND_IDS = 500;
 
     private final PostMapper postMapper;
     private final PostExtensionMapper extMapper;
@@ -57,10 +60,11 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     public Map<Long, Post> batchFindByIds(Collection<Long> ids) {
-        if (ids == null || ids.isEmpty()) return Map.of();
-        List<PostPO> posts = postMapper.selectBatchIds(ids);
+        List<Long> normalizedIds = normalizeBatchIds(ids);
+        if (normalizedIds.isEmpty()) return Map.of();
+        List<PostPO> posts = postMapper.selectBatchIds(normalizedIds);
         if (posts.isEmpty()) return Map.of();
-        Map<Long, PostExtensionPO> exts = extMapper.selectBatchIds(ids).stream()
+        Map<Long, PostExtensionPO> exts = extMapper.selectBatchIds(normalizedIds).stream()
                 .collect(Collectors.toMap(PostExtensionPO::getPostId, e -> e));
         Map<Long, Post> result = new HashMap<>(posts.size());
         for (PostPO po : posts) {
@@ -116,11 +120,21 @@ public class PostRepositoryImpl implements PostRepository {
     }
 
     @Override
-    public List<Post> findPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
-        return postMapper.selectPublicPosts(authorId, tagId != null && tagId > 0 ? tagId : null, postType,
-                        cursorTime(cursor), cursorId(cursor), listLimit(size))
-                .stream()
-                .map(p -> toDomain(p, null))
+    public List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size) {
+        List<PostPO> posts = postMapper.selectPublicPosts(authorId, tagId != null && tagId > 0 ? tagId : null, postType,
+                featured, cursorTime(cursor), cursorId(cursor), listLimit(size));
+        return toDomainListWithExt(posts);
+    }
+
+    private List<Post> toDomainListWithExt(List<PostPO> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = posts.stream().map(PostPO::getId).toList();
+        Map<Long, PostExtensionPO> exts = extMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(PostExtensionPO::getPostId, e -> e, (left, right) -> left));
+        return posts.stream()
+                .map(p -> toDomain(p, exts.get(p.getId())))
                 .toList();
     }
 
@@ -139,6 +153,18 @@ public class PostRepositoryImpl implements PostRepository {
 
     private static int listLimit(int size) {
         return Math.max(1, Math.min(size, 101));
+    }
+
+    private static List<Long> normalizeBatchIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return ids.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .limit(MAX_BATCH_FIND_IDS)
+                .toList();
     }
 
     private static LocalDateTime cursorTime(long cursor) {

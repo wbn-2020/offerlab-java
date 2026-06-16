@@ -3,6 +3,8 @@ package com.offerlab.community.infra.moderation;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,6 +35,7 @@ public class ContentModerationService {
 
     private final ContentModerationMapper mapper;
     private final SnowflakeIdGenerator idGen;
+    private final ReviewQueuePublisher reviewQueuePublisher;
 
     public void requireUserCanPublish(Long uid) {
         if (uid == null || !tableExists("t_user_moderation_state")) {
@@ -111,6 +114,19 @@ public class ContentModerationService {
             hit.setAction(action);
             hit.setContentSummary(summary(text));
             mapper.insertKeywordHit(hit);
+            if ("REVIEW".equals(action)) {
+                reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                        "MODERATION_HIT",
+                        hit.getId(),
+                        "敏感词待审核：" + keyword.getKeyword(),
+                        "范围：" + scope + " / 用户：" + uid + " / 内容：" + hit.getContentSummary(),
+                        "medium",
+                        uid,
+                        60,
+                        "{\"scope\":\"" + scope + "\",\"keywordId\":" + keyword.getId() + "}",
+                        "moderation review hit"
+                ));
+            }
         } catch (Exception e) {
             log.warn("moderation keyword hit log failed open: scope={} uid={}", scope, uid, e);
         }

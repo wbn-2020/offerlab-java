@@ -6,6 +6,7 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.user.application.UserApplicationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -37,7 +38,7 @@ public class AuthController {
     @PostMapping("/login")
     @RateLimit(key = "'auth:login:' + #http.remoteAddr", rate = 20, per = 300, failOpen = false)
     public Result<Map<String, Object>> login(@Valid @RequestBody LoginReq req, HttpServletRequest http) {
-        String token = userService.login(req.getEmail(), req.getPassword(), http.getRemoteAddr());
+        String token = userService.login(req.accountValue(), req.getPassword(), http.getRemoteAddr());
         return Result.ok(Map.of("token", token));
     }
 
@@ -64,9 +65,23 @@ public class AuthController {
 
     @Data
     public static class LoginReq {
-        @NotBlank
+        @Size(max = 128)
+        private String account;
+        @Size(max = 128)
         private String email;
         @NotBlank
         private String password;
+
+        public String accountValue() {
+            if (account != null && !account.isBlank()) {
+                return account.trim();
+            }
+            return email == null ? "" : email.trim();
+        }
+
+        @AssertTrue(message = "account must not be blank")
+        public boolean isAccountPresent() {
+            return (account != null && !account.isBlank()) || (email != null && !email.isBlank());
+        }
     }
 }

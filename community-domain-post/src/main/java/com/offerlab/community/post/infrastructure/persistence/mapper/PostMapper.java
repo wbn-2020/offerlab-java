@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -28,7 +29,10 @@ public interface PostMapper extends BaseMapper<PostPO> {
     @Select("""
             SELECT x.company AS name, COUNT(*) AS count
             FROM (
-                SELECT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.company')), '') AS company
+                SELECT COALESCE(
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks[0]')), ''),
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.company')), '')
+                ) AS company
                 FROM t_post_main p
                 JOIN t_post_extension e ON e.post_id = p.id
                 WHERE p.is_deleted = 0
@@ -64,7 +68,10 @@ public interface PostMapper extends BaseMapper<PostPO> {
     @Select("""
             SELECT x.position AS name, COUNT(*) AS count
             FROM (
-                SELECT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.position')), '') AS position
+                SELECT COALESCE(
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')), ''),
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.position')), '')
+                ) AS position
                 FROM t_post_main p
                 JOIN t_post_extension e ON e.post_id = p.id
                 WHERE p.is_deleted = 0
@@ -127,6 +134,28 @@ public interface PostMapper extends BaseMapper<PostPO> {
     long countPublishedSince(@Param("since") LocalDateTime since);
 
     @Select("""
+            SELECT
+              COUNT(*) AS postCount,
+              SUM(CASE WHEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1') THEN 1 ELSE 0 END) AS featuredCount,
+              COALESCE(SUM(c.like_count), 0) AS likeCount,
+              COALESCE(SUM(c.favorite_count), 0) AS favoriteCount,
+              COALESCE(SUM(c.comment_count), 0) AS commentCount,
+              COALESCE(SUM(c.view_count), 0) AS viewCount
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.author_id = #{authorId}
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+            """)
+    Map<String, Object> aggregatePublicContributionByAuthor(@Param("authorId") Long authorId);
+
+    @Select("""
             SELECT p.*
             FROM t_post_main p
             LEFT JOIN t_post_counter c ON c.post_id = p.id
@@ -186,6 +215,9 @@ public interface PostMapper extends BaseMapper<PostPO> {
             <script>
             SELECT p.*
             FROM t_post_main p
+            <if test="featured != null">
+            LEFT JOIN t_post_extension e_featured ON e_featured.post_id = p.id
+            </if>
             <if test="tagId != null">
             JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
             </if>
@@ -198,6 +230,12 @@ public interface PostMapper extends BaseMapper<PostPO> {
               <if test="postType != null">
               AND p.post_type = #{postType}
               </if>
+              <if test="featured != null and featured == true">
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') IN ('true', '1')
+              </if>
+              <if test="featured != null and featured == false">
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') NOT IN ('true', '1')
+              </if>
               <if test="cursorTime != null">
               AND (p.create_time &lt; #{cursorTime}
                    OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId}))
@@ -209,9 +247,73 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<PostPO> selectPublicPosts(@Param("authorId") Long authorId,
                                    @Param("tagId") Long tagId,
                                    @Param("postType") Integer postType,
+                                   @Param("featured") Boolean featured,
                                    @Param("cursorTime") LocalDateTime cursorTime,
                                    @Param("cursorId") Long cursorId,
                                    @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT DISTINCT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e_topic ON e_topic.post_id = p.id
+            <if test="featured != null">
+            LEFT JOIN t_post_extension e_featured ON e_featured.post_id = p.id
+            </if>
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="postType != null">
+              AND p.post_type = #{postType}
+              </if>
+              <if test="featured != null and featured == true">
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') IN ('true', '1')
+              </if>
+              <if test="featured != null and featured == false">
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') NOT IN ('true', '1')
+              </if>
+              <if test="cursorTime != null">
+              AND (p.create_time &lt; #{cursorTime}
+                   OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId}))
+              </if>
+              AND (
+                    <if test="tagIds != null and tagIds.size() > 0">
+                    EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref ptr
+                        WHERE ptr.post_id = p.id
+                          AND ptr.tag_id IN
+                          <foreach collection="tagIds" item="tagId" open="(" separator="," close=")">
+                              #{tagId}
+                          </foreach>
+                    )
+                    OR
+                    </if>
+                    p.title LIKE CONCAT('%', #{keyword}, '%')
+                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                    )
+                  )
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> selectPublicPostsByTopic(@Param("topicId") Long topicId,
+                                          @Param("tagIds") Collection<Long> tagIds,
+                                          @Param("keyword") String keyword,
+                                          @Param("postType") Integer postType,
+                                          @Param("featured") Boolean featured,
+                                          @Param("cursorTime") LocalDateTime cursorTime,
+                                          @Param("cursorId") Long cursorId,
+                                          @Param("limit") int limit);
 
     @Select("""
             SELECT p.*
@@ -237,23 +339,58 @@ public interface PostMapper extends BaseMapper<PostPO> {
               <if test="keyword != null and keyword != ''">
               AND (
                     p.title LIKE CONCAT('%', #{keyword}, '%')
+                    <if test="keywordPostId != null">
+                    OR p.id = #{keywordPostId}
+                    </if>
                     OR p.content LIKE CONCAT('%', #{keyword}, '%')
                     OR e.company LIKE CONCAT('%', #{keyword}, '%')
                     OR e.position LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
                     OR EXISTS (
                         SELECT 1
                         FROM t_post_tag_ref r
                         JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
                         WHERE r.post_id = p.id
-                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                          AND (
+                                t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                                OR t.synonyms LIKE CONCAT('%', #{keyword}, '%')
+                              )
                     )
                   )
               </if>
               <if test="company != null and company != ''">
-              AND e.company LIKE CONCAT('%', #{company}, '%')
+              AND (
+                    e.company LIKE CONCAT('%', #{company}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{company}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND (
+                                t.tag_name LIKE CONCAT('%', #{company}, '%')
+                                OR t.synonyms LIKE CONCAT('%', #{company}, '%')
+                              )
+                    )
+                  )
               </if>
               <if test="position != null and position != ''">
-              AND e.position = #{position}
+              AND (
+                    e.position = #{position}
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) = #{position}
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND (
+                                t.tag_name LIKE CONCAT('%', #{position}, '%')
+                                OR t.synonyms LIKE CONCAT('%', #{position}, '%')
+                              )
+                    )
+                  )
               </if>
               <if test="type != null">
               AND p.post_type = #{type}
@@ -266,6 +403,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             </script>
             """)
     List<PostPO> searchPublicPostsFallback(@Param("keyword") String keyword,
+                                           @Param("keywordPostId") Long keywordPostId,
                                            @Param("company") String company,
                                            @Param("position") String position,
                                            @Param("type") Integer type,
@@ -280,10 +418,167 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              <if test="keyword != null and keyword != ''">
+              AND (
+                    p.title LIKE CONCAT('%', #{keyword}, '%')
+                    <if test="keywordPostId != null">
+                    OR p.id = #{keywordPostId}
+                    </if>
+                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR e.company LIKE CONCAT('%', #{keyword}, '%')
+                    OR e.position LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                    )
+                  )
+              </if>
+              <if test="company != null and company != ''">
+              AND (
+                    e.company LIKE CONCAT('%', #{company}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{company}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{company}, '%')
+                    )
+                  )
+              </if>
+              <if test="position != null and position != ''">
+              AND (
+                    e.position = #{position}
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) = #{position}
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{position}, '%')
+                    )
+                  )
+              </if>
+              <if test="type != null">
+              AND p.post_type = #{type}
+              </if>
+              <if test="cursorTime != null">
+              AND p.create_time &lt; #{cursorTime}
+              </if>
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> searchPublicPostsFallbackCompat(@Param("keyword") String keyword,
+                                                 @Param("keywordPostId") Long keywordPostId,
+                                                 @Param("company") String company,
+                                                 @Param("position") String position,
+                                                 @Param("type") Integer type,
+                                                 @Param("cursorTime") LocalDateTime cursorTime,
+                                                 @Param("limit") int limit);
+
+    @Select("""
+            SELECT p.post_type AS name, COUNT(*) AS count
+            FROM t_post_main p
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+            GROUP BY p.post_type
+            ORDER BY COUNT(*) DESC, p.post_type ASC
+            LIMIT #{limit}
+            """)
+    List<Map<String, Object>> countPostTypes(@Param("since") LocalDateTime since, @Param("limit") int limit);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_post_main p
+            JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
+            """)
+    long countFeaturedPostsSince(@Param("since") LocalDateTime since);
+
+    @Select("""
+            SELECT COUNT(DISTINCT p.author_id)
+            FROM t_post_main p
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+            """)
+    long countActiveAuthorsSince(@Param("since") LocalDateTime since);
+
+    @Select("""
+            SELECT p.title AS name,
+                   CAST(COALESCE(c.like_count, 0) + COALESCE(c.favorite_count, 0) + COALESCE(c.comment_count, 0) AS SIGNED) AS count
+            FROM t_post_main p
+            JOIN t_post_extension e ON e.post_id = p.id
+            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
+            ORDER BY count DESC, p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            """)
+    List<Map<String, Object>> listFeaturedContent(@Param("since") LocalDateTime since, @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
               AND (
                     p.title LIKE CONCAT('%', #{prefix}, '%')
                     OR e.company LIKE CONCAT('%', #{prefix}, '%')
                     OR e.position LIKE CONCAT('%', #{prefix}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{prefix}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{prefix}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND (
+                                t.tag_name LIKE CONCAT('%', #{prefix}, '%')
+                                OR t.synonyms LIKE CONCAT('%', #{prefix}, '%')
+                              )
+                    )
+                  )
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> suggestPublicPostsFallback(@Param("prefix") String prefix, @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (
+                    p.title LIKE CONCAT('%', #{prefix}, '%')
+                    OR e.company LIKE CONCAT('%', #{prefix}, '%')
+                    OR e.position LIKE CONCAT('%', #{prefix}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{prefix}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{prefix}, '%')
                     OR EXISTS (
                         SELECT 1
                         FROM t_post_tag_ref r
@@ -296,7 +591,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             </script>
             """)
-    List<PostPO> suggestPublicPostsFallback(@Param("prefix") String prefix, @Param("limit") int limit);
+    List<PostPO> suggestPublicPostsFallbackCompat(@Param("prefix") String prefix, @Param("limit") int limit);
 
     @Select("""
             SELECT p.*

@@ -23,6 +23,12 @@ public interface PostFacade {
 
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid);
 
+    Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid, boolean includeTestData);
+
+    default Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, boolean includeTestData) {
+        return batchGetPosts(postIds, null, includeTestData);
+    }
+
     Map<Long, PostCounterDTO> batchGetCounters(Collection<Long> postIds);
 
     Long publishPost(PostCreateCmd cmd);
@@ -39,9 +45,20 @@ public interface PostFacade {
 
 
     List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit);
-    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size);
+    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size);
+
+    PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured,
+                                       long cursor, int size, boolean includeTestData);
+
+    default PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
+        return listPosts(authorId, tagId, postType, null, cursor, size);
+    }
 
     List<TagDTO> listTags();
 
-    PageResult<PostBriefDTO> getPostsByTag(Long tagId, long cursor, int size);
+    PageResult<PostBriefDTO> getPostsByTag(Long tagId, Integer postType, Boolean featured, long cursor, int size);
+
+    default PageResult<PostBriefDTO> getPostsByTag(Long tagId, long cursor, int size) {
+        return getPostsByTag(tagId, null, null, cursor, size);
+    }
 }

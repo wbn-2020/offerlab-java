@@ -10,10 +10,16 @@ param(
   [string]$ElasticsearchUrl = "http://127.0.0.1:9200",
   [string[]]$ElasticsearchIndexes = @("post_idx", "question_idx"),
   [switch]$ReadOnlyProbe,
-  [switch]$NoWriteReport
+  [switch]$NoWriteReport,
+  [switch]$EncodingSelfTest
 )
 
 $ErrorActionPreference = "Stop"
+
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
+$Utf8NoBomStrict = [System.Text.UTF8Encoding]::new($false, $true)
 
 function Invoke-Json {
   param(
@@ -32,12 +38,35 @@ function Invoke-Json {
     Method = $Method
     Uri = "$BaseUrl$Path"
     Headers = $headers
+    UseBasicParsing = $true
   }
   if ($null -ne $Body) {
-    $args.ContentType = "application/json"
-    $args.Body = ($Body | ConvertTo-Json -Depth 20 -Compress)
+    $args.ContentType = "application/json; charset=utf-8"
+    $jsonBody = ($Body | ConvertTo-Json -Depth 20 -Compress)
+    $args.Body = $script:Utf8NoBomStrict.GetBytes($jsonBody)
   }
-  Invoke-RestMethod @args
+  $response = Invoke-WebRequest @args
+  if ($response.RawContentStream.CanSeek) {
+    $response.RawContentStream.Position = 0
+  }
+  $reader = [System.IO.StreamReader]::new($response.RawContentStream, $script:Utf8NoBomStrict, $false, 1024, $true)
+  try {
+    $json = $reader.ReadToEnd()
+  } finally {
+    $reader.Dispose()
+  }
+  if ([string]::IsNullOrWhiteSpace($json)) {
+    return $null
+  }
+  $json | ConvertFrom-Json
+}
+
+function Test-Mojibake {
+  param([string]$Value)
+  if ([string]::IsNullOrEmpty($Value)) {
+    return $false
+  }
+  return ($Value -match "[\u0080-\u009F]" -or $Value -match "[\u00C3\u00C2\u00E2\u20AC]" -or $Value -match "[\u00E5\u00E7\u00E9\u00E4][\u0080-\u00FF]")
 }
 
 function Assert-Ok {
@@ -144,14 +173,40 @@ function Invoke-EsReadOnlyProbe {
 
 function Write-SmokeReport {
   param([object]$Report)
+  if ($Report.PSObject.Properties.Name -contains "recommendReason" -and (Test-Mojibake "$($Report.recommendReason)")) {
+    throw "recommendReason looks mojibake; refusing to write polluted report: $($Report.recommendReason)"
+  }
+  $json = $Report | ConvertTo-Json -Depth 20
   if (-not $NoWriteReport -and $ReportPath) {
     $dir = Split-Path -Parent $ReportPath
     if ($dir -and -not (Test-Path $dir)) {
       New-Item -ItemType Directory -Path $dir | Out-Null
     }
-    $Report | ConvertTo-Json -Depth 20 | Set-Content -Path $ReportPath -Encoding UTF8
+    [System.IO.File]::WriteAllText($ReportPath, $json, $script:Utf8NoBomStrict)
   }
-  $Report | ConvertTo-Json -Depth 20
+  $json
+}
+
+if ($EncodingSelfTest) {
+  $goodReason = -join @([char]0x5339, [char]0x914D, [char]0x4F60, [char]0x7684, [char]0x76EE, [char]0x6807, [char]0x516C, [char]0x53F8, [char]0xFF1A, "NebulaTech")
+  $badReason = -join @([char]0x00E5, [char]0x008C, [char]0x00B9, [char]0x00E9, [char]0x0085, [char]0x008D, "NebulaTech")
+  if (Test-Mojibake $goodReason) {
+    throw "encoding self-test failed: valid Chinese recommendReason was flagged"
+  }
+  if (-not (Test-Mojibake $badReason)) {
+    throw "encoding self-test failed: mojibake recommendReason was not flagged"
+  }
+  $json = Write-SmokeReport ([ordered]@{
+    ok = $true
+    encodingSelfTest = $true
+    timestamp = (Get-Date).ToString("s")
+    recommendReason = $goodReason
+  })
+  $roundTrip = $json | ConvertFrom-Json
+  if ($roundTrip.recommendReason -ne $goodReason) {
+    throw "encoding self-test failed: recommendReason did not round-trip as UTF-8 JSON"
+  }
+  return
 }
 
 $steps = @()
@@ -277,16 +332,16 @@ if ($AdminEmail) {
 $follow = Invoke-Json "POST" "/api/v1/users/$($authorRegister.data.uid)/follow" $null $actorToken
 Assert-Ok "actor follows author" $follow
 
-$postContent = "Java backend interview review keyword $suffix. Round one covered JVM memory, Redis cache breakdown, MySQL index tuning, Kafka fanout, failure recovery, and a concrete OfferLab review summary with lessons learned."
-Assert-True "live flow post content satisfies interview length" ($postContent.Trim().Length -ge 120)
+$postContent = "Java backend project review keyword $suffix. The writeup covers Redis cache breakdown, MySQL index tuning, Kafka fanout, failure recovery, observability gaps, and reusable lessons for future architecture reviews."
+Assert-True "live flow project review content satisfies community length" ($postContent.Trim().Length -ge 80)
 
 $postBody = @{
-  postType = 1
-  title = "OfferLab review $suffix"
+  postType = 11
+  title = "OfferLab architecture review $suffix"
   content = $postContent
   visibility = 1
-  extJson = '{"company":"NebulaTech","position":"Backend","yearsOfExp":3,"interviewResult":0}'
-  tagNames = @("Java", "Backend")
+  extJson = '{"contentType":"PROJECT_REVIEW","difficulty":"Practical","scenario":"architecture-review","techStacks":["Java","Spring Boot","Redis","Kafka"],"summary":"Architecture review with reusable backend lessons."}'
+  tagNames = @("Java", "Architecture")
 }
 $publish = Invoke-Json "POST" "/api/v1/posts" $postBody $authorToken
 Assert-Ok "publish post" $publish
@@ -388,8 +443,8 @@ $trend = Invoke-Json "GET" "/api/v1/dashboard/trend?range=7d"
 Assert-Ok "trend dashboard" $trend
 
 $intent = Invoke-Json "PUT" "/api/v1/users/me/intent" @{
-  targetCompanies = @("NebulaTech")
-  targetPositions = @("Backend")
+  targetCompanies = @("Java")
+  targetPositions = @("architecture-review")
   yearsOfExp = 3
   expectedCity = "Shanghai"
   techStack = @("Java", "Spring Boot")

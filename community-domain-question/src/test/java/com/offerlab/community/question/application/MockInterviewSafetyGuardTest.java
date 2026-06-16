@@ -88,7 +88,10 @@ class MockInterviewSafetyGuardTest {
         assertFalse(service.contains("tagsByQuestionIds(List.of(row.getId()))"), "mock interview answer DTO assembly must not query tags once per question");
         assertTrue(service.contains("cmd.getFocusTag()"), "mock interview start should accept a focused weak tag");
         assertTrue(service.contains("selectMockInterviewQuestionsByTag"), "mock interview should support tag-focused question selection");
-        assertTrue(service.contains("answerMapper.updateDraft(uid, sessionId, old.getQuestionId(), answerText, selfReview, score)"), "submit must persist user answers by updating existing answer rows");
+        assertTrue(service.contains("updateDraft(uid, sessionId, old.getQuestionId(), answerText, selfReview, score)"), "submit must persist user answers by updating existing answer rows");
+        assertTrue(countOccurrences(service, "validateSessionQuestionIds(existing, byQuestionId.keySet())") >= 2, "submit and draft save must reject question ids that do not belong to the session");
+        assertTrue(service.contains("throw new BizException(ErrorCode.PARAM_ERROR)"), "wrong mock interview question ids must return a client validation error instead of being silently ignored");
+        assertTrue(service.contains("answerMapper.updateDraftCompat(uid, sessionId, questionId, answerText, selfReview, score)"), "submit must keep a migration-safe draft fallback before AI transparency columns exist");
         assertTrue(submitCmd.contains("private Boolean aiReviewEnabled"), "mock interview submit must allow users to turn optional AI review on or off");
         assertTrue(service.contains("Boolean.TRUE.equals(cmd == null ? null : cmd.getAiReviewEnabled())"), "submit must only generate AI review when explicitly enabled");
         assertTrue(service.contains("answerMapper.markPendingForSession(uid, sessionId)"), "submit must mark AI review pending instead of doing slow review in the request transaction");
@@ -112,7 +115,8 @@ class MockInterviewSafetyGuardTest {
         assertTrue(answerPo.contains("aiReviewError"), "answer PO must persist review errors");
         assertTrue(aiReviewService.contains("offerlab.ai.deepseek.enabled"), "AI review should reuse the existing DeepSeek switch");
         assertTrue(aiReviewService.contains("callDeepseek"), "AI review should call DeepSeek when configured");
-        assertTrue(aiReviewService.contains("return ruleReview(answer)"), "AI review must fall back to deterministic rules");
+        assertTrue(aiReviewService.contains("return ruleReview(answer, true, normalizeErrorCode(e))"), "AI review must fall back to deterministic rules after model failures");
+        assertTrue(aiReviewService.contains("return ruleReview(answer, false, null)"), "AI review must use deterministic rules when the model switch is disabled");
         assertTrue(aiReviewService.contains("completeness"), "AI review must include completeness feedback");
         assertTrue(aiReviewService.contains("projectExpression"), "AI review must include project expression feedback");
         assertTrue(aiReviewService.contains("followUpSuggestion"), "AI review must include follow-up suggestions");
@@ -120,6 +124,7 @@ class MockInterviewSafetyGuardTest {
         assertTrue(countOccurrences(normalizedService, "answered++;\n                totalScore += score;") >= 2, "mock interview submit and draft summaries must count score only inside the answered branch");
         assertTrue(answerMapper.contains("selectBySessions"), "mock interview list and stats should batch load answers by session ids");
         assertTrue(answerMapper.contains("int updateDraft"), "draft save must update existing answer rows instead of recreating snapshots");
+        assertTrue(answerMapper.contains("int updateDraftCompat"), "draft save must have a compatibility SQL path without AI transparency columns");
         assertFalse(answerMapper.contains("deleteBySession"), "mock interview answers should not be deleted during submit");
         assertTrue(answerMapper.contains("AND EXISTS"), "draft answer updates must be guarded by the started session state");
         assertTrue(sessionMapper.contains("AND status = 'started'"), "draft session updates must not complete or overwrite completed sessions");

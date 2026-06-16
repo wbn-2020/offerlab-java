@@ -17,6 +17,7 @@ import java.net.InetAddress;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Flushes claimed outbox messages to Kafka.
@@ -34,6 +35,7 @@ public class OutboxScheduler {
     private static final int MAX_RETRY = 5;
     private static final int BATCH_SIZE = 100;
     private static final int CLAIM_LEASE_SECONDS = 60;
+    private static final int SEND_TIMEOUT_SECONDS = 5;
     private final String owner = buildOwner();
 
     @Scheduled(fixedDelay = 1000)
@@ -57,7 +59,7 @@ public class OutboxScheduler {
                             .setHeader(KafkaHeaders.KEY, String.valueOf(msg.getAggregateId()))
                             .build();
 
-                    kafkaTemplate.send(kafkaMsg).get();
+                    kafkaTemplate.send(kafkaMsg).get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
                     int updated = outboxMapper.markSent(msg.getId(), owner);
                     if (updated <= 0) {

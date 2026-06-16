@@ -17,4 +17,8 @@ public class TagDTO {
     private Integer tagType;
     private Long useCount;
     private Boolean official;
+    private Integer status;
+    private Boolean recommended;
+    private Long mergeTargetId;
+    private java.util.List<String> synonyms;
 }

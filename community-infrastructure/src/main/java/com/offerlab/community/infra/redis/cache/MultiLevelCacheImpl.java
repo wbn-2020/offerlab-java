@@ -2,11 +2,13 @@ package com.offerlab.community.infra.redis.cache;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -26,10 +28,10 @@ import java.util.function.Function;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
 
     private final StringRedisTemplate redisTemplate;
+    @Nullable
     private final RedissonClient redisson;
     private final ObjectMapper objectMapper;
 
@@ -41,6 +43,21 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
     private static final Duration MAX_TTL_JITTER = Duration.ofMinutes(5);
     private static final Duration MIN_TTL = Duration.ofSeconds(1);
+
+    @Autowired
+    public MultiLevelCacheImpl(StringRedisTemplate redisTemplate,
+                               ObjectProvider<RedissonClient> redissonProvider,
+                               ObjectMapper objectMapper) {
+        this(redisTemplate, redissonProvider.getIfAvailable(), objectMapper);
+    }
+
+    public MultiLevelCacheImpl(StringRedisTemplate redisTemplate,
+                               @Nullable RedissonClient redisson,
+                               ObjectMapper objectMapper) {
+        this.redisTemplate = redisTemplate;
+        this.redisson = redisson;
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public V get(String key, Function<String, V> loader, Class<V> type) {
@@ -71,6 +88,10 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
 
         // L2 未命中后再进入击穿保护
         String lockKey = CacheKeyBuilder.cacheLock(key);
+        if (redisson == null) {
+            log.warn("L2 cache lock unavailable, key={}, fallback to loader", key);
+            return loadAndCache(key, loader, type);
+        }
         RLock lock = null;
         boolean locked = false;
         try {

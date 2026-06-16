@@ -3,6 +3,7 @@ package com.offerlab.community.search.application;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
@@ -45,7 +46,7 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private static final int SUMMARY_LEN = 120;
     private static final int MYSQL_FALLBACK_MAX_SCAN = 200;
-    private static final List<String> FALLBACK_HOT = List.of("Java", "字节跳动", "面经", "Spring", "Redis", "Kafka");
+    private static final List<String> FALLBACK_HOT = List.of("Java", "Spring", "Redis", "Kafka", "架构复盘", "踩坑记录");
 
     private final PostMapper postMapper;
     private final PostExtensionMapper extensionMapper;
@@ -56,44 +57,67 @@ public class SearchFacadeImpl implements SearchFacade {
     private final PostFacade postFacade;
     private final UserFacade userFacade;
     private final SearchAnalyticsService searchAnalyticsService;
+    private final MigrationCheckService migrationCheckService;
 
     @Override
     public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
                                                 Integer type, String sort, String cursor, int size) {
+        return searchPosts(keyword, company, position, type, sort, cursor, size, false);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
+                                                Integer type, String sort, String cursor, int size,
+                                                boolean includeTestData) {
         int limit = Math.min(size <= 0 ? 20 : size, 50);
         String normalizedSort = normalizeSort(sort);
         boolean firstPage = parseCursor(cursor) <= 0;
         PageResult<PostBriefDTO> result;
         if (!"hot".equals(normalizedSort) && postSearchIndexer.ensurePostIndex()) {
-            Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(keyword, company, position, type, normalizedSort, cursor, limit);
+            Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(keyword, company, position, type,
+                    normalizedSort, cursor, limit, includeTestData);
             if (esResult.isPresent()) {
                 ElasticsearchSearchPage esPage = esResult.get();
-                result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit());
+                result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit(),
+                        includeTestData, keyword, type);
                 boolean emptyFirstPage = firstPage && isEmptyPage(result);
                 boolean sparseAfterVisibilityFilter = isSparseAfterVisibilityFiltering(esPage, limit);
                 if (emptyFirstPage || sparseAfterVisibilityFilter) {
-                    PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit);
+                    PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type,
+                            normalizedSort, cursor, limit, includeTestData);
                     if (shouldUseMysqlFallback(result, mysqlFallback)) {
                         result = withSearchMetadata(mysqlFallback, "mysql", true,
                                 emptyFirstPage ? "elasticsearch_empty" : "elasticsearch_visibility_filtered",
-                                fallbackScanLimit(limit));
+                                fallbackScanLimit(limit), includeTestData, keyword, type);
                     }
                 }
                 searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
                 return result;
             }
         }
-        result = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit);
+        result = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit, includeTestData);
         result = withSearchMetadata(result, "mysql", !"hot".equals(normalizedSort),
                 "hot".equals(normalizedSort) ? "hot_sort_mysql" : "elasticsearch_unavailable",
-                fallbackScanLimit(limit));
+                fallbackScanLimit(limit), includeTestData, keyword, type);
         searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
         return result;
     }
 
     private PageResult<PostBriefDTO> withSearchMetadata(PageResult<PostBriefDTO> result, String source,
-                                                        boolean degraded, String fallbackReason, int scanLimit) {
-        return result.withMetadata(source, degraded, fallbackReason, scanLimit);
+                                                        boolean degraded, String fallbackReason, int scanLimit,
+                                                        boolean includeTestData, String keyword, Integer type) {
+        boolean syntheticQuery = PublicContentFilter.isSyntheticText(keyword);
+        result.withMetadata(source, degraded, fallbackReason, scanLimit)
+                .withDiagnostic("includeTestData", includeTestData)
+                .withDiagnostic("testDataFilterActive", !includeTestData)
+                .withDiagnostic("syntheticQuery", syntheticQuery)
+                .withDiagnostic("type", type);
+        if (isEmptyPage(result) && syntheticQuery && !includeTestData) {
+            result.withDiagnostic("emptyReason", "test_data_filtered_unless_includeTestData");
+        } else if (isEmptyPage(result) && type != null) {
+            result.withDiagnostic("emptyReason", "type_or_filter_no_match");
+        }
+        return result;
     }
 
     private boolean isEmptyPage(PageResult<PostBriefDTO> page) {
@@ -147,7 +171,7 @@ public class SearchFacadeImpl implements SearchFacade {
     public List<String> getHotKeywords(int size) {
         int limit = Math.min(size <= 0 ? 10 : size, 20);
         Set<String> result = new LinkedHashSet<>();
-        tagMapper.selectActiveTags().stream()
+        activeTags().stream()
                 .sorted(Comparator.comparing(TagPO::getUseCount, Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(TagPO::getTagName)
                 .filter(name -> name != null && !name.isBlank() && !PublicContentFilter.isSyntheticText(name))
@@ -161,7 +185,8 @@ public class SearchFacadeImpl implements SearchFacade {
     }
 
     private Optional<ElasticsearchSearchPage> searchByElasticsearch(String keyword, String company, String position,
-                                                                    Integer type, String sort, String cursor, int limit) {
+                                                                    Integer type, String sort, String cursor, int limit,
+                                                                    boolean includeTestData) {
         int scanLimit = elasticsearchScanLimit(limit);
         Map<String, Object> body = new HashMap<>();
         body.put("query", buildEsQuery(keyword, company, position, type, cursor));
@@ -176,7 +201,7 @@ public class SearchFacadeImpl implements SearchFacade {
         ));
         body.put("size", scanLimit);
         return elasticsearch.search(elasticsearch.postIndex(), body)
-                .map(json -> toElasticsearchPage(json, limit, scanLimit));
+                .map(json -> toElasticsearchPage(json, limit, scanLimit, includeTestData));
     }
 
     private List<Object> buildEsSort(String sort) {
@@ -197,12 +222,20 @@ public class SearchFacadeImpl implements SearchFacade {
         if (kw.isBlank()) {
             must.add(Map.of("match_all", Map.of()));
         } else {
-            must.add(Map.of("multi_match", Map.of(
+            List<Object> should = new ArrayList<>();
+            should.add(Map.of("multi_match", Map.of(
                     "query", kw,
-                    "fields", List.of("title^3", "content", "company^2", "position"),
+                    "fields", List.of("title^3", "content", "summary^2", "company^2", "position", "scenario^2",
+                            "techStacks^2", "tagNames", "tagSynonyms^2", "tagSearchTerms^2"),
                     "type", "best_fields",
                     "operator", "or"
             )));
+            should.add(Map.of("match_phrase", Map.of("title", kw)));
+            should.add(Map.of("match_phrase", Map.of("content", kw)));
+            should.add(Map.of("match_phrase", Map.of("summary", kw)));
+            should.add(Map.of("term", Map.of("id", kw)));
+            parsePostIdKeyword(kw).ifPresent(postId -> should.add(Map.of("term", Map.of("postId", postId))));
+            must.add(Map.of("bool", Map.of("should", should, "minimum_should_match", 1)));
         }
         filter.add(Map.of("term", Map.of("status", "published")));
         filter.add(Map.of("term", Map.of("visibility", 1)));
@@ -210,10 +243,20 @@ public class SearchFacadeImpl implements SearchFacade {
             filter.add(Map.of("term", Map.of("type", type)));
         }
         if (!clean(company).isBlank()) {
-            filter.add(Map.of("match_phrase", Map.of("company", clean(company))));
+            filter.add(Map.of("bool", Map.of("should", List.of(
+                    Map.of("match_phrase", Map.of("company", clean(company))),
+                    Map.of("match_phrase", Map.of("techStacks", clean(company))),
+                    Map.of("match_phrase", Map.of("tagSynonyms", clean(company))),
+                    Map.of("match_phrase", Map.of("tagSearchTerms", clean(company)))
+            ), "minimum_should_match", 1)));
         }
         if (!clean(position).isBlank()) {
-            filter.add(Map.of("term", Map.of("position", clean(position))));
+            filter.add(Map.of("bool", Map.of("should", List.of(
+                    Map.of("term", Map.of("position", clean(position))),
+                    Map.of("match_phrase", Map.of("scenario", clean(position))),
+                    Map.of("match_phrase", Map.of("tagSynonyms", clean(position))),
+                    Map.of("match_phrase", Map.of("tagSearchTerms", clean(position)))
+            ), "minimum_should_match", 1)));
         }
         long c = parseCursor(cursor);
         if (c > 0) {
@@ -222,7 +265,7 @@ public class SearchFacadeImpl implements SearchFacade {
         return Map.of("bool", Map.of("must", must, "filter", filter));
     }
 
-    private ElasticsearchSearchPage toElasticsearchPage(JsonNode json, int limit, int scanLimit) {
+    private ElasticsearchSearchPage toElasticsearchPage(JsonNode json, int limit, int scanLimit, boolean includeTestData) {
         JsonNode hits = json.path("hits").path("hits");
         if (!hits.isArray() || hits.isEmpty()) {
             return new ElasticsearchSearchPage(PageResult.empty(), 0, scanLimit);
@@ -245,23 +288,30 @@ public class SearchFacadeImpl implements SearchFacade {
                     .createTime(toLocalDateTime(source.path("createTime").asLong(0L)))
                     .build());
         }
-        List<PostBriefDTO> visibleItems = filterVisibleSearchResults(items);
+        List<PostBriefDTO> visibleItems = filterVisibleSearchResults(items, includeTestData);
+        int syntheticFiltered = includeTestData ? 0 : (int) items.stream()
+                .filter(PublicContentFilter::isSyntheticPost)
+                .count();
         boolean hasMore = visibleItems.size() > limit;
         List<PostBriefDTO> pageItems = hasMore ? visibleItems.subList(0, limit) : visibleItems;
         PostBriefDTO cursorItem = pageItems.isEmpty() ? null : pageItems.get(pageItems.size() - 1);
         String next = hasMore && cursorItem.getCreateTime() != null
                 ? String.valueOf(cursorItem.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
-        return new ElasticsearchSearchPage(PageResult.of(pageItems, next, hasMore), items.size(), scanLimit);
+        PageResult<PostBriefDTO> page = PageResult.of(pageItems, next, hasMore)
+                .withDiagnostic("rawHits", items.size())
+                .withDiagnostic("visibleHits", visibleItems.size())
+                .withDiagnostic("syntheticFiltered", syntheticFiltered);
+        return new ElasticsearchSearchPage(page, items.size(), scanLimit);
     }
 
-    private List<PostBriefDTO> filterVisibleSearchResults(List<PostBriefDTO> esItems) {
+    private List<PostBriefDTO> filterVisibleSearchResults(List<PostBriefDTO> esItems, boolean includeTestData) {
         if (esItems == null || esItems.isEmpty()) {
             return List.of();
         }
         Map<Long, PostBriefDTO> visibleById = postFacade.batchGetPosts(esItems.stream()
                 .map(PostBriefDTO::getId)
-                .toList());
+                .toList(), null, includeTestData);
         List<PostBriefDTO> visible = new ArrayList<>();
         for (PostBriefDTO esItem : esItems) {
             PostBriefDTO current = visibleById.get(esItem.getId());
@@ -291,11 +341,15 @@ public class SearchFacadeImpl implements SearchFacade {
                         "should", List.of(
                                 Map.of("match_phrase_prefix", Map.of("title", prefix)),
                                 Map.of("match_phrase_prefix", Map.of("company", prefix)),
-                                Map.of("prefix", Map.of("position", prefix))
+                                Map.of("prefix", Map.of("position", prefix)),
+                                Map.of("match_phrase_prefix", Map.of("scenario", prefix)),
+                                Map.of("match_phrase_prefix", Map.of("techStacks", prefix)),
+                                Map.of("match_phrase_prefix", Map.of("tagSynonyms", prefix)),
+                                Map.of("match_phrase_prefix", Map.of("tagSearchTerms", prefix))
                         ),
                         "minimum_should_match", 1
                 )),
-                "_source", List.of("title", "company", "position"),
+                "_source", List.of("title", "company", "position", "scenario", "techStacks", "tagNames", "tagSynonyms", "tagSearchTerms"),
                 "size", limit
         );
         return elasticsearch.search(elasticsearch.postIndex(), body).map(json -> {
@@ -310,6 +364,11 @@ public class SearchFacadeImpl implements SearchFacade {
                 }
                 addIfMatches(result, source.path("company").asText(null), prefix);
                 addIfMatches(result, source.path("position").asText(null), prefix);
+                addIfMatches(result, source.path("scenario").asText(null), prefix);
+                addArrayMatches(result, source.path("techStacks"), prefix);
+                addArrayMatches(result, source.path("tagNames"), prefix);
+                addArrayMatches(result, source.path("tagSynonyms"), prefix);
+                addArrayMatches(result, source.path("tagSearchTerms"), prefix);
                 addIfMatches(result, source.path("title").asText(null), prefix);
             }
             return result.stream().limit(limit).toList();
@@ -321,11 +380,14 @@ public class SearchFacadeImpl implements SearchFacade {
         if (p.isBlank()) {
             return List.of();
         }
-        List<PostPO> candidates = postMapper.suggestPublicPostsFallback(p, fallbackScanLimit(limit));
+        List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
+                ? postMapper.suggestPublicPostsFallback(p, fallbackScanLimit(limit))
+                : postMapper.suggestPublicPostsFallbackCompat(p, fallbackScanLimit(limit));
         if (candidates.isEmpty()) {
             return List.of();
         }
         Map<Long, String> extByPostId = loadExtJson(candidates.stream().map(PostPO::getId).toList());
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(candidates.stream().map(PostPO::getId).toList());
         Set<String> result = new LinkedHashSet<>();
         for (PostPO post : candidates) {
             JsonNode ext = parseExt(extByPostId.get(post.getId()));
@@ -336,6 +398,9 @@ public class SearchFacadeImpl implements SearchFacade {
             }
             addIfMatches(result, ext.path("company").asText(null), p);
             addIfMatches(result, ext.path("position").asText(null), p);
+            addIfMatches(result, ext.path("scenario").asText(null), p);
+            addArrayMatches(result, ext.path("techStacks"), p);
+            addTagMatches(result, tags.getOrDefault(post.getId(), List.of()), p);
             addIfMatches(result, post.getTitle(), p);
             if (result.size() >= limit) {
                 break;
@@ -345,17 +410,29 @@ public class SearchFacadeImpl implements SearchFacade {
     }
 
     private PageResult<PostBriefDTO> searchByMysql(String keyword, String company, String position,
-                                                   Integer type, String sort, String cursor, int limit) {
+                                                   Integer type, String sort, String cursor, int limit,
+                                                   boolean includeTestData) {
         long c = parseCursor(cursor);
         String kw = clean(keyword);
+        Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
         LocalDateTime cursorTime = c > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(c), ZoneOffset.UTC) : null;
-        List<PostPO> candidates = postMapper.searchPublicPostsFallback(
-                blankToNull(kw),
-                blankToNull(clean(company)),
-                blankToNull(clean(position)),
-                type,
-                cursorTime,
-                fallbackScanLimit(limit));
+        List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
+                ? postMapper.searchPublicPostsFallback(
+                        blankToNull(kw),
+                        keywordPostId,
+                        blankToNull(clean(company)),
+                        blankToNull(clean(position)),
+                        type,
+                        cursorTime,
+                        fallbackScanLimit(limit))
+                : postMapper.searchPublicPostsFallbackCompat(
+                        blankToNull(kw),
+                        keywordPostId,
+                        blankToNull(clean(company)),
+                        blankToNull(clean(position)),
+                        type,
+                        cursorTime,
+                        fallbackScanLimit(limit));
         if (candidates.isEmpty()) {
             return PageResult.empty();
         }
@@ -378,9 +455,14 @@ public class SearchFacadeImpl implements SearchFacade {
                 .createTime(p.getCreateTime())
                 .build()).toList();
         items = enrich(items);
-        items = items.stream()
-                .filter(post -> !PublicContentFilter.isSyntheticPost(post))
-                .toList();
+        int syntheticFiltered = 0;
+        if (!includeTestData) {
+            int beforeFilter = items.size();
+            items = items.stream()
+                    .filter(post -> !PublicContentFilter.isSyntheticPost(post))
+                    .toList();
+            syntheticFiltered = beforeFilter - items.size();
+        }
         if ("hot".equals(sort)) {
             items = items.stream()
                     .sorted(Comparator.comparingDouble(this::hotScore).reversed()
@@ -391,7 +473,10 @@ public class SearchFacadeImpl implements SearchFacade {
         String next = hasMore && !items.isEmpty()
                 ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
                 : null;
-        return PageResult.of(items, next, hasMore);
+        return PageResult.of(items, next, hasMore)
+                .withDiagnostic("rawHits", candidates.size())
+                .withDiagnostic("visibleHits", items.size())
+                .withDiagnostic("syntheticFiltered", syntheticFiltered);
     }
 
     private List<PostBriefDTO> enrich(List<PostBriefDTO> posts) {
@@ -446,9 +531,21 @@ public class SearchFacadeImpl implements SearchFacade {
         if (postIds == null || postIds.isEmpty()) {
             return Map.of();
         }
-        return tagMapper.selectTagsByPostIds(postIds).stream()
+        return selectTagsByPostIds(postIds).stream()
                 .collect(Collectors.groupingBy(PostTagView::getPostId,
                         Collectors.mapping(this::toTagDto, Collectors.toList())));
+    }
+
+    private List<TagPO> activeTags() {
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectActiveTags()
+                : tagMapper.selectActiveTagsCompat();
+    }
+
+    private List<PostTagView> selectTagsByPostIds(Collection<Long> postIds) {
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectTagsByPostIds(postIds)
+                : tagMapper.selectTagsByPostIdsCompat(postIds);
     }
 
     private TagDTO toTagDto(PostTagView tag) {
@@ -460,6 +557,7 @@ public class SearchFacadeImpl implements SearchFacade {
                 .tagType(tag.getTagType())
                 .useCount(tag.getUseCount())
                 .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
+                .synonyms(parseSynonyms(tag.getSynonyms()))
                 .build();
     }
 
@@ -477,6 +575,7 @@ public class SearchFacadeImpl implements SearchFacade {
                     .tagType(tag.path("tagType").isMissingNode() ? null : tag.path("tagType").asInt())
                     .useCount(tag.path("useCount").asLong(0L))
                     .official(tag.path("official").asBoolean(false))
+                    .synonyms(textArray(tag.path("synonyms")))
                     .build());
         }
         return result;
@@ -499,12 +598,78 @@ public class SearchFacadeImpl implements SearchFacade {
         }
     }
 
+    private void addArrayMatches(Set<String> result, JsonNode values, String prefix) {
+        if (values == null || !values.isArray()) {
+            addIfMatches(result, values == null ? null : values.asText(null), prefix);
+            return;
+        }
+        for (JsonNode value : values) {
+            addIfMatches(result, value.asText(null), prefix);
+        }
+    }
+
+    private void addTagMatches(Set<String> result, List<TagDTO> tags, String prefix) {
+        if (tags == null || tags.isEmpty()) {
+            return;
+        }
+        for (TagDTO tag : tags) {
+            addIfMatches(result, tag.getName(), prefix);
+            if (tag.getSynonyms() != null) {
+                tag.getSynonyms().forEach(value -> addIfMatches(result, value, prefix));
+            }
+        }
+    }
+
+    private static List<String> parseSynonyms(String synonyms) {
+        if (synonyms == null || synonyms.isBlank()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String raw : synonyms.split("[,\\uFF0C\\u3001/;\\uFF1B\\r\\n]+")) {
+            String value = raw == null ? "" : raw.trim();
+            if (!value.isBlank() && !result.contains(value)) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private static List<String> textArray(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            String value = node.asText("").trim();
+            return value.isBlank() ? List.of() : List.of(value);
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : node) {
+            String value = item.asText("").trim();
+            if (!value.isBlank() && !values.contains(value)) {
+                values.add(value);
+            }
+        }
+        return values;
+    }
+
     private long parseCursor(String c) {
         if (c == null || c.isBlank()) return 0L;
         try {
             return Long.parseLong(c);
         } catch (Exception e) {
             return 0L;
+        }
+    }
+
+    private Optional<Long> parsePostIdKeyword(String keyword) {
+        String value = clean(keyword);
+        if (value.isBlank() || !value.chars().allMatch(Character::isDigit)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Long.parseLong(value));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
         }
     }
 

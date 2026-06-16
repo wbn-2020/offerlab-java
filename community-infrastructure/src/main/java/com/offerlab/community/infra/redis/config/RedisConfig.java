@@ -2,6 +2,7 @@ package com.offerlab.community.infra.redis.config;
 
 import com.offerlab.community.infra.redis.cache.CacheEvictListener;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -36,6 +37,7 @@ public class RedisConfig {
      * 用于订阅缓存失效广播 channel
      */
     @Bean
+    @ConditionalOnProperty(prefix = "offerlab.redis", name = "pubsub-enabled", havingValue = "true")
     public RedisMessageListenerContainer redisMessageListenerContainer(
             RedisConnectionFactory connectionFactory,
             CacheEvictListener cacheEvictListener) {

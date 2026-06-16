@@ -51,9 +51,19 @@ public class QuestionIndexRetryService {
         for (Map<String, Object> row : taskMapper.countByStatus()) {
             byStatus.put(statusName(row.get("status")), asLong(row.get("count")));
         }
+        long duePending = taskMapper.countDuePending();
+        long failed = byStatus.getOrDefault("failed", 0L);
+        boolean attentionRequired = failed > 0 || duePending > 0;
         Map<String, Object> status = new LinkedHashMap<>();
+        status.put("status", attentionRequired ? "DEGRADED" : "UP");
+        status.put("available", true);
         status.put("byStatus", byStatus);
-        status.put("duePending", taskMapper.countDuePending());
+        status.put("duePending", duePending);
+        status.put("attentionRequired", attentionRequired);
+        if (attentionRequired) {
+            status.put("message", "Question index retry queue has failed or due tasks");
+            status.put("action", "Review failed question index retry tasks in Ops and replay after Elasticsearch is healthy.");
+        }
         return status;
     }
 
@@ -130,7 +140,15 @@ public class QuestionIndexRetryService {
         byStatus.put("done", 0L);
         byStatus.put("failed", 0L);
         byStatus.put("running", 0L);
-        return Map.of("byStatus", byStatus, "duePending", 0L);
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("status", "DOWN");
+        status.put("available", false);
+        status.put("attentionRequired", true);
+        status.put("message", "question index retry table unavailable");
+        status.put("action", "Apply the question index retry migration before relying on async question index repair.");
+        status.put("byStatus", byStatus);
+        status.put("duePending", 0L);
+        return status;
     }
 
     private static String statusName(Object status) {

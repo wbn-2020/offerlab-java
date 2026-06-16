@@ -70,7 +70,7 @@ public class RuleBasedQuestionExtractor {
                     .examPoint(examPoint(text, post))
                     .referenceAnswer(referenceAnswer(text))
                     .sourceSnippet(sourceSnippet(text, post.getContent()))
-                    .qualityReason("规则提取：来自面经中的疑问句或面试题描述，建议运营复核后补充更完整答案。")
+                    .qualityReason("规则提取：来自内容中的疑问句或知识卡描述，建议运营复核后补充更完整答案。")
                     .company(company)
                     .position(position)
                     .interviewRound(round)

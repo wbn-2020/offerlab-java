@@ -38,5 +38,15 @@ class OpsModerationGuardTest {
         assertTrue(controllerSource.contains("/moderation/users/{targetUid}/clear-ban"), "ops controller must expose clear ban endpoint");
         assertTrue(controllerSource.contains("USER_MODERATION_CLEAR_MUTE"), "clear mute must be audited");
         assertTrue(controllerSource.contains("USER_MODERATION_CLEAR_BAN"), "clear ban must be audited");
+        assertTrue(controllerSource.contains("adminAuditService.recordRequired"),
+                "moderation and admin role writes must fail closed when admin audit is unavailable");
+        assertTrue(controllerSource.contains("RiskConfirmation.requireHigh(actionRemark(request, null))"),
+                "moderation keyword status and user clear operations must require explicit risk remarks");
+        assertTrue(controllerSource.contains("recordRequired(uid, \"MODERATION_KEYWORD_STATUS\", \"MODERATION_KEYWORD\", id, null, result, remark)"),
+                "keyword status changes must audit the required risk remark");
+        assertTrue(controllerSource.contains("recordRequired(operatorUid, \"USER_MODERATION_CLEAR_MUTE\", \"USER\", targetUid, null, state, remark)"),
+                "clear mute must audit the required risk remark");
+        assertTrue(controllerSource.contains("recordRequired(operatorUid, \"USER_MODERATION_CLEAR_BAN\", \"USER\", targetUid, null, state, remark)"),
+                "clear ban must audit the required risk remark");
     }
 }

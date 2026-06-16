@@ -27,6 +27,16 @@ class PostSearchConsistencyGuardTest {
 
         assertTrue(indexer.contains("deletePostDocument(postId)"), "indexer must delete ES docs when a post becomes non-indexable");
         assertTrue(indexer.contains("elasticsearch.deleteDocument"), "indexer must call ES deleteDocument for stale posts");
+        assertTrue(indexer.contains("boolean ensured = enabled && available && ensurePostIndex()"), "search status must actively recover stale indexReady state");
+        assertTrue(indexer.contains("status.put(\"diagnosticMessage\""), "search status must keep ops diagnostics separate from user-facing copy");
+        assertTrue(indexer.contains("List<Long> postIds = posts.stream()"), "post index rebuild must collect each page of post ids");
+        assertTrue(indexer.contains("extensionMapper.selectBatchIds(postIds)"), "post index rebuild must batch-load extensions instead of querying per document");
+        assertTrue(indexer.contains("counterMapper.selectBatchIds(postIds)"), "post index rebuild must batch-load counters instead of querying per document");
+        assertTrue(indexer.contains("selectTagsByPostIds(postIds)"), "post index rebuild must batch-load tags instead of querying per document");
+        assertTrue(indexer.contains("tags.getOrDefault(post.getId(), List.of())"), "post index rebuild must pass page-local tag groups into document construction");
+        assertTrue(indexer.contains("props.put(\"tags\", Map.of(\"type\", \"nested\", \"properties\", Map.of(")
+                        && indexer.contains("\"synonyms\", text"),
+                "post_idx mapping must keep tags as nested before adding tag synonym fields");
         assertTrue(listener.contains("PostDeletedEvent"), "search listener must consume post delete events");
         assertTrue(listener.contains("indexer.deletePost(event.getPostId())"), "delete event must remove the ES document");
         assertTrue(listener.contains("retryService.enqueueIndex"), "index failures must enqueue durable retry tasks");

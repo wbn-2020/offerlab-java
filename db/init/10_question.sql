@@ -151,6 +151,31 @@ CREATE TABLE IF NOT EXISTS t_user_prep_target (
     KEY idx_uid_interview_priority (uid, interview_date, priority)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='User prep target';
 
+CREATE TABLE IF NOT EXISTS t_interview_material_pack (
+    id                       BIGINT       NOT NULL PRIMARY KEY,
+    uid                      BIGINT       NOT NULL,
+    post_id                  BIGINT       NOT NULL,
+    source_post_version      INT          NOT NULL DEFAULT 0,
+    generation_status        VARCHAR(16)  NOT NULL DEFAULT 'SUCCEEDED',
+    star_situation           TEXT         NULL,
+    star_task                TEXT         NULL,
+    star_action              TEXT         NULL,
+    star_result              TEXT         NULL,
+    resume_bullet_json       JSON         NULL,
+    follow_up_question_json  JSON         NULL,
+    technical_highlight_json JSON         NULL,
+    missing_hint_json        JSON         NULL,
+    user_note                VARCHAR(1000) NULL,
+    saved_to_prep            TINYINT      NOT NULL DEFAULT 0,
+    provider                 VARCHAR(32)  NULL,
+    fallback_used            TINYINT      NOT NULL DEFAULT 1,
+    create_time              DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    update_time              DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uk_uid_post (uid, post_id),
+    KEY idx_uid_saved_time (uid, saved_to_prep, update_time),
+    KEY idx_post_time (post_id, update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Personal interview material pack';
+
 CREATE TABLE IF NOT EXISTS t_mock_interview_session (
     id               BIGINT       NOT NULL PRIMARY KEY,
     uid              BIGINT       NOT NULL,
@@ -192,6 +217,13 @@ CREATE TABLE IF NOT EXISTS t_mock_interview_answer (
     ai_project_expression VARCHAR(300) NULL,
     ai_follow_up_suggestion VARCHAR(300) NULL,
     ai_review_provider VARCHAR(32) NULL,
+    ai_review_task_id VARCHAR(64) NULL,
+    ai_review_fallback_used TINYINT NOT NULL DEFAULT 0,
+    ai_review_duration_ms BIGINT NOT NULL DEFAULT 0,
+    ai_review_prompt_tokens INT NOT NULL DEFAULT 0,
+    ai_review_completion_tokens INT NOT NULL DEFAULT 0,
+    ai_review_estimated_cost_micros BIGINT NOT NULL DEFAULT 0,
+    ai_review_error_code VARCHAR(64) NULL,
     create_time  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_session_question (session_id, question_id),
     KEY idx_session_sequence (session_id, sequence_no),

@@ -21,6 +21,7 @@ public class SearchAnalyticsService {
 
     private static final String EVENT_SEARCH = "SEARCH";
     private static final String EVENT_PREP_CLICK = "PREP_CLICK";
+    private static final String EVENT_COMMUNITY_RECOMMEND_CLICK = "COMMUNITY_RECOMMEND_CLICK";
 
     private final SearchAnalyticsMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
@@ -58,6 +59,18 @@ public class SearchAnalyticsService {
         insertQuietly(event);
     }
 
+    public void recordCommunityRecommendClick(String keyword, String target) {
+        String cleanTarget = clean(target, 128);
+        if (cleanTarget == null) {
+            return;
+        }
+        SearchAnalyticsEventPO event = baseEvent(EVENT_COMMUNITY_RECOMMEND_CLICK);
+        event.setKeyword(clean(keyword, 100));
+        event.setCompany(cleanTarget);
+        event.setResultCount(0);
+        insertQuietly(event);
+    }
+
     public SearchAnalyticsDTO summary(int days, int limit) {
         return summary(days, limit, false);
     }
@@ -68,14 +81,20 @@ public class SearchAnalyticsService {
                     .hotKeywords(List.of())
                     .noResultKeywords(List.of())
                     .prepClicks(List.of())
+                    .recommendClicks(List.of())
                     .build();
         }
         int safeDays = Math.max(1, Math.min(days, 90));
         int safeLimit = Math.max(1, Math.min(limit, 50));
+        List<SearchAnalyticsItemDTO> recommendClicks = mapper.topRecommendationClicks(safeDays, safeLimit, includeTestData)
+                .stream()
+                .map(this::toRecommendItem)
+                .toList();
         return SearchAnalyticsDTO.builder()
                 .hotKeywords(mapper.topSearchKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
                 .noResultKeywords(mapper.topNoResultKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
-                .prepClicks(mapper.topPrepClicks(safeDays, safeLimit, includeTestData).stream().map(this::toPrepItem).toList())
+                .prepClicks(recommendClicks)
+                .recommendClicks(recommendClicks)
                 .build();
     }
 
@@ -119,6 +138,17 @@ public class SearchAnalyticsService {
     private SearchAnalyticsItemDTO toPrepItem(Map<String, Object> row) {
         return SearchAnalyticsItemDTO.builder()
                 .company(asText(row.get("company")))
+                .count(asLong(row.get("count")))
+                .lastSearchedAt(asTime(row.get("lastSearchedAt")))
+                .build();
+    }
+
+    private SearchAnalyticsItemDTO toRecommendItem(Map<String, Object> row) {
+        String target = asText(row.get("company"));
+        return SearchAnalyticsItemDTO.builder()
+                .keyword(asText(row.get("keyword")))
+                .company(target)
+                .target(target)
                 .count(asLong(row.get("count")))
                 .lastSearchedAt(asTime(row.get("lastSearchedAt")))
                 .build();

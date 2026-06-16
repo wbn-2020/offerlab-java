@@ -15,7 +15,10 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -33,6 +36,7 @@ public class NotificationEventListener {
     private static final int TYPE_COMMENT = 2;
     private static final int TYPE_FAVORITE = 3;
     private static final int TYPE_FOLLOWER = 4;
+    private static final int TYPE_SYSTEM = 5;
     private static final int TYPE_MENTION = 6;
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}\\p{N}_\\-\\u4e00-\\u9fa5]{2,32})");
 
@@ -45,6 +49,7 @@ public class NotificationEventListener {
     public void onPostPublished(PostPublishedEvent event) {
         notifyMentions(event.getAuthorId(), event.getPostId(), null,
                 textOf(event.getTitle(), event.getContent()), Set.of(event.getAuthorId()));
+        notifyTopicFollowers(event);
     }
 
     @Async
@@ -141,6 +146,57 @@ public class NotificationEventListener {
                         content);
             }
         }
+    }
+
+    private void notifyTopicFollowers(PostPublishedEvent event) {
+        if (event == null || event.getPostId() == null || event.getTopicNotificationTargets() == null
+                || event.getTopicNotificationTargets().isEmpty()) {
+            return;
+        }
+        Map<Long, List<PostPublishedEvent.TopicNotificationTarget>> byReceiver = new LinkedHashMap<>();
+        for (PostPublishedEvent.TopicNotificationTarget topic : event.getTopicNotificationTargets()) {
+            if (topic == null || topic.getFollowerUids() == null || topic.getFollowerUids().isEmpty()) {
+                continue;
+            }
+            for (Long receiverUid : topic.getFollowerUids()) {
+                if (receiverUid == null || receiverUid <= 0 || receiverUid.equals(event.getAuthorId())) {
+                    continue;
+                }
+                byReceiver.computeIfAbsent(receiverUid, ignored -> new ArrayList<>()).add(topic);
+            }
+        }
+        byReceiver.forEach((receiverUid, topics) -> {
+            Map<String, Object> content = topicNotificationContent(event, topics);
+            runQuietly(() -> notificationFacade.notifySystem(receiverUid, (long) TARGET_POST, event.getPostId(), content),
+                    "topic post published", receiverUid, 0L, TYPE_SYSTEM, TARGET_POST, event.getPostId(), content);
+        });
+    }
+
+    private Map<String, Object> topicNotificationContent(PostPublishedEvent event,
+                                                         List<PostPublishedEvent.TopicNotificationTarget> topics) {
+        List<Map<String, Object>> topicData = topics == null ? List.of() : topics.stream()
+                .filter(topic -> topic != null && topic.getTopicId() != null)
+                .limit(5)
+                .map(topic -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("topicId", topic.getTopicId());
+                    item.put("topicSlug", topic.getTopicSlug());
+                    item.put("topicName", topic.getTopicName());
+                    return item;
+                })
+                .toList();
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", "topic_post_published");
+        content.put("postId", event.getPostId());
+        content.put("postTitle", event.getTitle());
+        if (!topicData.isEmpty()) {
+            Map<String, Object> first = topicData.get(0);
+            content.put("topicId", first.get("topicId"));
+            content.put("topicSlug", first.get("topicSlug"));
+            content.put("topicName", first.get("topicName"));
+            content.put("topics", topicData);
+        }
+        return content;
     }
 
     private Set<String> extractMentionNames(String text) {

@@ -7,6 +7,8 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
@@ -52,6 +54,7 @@ public class CommentReportService {
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
     private final AfterCommitExecutor afterCommit;
+    private final ReviewQueuePublisher reviewQueuePublisher;
 
     @Transactional
     public Long reportComment(Long commentId, Long reporterUid, String reason, String detail) {
@@ -81,6 +84,7 @@ public class CommentReportService {
         po.setDetail(clean(detail, MAX_DETAIL_LEN, null));
         po.setReportStatus(STATUS_PENDING);
         reportMapper.insert(po);
+        publishReportQueueItem(reportId, comment, po);
         return reportId;
     }
 
@@ -128,10 +132,36 @@ public class CommentReportService {
             hideCommentBranch(report.getCommentId(), report.getPostId());
         }
         CommentReportDTO dto = toDto(reportMapper.selectById(reportId));
-        adminAuditService.record(reviewerUid, approved ? "COMMENT_REPORT_APPROVE" : "COMMENT_REPORT_REJECT",
+        adminAuditService.recordRequired(reviewerUid, approved ? "COMMENT_REPORT_APPROVE" : "COMMENT_REPORT_REJECT",
                 "COMMENT_REPORT", reportId, report,
                 Map.of("approved", approved, "commentId", report.getCommentId(), "postId", report.getPostId()), reviewNote);
+        reviewQueuePublisher.resolve("COMMENT_REPORT", reportId,
+                approved ? "approved" : "rejected",
+                approved ? "comment hidden" : "report rejected",
+                reviewNote,
+                reviewerUid);
         return dto;
+    }
+
+    private void publishReportQueueItem(Long reportId, CommentPO comment, CommentReportPO report) {
+        String title = "评论举报 " + report.getCommentId();
+        String summary = String.join(" / ", List.of(
+                "帖子：" + report.getPostId(),
+                "原因：" + clean(report.getReason(), MAX_REASON_LEN, "OTHER"),
+                "说明：" + clean(report.getDetail(), 180, ""),
+                "评论：" + summary(comment == null ? null : comment.getContent())
+        )).trim();
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "COMMENT_REPORT",
+                reportId,
+                title,
+                summary,
+                "high",
+                report.getReporterUid(),
+                80,
+                "{\"commentId\":" + report.getCommentId() + ",\"postId\":" + report.getPostId() + "}",
+                "comment report created"
+        ));
     }
 
     private CommentPO requireVisibleComment(Long commentId) {

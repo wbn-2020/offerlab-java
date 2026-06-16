@@ -2,6 +2,7 @@ package com.offerlab.community.search.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PostFacade;
@@ -29,7 +30,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,6 +54,8 @@ class SearchFacadeVisibilityTest {
     private UserFacade userFacade;
     @Mock
     private SearchAnalyticsService searchAnalyticsService;
+    @Mock
+    private MigrationCheckService migrationCheckService;
 
     private ObjectMapper objectMapper;
     private SearchFacadeImpl facade;
@@ -67,7 +72,9 @@ class SearchFacadeVisibilityTest {
                 postSearchIndexer,
                 postFacade,
                 userFacade,
-                searchAnalyticsService);
+                searchAnalyticsService,
+                migrationCheckService);
+        lenient().when(migrationCheckService.tagGovernanceReady()).thenReturn(true);
     }
 
     @Test
@@ -83,7 +90,7 @@ class SearchFacadeVisibilityTest {
                 .summary("Current summary")
                 .createTime(LocalDateTime.now())
                 .build();
-        when(postFacade.batchGetPosts(List.of(101L, 102L))).thenReturn(Map.of(101L, currentPublicPost));
+        when(postFacade.batchGetPosts(List.of(101L, 102L), null, false)).thenReturn(Map.of(101L, currentPublicPost));
 
         PageResult<PostBriefDTO> page = facade.searchPosts("Java", null, null, null, "relevance", null, 2);
 
@@ -93,7 +100,7 @@ class SearchFacadeVisibilityTest {
         assertEquals("Current Java", page.getItems().get(0).getTitle());
         assertEquals("elasticsearch", page.getSource());
         assertEquals(Boolean.FALSE, page.getDegraded());
-        verify(postFacade).batchGetPosts(List.of(101L, 102L));
+        verify(postFacade).batchGetPosts(List.of(101L, 102L), null, false);
         verify(searchAnalyticsService).recordSearch("Java", null, null, null, "relevance", 1, true);
     }
 
@@ -117,7 +124,7 @@ class SearchFacadeVisibilityTest {
                 {"company":"\u5B57\u8282\u8DF3\u52A8","position":"Java \u540E\u7AEF"}
                 """);
 
-        when(postMapper.searchPublicPostsFallback(eq("Kafka"), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq("Kafka"), isNull(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of(extension));
         when(tagMapper.selectTagsByPostIds(List.of(201L))).thenReturn(List.of());
@@ -137,6 +144,65 @@ class SearchFacadeVisibilityTest {
     }
 
     @Test
+    void exactPublicProbeFallsBackToMysqlWhenElasticsearchSearchIsNotFreshYet() throws Exception {
+        when(postSearchIndexer.ensurePostIndex()).thenReturn(true);
+        when(elasticsearch.postIndex()).thenReturn("post_idx");
+        when(elasticsearch.search(eq("post_idx"), any())).thenReturn(Optional.of(emptyEsHits()));
+
+        String probe = "AuroraIndexerProbe00992905";
+        PostPO post = new PostPO();
+        post.setId(202L);
+        post.setAuthorId(22L);
+        post.setPostType(1);
+        post.setTitle("搜索新鲜度验证 " + probe);
+        post.setContent("公开帖子已经写入主库，ES 搜索不可见时 API 也要通过 MySQL fallback 找到。");
+        post.setCreateTime(LocalDateTime.now());
+
+        when(postMapper.searchPublicPostsFallback(eq(probe), isNull(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(post));
+        when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(tagMapper.selectTagsByPostIds(List.of(202L))).thenReturn(List.of());
+        when(postFacade.batchGetCounters(List.of(202L))).thenReturn(Map.of());
+        when(userFacade.batchGetUserBriefs(Set.of(22L))).thenReturn(Map.of());
+
+        PageResult<PostBriefDTO> page = facade.searchPosts(probe, null, null, null, "relevance", null, 10);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(202L, page.getItems().get(0).getId());
+        assertEquals("mysql", page.getSource());
+        assertEquals(Boolean.TRUE, page.getDegraded());
+        assertEquals("elasticsearch_empty", page.getFallbackReason());
+        verify(searchAnalyticsService).recordSearch(probe, null, null, null, "relevance", 1, true);
+    }
+
+    @Test
+    void hyphenatedEngineeringKeywordFallsBackToMysqlForRegularContent() throws Exception {
+        when(postSearchIndexer.ensurePostIndex()).thenReturn(true);
+        when(elasticsearch.postIndex()).thenReturn("post_idx");
+        when(elasticsearch.search(eq("post_idx"), any())).thenReturn(Optional.of(emptyEsHits()));
+
+        String keyword = "order-center-v2";
+        PostPO post = post(203L, 23L, "Payment rollout for " + keyword, LocalDateTime.now());
+        post.setPostType(10);
+
+        when(postMapper.searchPublicPostsFallback(eq(keyword), isNull(), any(), any(), eq(10), any(), anyInt()))
+                .thenReturn(List.of(post));
+        when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(tagMapper.selectTagsByPostIds(List.of(203L))).thenReturn(List.of());
+        when(postFacade.batchGetCounters(List.of(203L))).thenReturn(Map.of());
+        when(userFacade.batchGetUserBriefs(Set.of(23L))).thenReturn(Map.of());
+
+        PageResult<PostBriefDTO> page = facade.searchPosts(keyword, null, null, 10, "relevance", null, 10);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(203L, page.getItems().get(0).getId());
+        assertEquals(10, page.getItems().get(0).getPostType());
+        assertEquals("mysql", page.getSource());
+        assertEquals("elasticsearch_empty", page.getFallbackReason());
+        verify(searchAnalyticsService).recordSearch(keyword, null, null, 10, "relevance", 1, true);
+    }
+
+    @Test
     void sparseElasticsearchPageFallsBackToMysqlWhenVisibilityFilterExhaustsScanWindow() throws Exception {
         when(postSearchIndexer.ensurePostIndex()).thenReturn(true);
         when(elasticsearch.postIndex()).thenReturn("post_idx");
@@ -149,7 +215,7 @@ class SearchFacadeVisibilityTest {
                 .summary("visible")
                 .createTime(LocalDateTime.now())
                 .build();
-        when(postFacade.batchGetPosts(List.of(301L, 302L, 303L, 304L))).thenReturn(Map.of(301L, currentPublicPost));
+        when(postFacade.batchGetPosts(List.of(301L, 302L, 303L, 304L), null, false)).thenReturn(Map.of(301L, currentPublicPost));
 
         LocalDateTime now = LocalDateTime.now();
         List<PostPO> mysqlPosts = List.of(
@@ -157,7 +223,7 @@ class SearchFacadeVisibilityTest {
                 post(402L, 42L, "Visible Java fallback 2", now.minusMinutes(1)),
                 post(403L, 43L, "Visible Java fallback 3", now.minusMinutes(2))
         );
-        when(postMapper.searchPublicPostsFallback(eq("Java"), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq("Java"), isNull(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(mysqlPosts);
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(any())).thenReturn(List.of());
@@ -175,6 +241,48 @@ class SearchFacadeVisibilityTest {
         assertEquals("elasticsearch_visibility_filtered", page.getFallbackReason());
         assertEquals(4, page.getScanLimit());
         verify(searchAnalyticsService).recordSearch("Java", null, null, null, "latest", 2, true);
+    }
+
+    @Test
+    void syntheticMysqlResultIsHiddenUnlessTestDataModeIsEnabled() {
+        String keyword = "CODEX-E2E-search-visibility";
+        PostPO post = post(501L, 51L, keyword + " Java offer replay", LocalDateTime.now());
+        post.setContent("Synthetic CODEX-E2E verification content.");
+
+        when(postMapper.searchPublicPostsFallback(eq(keyword), isNull(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(post));
+        when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(tagMapper.selectTagsByPostIds(List.of(501L))).thenReturn(List.of());
+        when(postFacade.batchGetCounters(List.of(501L))).thenReturn(Map.of());
+        when(userFacade.batchGetUserBriefs(Set.of(51L))).thenReturn(Map.of());
+
+        PageResult<PostBriefDTO> hidden = facade.searchPosts(keyword, null, null, null, "relevance", null, 10);
+        PageResult<PostBriefDTO> visible = facade.searchPosts(keyword, null, null, null, "relevance", null, 10, true);
+
+        assertEquals(0, hidden.getItems().size());
+        assertEquals("test_data_filtered_unless_includeTestData", hidden.getDiagnostics().get("emptyReason"));
+        assertEquals(1, hidden.getDiagnostics().get("syntheticFiltered"));
+        assertEquals(1, visible.getItems().size());
+        assertEquals(501L, visible.getItems().get(0).getId());
+        assertEquals(Boolean.TRUE, visible.getDiagnostics().get("includeTestData"));
+    }
+
+    @Test
+    void numericPostIdKeywordCanRecallExactMysqlPost() {
+        PostPO post = post(909L, 90L, "Type 10 search diagnostics", LocalDateTime.now());
+
+        when(postMapper.searchPublicPostsFallback(eq("909"), eq(909L), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(post));
+        when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
+        when(tagMapper.selectTagsByPostIds(List.of(909L))).thenReturn(List.of());
+        when(postFacade.batchGetCounters(List.of(909L))).thenReturn(Map.of());
+        when(userFacade.batchGetUserBriefs(Set.of(90L))).thenReturn(Map.of());
+
+        PageResult<PostBriefDTO> page = facade.searchPosts("909", null, null, null, "relevance", null, 5);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(909L, page.getItems().get(0).getId());
+        assertEquals(0, page.getDiagnostics().get("syntheticFiltered"));
     }
 
     private JsonNode esHits() throws Exception {

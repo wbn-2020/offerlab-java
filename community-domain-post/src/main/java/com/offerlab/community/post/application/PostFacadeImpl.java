@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
@@ -35,6 +36,7 @@ import java.time.ZoneOffset;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -56,10 +58,12 @@ public class PostFacadeImpl implements PostFacade {
     private final MultiLevelCache<PostDTO> multiLevelCache;
     private final PostApplicationService postService;
     private final UserFacade userFacade;
+    private final MigrationCheckService migrationCheckService;
 
     private static final int SUMMARY_LEN = 120;
     private static final int MAX_SYNTHETIC_SCAN_ROWS = 1000;
     private static final int SYNTHETIC_SCAN_MULTIPLIER = 6;
+    private static final int MAX_BATCH_LOOKUP_IDS = 500;
 
     @Override
     public PostDTO getPost(Long postId) {
@@ -86,8 +90,14 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) {
-        if (postIds == null || postIds.isEmpty()) return Map.of();
-        Map<Long, Post> posts = postRepo.batchFindByIds(postIds);
+        return batchGetPosts(postIds, viewerUid, false);
+    }
+
+    @Override
+    public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid, boolean includeTestData) {
+        List<Long> normalizedIds = normalizeBatchIds(postIds, MAX_BATCH_LOOKUP_IDS);
+        if (normalizedIds.isEmpty()) return Map.of();
+        Map<Long, Post> posts = postRepo.batchFindByIds(normalizedIds);
         Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.keySet());
         Map<Long, PostBriefDTO> result = new HashMap<>(posts.size());
         for (Post p : posts.values()) {
@@ -97,27 +107,28 @@ public class PostFacadeImpl implements PostFacade {
             }
         }
         enrichBriefs(result.values());
-        result.entrySet().removeIf(entry -> PublicContentFilter.isSyntheticPost(entry.getValue()));
+        if (!includeTestData) {
+            result.entrySet().removeIf(entry -> PublicContentFilter.isSyntheticPost(entry.getValue()));
+        }
         return result;
     }
 
     @Override
     public Map<Long, PostCounterDTO> batchGetCounters(Collection<Long> postIds) {
-        if (postIds == null || postIds.isEmpty()) return Map.of();
+        List<Long> normalizedIds = normalizeBatchIds(postIds, MAX_BATCH_LOOKUP_IDS);
+        if (normalizedIds.isEmpty()) return Map.of();
 
-        // 先从 Redis 查
-        Map<Long, PostCounterDTO> result = new HashMap<>(postIds.size());
-        Map<Long, PostCounterRedis.CounterValue> redisCounters = postCounterRedis.batchGet(postIds);
+        // First read Redis, then load only missing counters from DB.
+        Map<Long, PostCounterDTO> result = new HashMap<>(normalizedIds.size());
+        Map<Long, PostCounterRedis.CounterValue> redisCounters = postCounterRedis.batchGet(normalizedIds);
         for (PostCounterRedis.CounterValue value : redisCounters.values()) {
             result.put(value.postId(), toCounterDto(value));
         }
 
-        // 找出 Redis 中缺失的 postId
-        List<Long> missingIds = postIds.stream()
+        List<Long> missingIds = normalizedIds.stream()
                 .filter(id -> !result.containsKey(id))
                 .toList();
 
-        // 从 DB 加载缺失的数据并回填 Redis
         if (!missingIds.isEmpty()) {
             List<PostCounterPO> dbList = counterMapper.selectBatchIds(missingIds);
             for (PostCounterPO c : dbList) {
@@ -129,7 +140,6 @@ public class PostFacadeImpl implements PostFacade {
                         .favoriteCount(c.getFavoriteCount())
                         .build();
                 result.put(c.getPostId(), dto);
-                // 回填 Redis
                 postCounterRedis.fillFromDb(c.getPostId(), c.getViewCount(), c.getLikeCount(),
                         c.getCommentCount(), c.getFavoriteCount(), 0L);
             }
@@ -190,34 +200,49 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
-    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
+    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size) {
+        return listPosts(authorId, tagId, postType, featured, cursor, size, false);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured,
+                                             long cursor, int size, boolean includeTestData) {
         int limit = pageSize(size);
-        List<Post> list = scanPublicPosts(authorId, tagId, postType, cursor, limit);
-        return paged(list, limit);
+        List<Post> list = scanPublicPosts(authorId, tagId, postType, featured, cursor, limit);
+        return paged(list, limit, includeTestData);
     }
 
     @Override
     public List<TagDTO> listTags() {
-        return tagMapper.selectActiveTags().stream()
+        return activeTags().stream()
                 .map(this::toTagDto)
                 .filter(tag -> !PublicContentFilter.isSyntheticText(tag.getName()))
                 .toList();
     }
 
     @Override
-    public PageResult<PostBriefDTO> getPostsByTag(Long tagId, long cursor, int size) {
-        return listPosts(null, tagId, null, cursor, size);
+    public PageResult<PostBriefDTO> getPostsByTag(Long tagId, Integer postType, Boolean featured, long cursor, int size) {
+        return listPosts(null, tagId, postType, featured, cursor, size);
     }
 
     private PageResult<PostBriefDTO> paged(List<Post> list, int size) {
+        return paged(list, size, false);
+    }
+
+    private PageResult<PostBriefDTO> paged(List<Post> list, int size, boolean includeTestData) {
         if (list.isEmpty()) return PageResult.empty();
         Map<Long, Post> postById = list.stream().collect(Collectors.toMap(Post::getId, post -> post, (left, right) -> left));
         Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
         List<PostBriefDTO> visible = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
         enrichBriefs(visible);
-        visible = visible.stream()
-                .filter(post -> !PublicContentFilter.isSyntheticPost(post))
-                .toList();
+        int syntheticFiltered = 0;
+        if (!includeTestData) {
+            int beforeFilter = visible.size();
+            visible = visible.stream()
+                    .filter(post -> !PublicContentFilter.isSyntheticPost(post))
+                    .toList();
+            syntheticFiltered = beforeFilter - visible.size();
+        }
         boolean visibleHasMore = visible.size() > size;
         boolean rawHasMore = list.size() > size;
         List<PostBriefDTO> items = visibleHasMore ? visible.subList(0, size) : visible;
@@ -232,7 +257,10 @@ public class PostFacadeImpl implements PostFacade {
         String next = hasMore && cursorPost != null
                 ? listCursor(cursorPost.getCreateTime(), cursorPost.getId())
                 : null;
-        return PageResult.of(items, next, hasMore);
+        return PageResult.of(items, next, hasMore)
+                .withDiagnostic("includeTestData", includeTestData)
+                .withDiagnostic("syntheticFiltered", syntheticFiltered)
+                .withDiagnostic("testDataFilterActive", !includeTestData);
     }
 
     private PageResult<PostBriefDTO> pagedPo(List<PostPO> list, int size) {
@@ -316,7 +344,19 @@ public class PostFacadeImpl implements PostFacade {
         return Math.min(pageSize * 3 + 1, 200);
     }
 
-    private List<Post> scanPublicPosts(Long authorId, Long tagId, Integer postType, long cursor, int pageSize) {
+    private static List<Long> normalizeBatchIds(Collection<Long> ids, int maxSize) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return ids.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .limit(maxSize)
+                .toList();
+    }
+
+    private List<Post> scanPublicPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int pageSize) {
         int scanLimit = scanSize(pageSize);
         int maxRows = Math.min(MAX_SYNTHETIC_SCAN_ROWS,
                 Math.max(scanLimit, scanLimit * SYNTHETIC_SCAN_MULTIPLIER));
@@ -324,7 +364,7 @@ public class PostFacadeImpl implements PostFacade {
         long scanCursor = cursor;
         while (scanned.size() < maxRows) {
             int remaining = Math.min(scanLimit, maxRows - scanned.size());
-            List<Post> batch = postRepo.findPosts(authorId, tagId, postType, scanCursor, remaining);
+            List<Post> batch = postRepo.findPosts(authorId, tagId, postType, featured, scanCursor, remaining);
             if (batch.isEmpty()) {
                 break;
             }
@@ -495,9 +535,21 @@ public class PostFacadeImpl implements PostFacade {
         if (postIds == null || postIds.isEmpty()) {
             return Map.of();
         }
-        return tagMapper.selectTagsByPostIds(postIds).stream()
+        return selectTagsByPostIds(postIds).stream()
                 .collect(Collectors.groupingBy(PostTagView::getPostId,
                         Collectors.mapping(this::toTagDto, Collectors.toList())));
+    }
+
+    private List<TagPO> activeTags() {
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectActiveTags()
+                : tagMapper.selectActiveTagsCompat();
+    }
+
+    private List<PostTagView> selectTagsByPostIds(Collection<Long> postIds) {
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectTagsByPostIds(postIds)
+                : tagMapper.selectTagsByPostIdsCompat(postIds);
     }
 
     private TagDTO toTagDto(TagPO tag) {
@@ -509,6 +561,10 @@ public class PostFacadeImpl implements PostFacade {
                 .tagType(tag.getTagType())
                 .useCount(tag.getUseCount())
                 .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
+                .status(tag.getTagStatus() == null ? 1 : tag.getTagStatus())
+                .recommended(tag.getRecommended() != null && tag.getRecommended() == 1)
+                .mergeTargetId(tag.getMergeTargetId())
+                .synonyms(parseSynonyms(tag.getSynonyms()))
                 .build();
     }
 
@@ -521,7 +577,21 @@ public class PostFacadeImpl implements PostFacade {
                 .tagType(tag.getTagType())
                 .useCount(tag.getUseCount())
                 .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
+                .status(tag.getTagStatus() == null ? 1 : tag.getTagStatus())
+                .recommended(tag.getRecommended() != null && tag.getRecommended() == 1)
+                .mergeTargetId(tag.getMergeTargetId())
+                .synonyms(parseSynonyms(tag.getSynonyms()))
                 .build();
+    }
+
+    private static List<String> parseSynonyms(String synonyms) {
+        if (synonyms == null || synonyms.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(synonyms.split(","))
+                .map(String::trim)
+                .filter(item -> !item.isBlank())
+                .toList();
     }
 
     private static String toCategory(Integer tagType) {

@@ -116,6 +116,24 @@ public class ElasticsearchHttpClient {
         }
     }
 
+    public Optional<JsonNode> getDocument(String index, String id) {
+        try {
+            EsResponse response = send("GET", "/" + index + "/_doc/" + id, null);
+            if (response.statusCode() == 404) {
+                return Optional.empty();
+            }
+            if (!response.success()) {
+                log.debug("elasticsearch get document failed: index={} id={} status={} body={}",
+                        index, id, response.statusCode(), response.body());
+                return Optional.empty();
+            }
+            return Optional.of(objectMapper.readTree(response.body()));
+        } catch (Exception e) {
+            log.debug("elasticsearch get document failed: index={} id={} error={}", index, id, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     public Optional<JsonNode> search(String index, Map<String, Object> body) {
         try {
             EsResponse response = sendJson("POST", "/" + index + "/_search", body);

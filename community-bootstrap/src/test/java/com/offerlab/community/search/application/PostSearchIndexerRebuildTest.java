@@ -1,6 +1,7 @@
 package com.offerlab.community.search.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -13,6 +14,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -26,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -42,16 +45,53 @@ class PostSearchIndexerRebuildTest {
     private PostCounterMapper counterMapper;
     @Mock
     private TagMapper tagMapper;
+    @Mock
+    private MigrationCheckService migrationCheckService;
 
     private PostSearchIndexer indexer;
 
     @BeforeEach
     void setUp() {
-        indexer = new PostSearchIndexer(elasticsearch, postMapper, extensionMapper, counterMapper, tagMapper, new ObjectMapper());
-        when(elasticsearch.enabled()).thenReturn(true);
-        when(elasticsearch.available()).thenReturn(true);
-        when(elasticsearch.postIndex()).thenReturn("post_idx");
-        when(elasticsearch.indexExists("post_idx")).thenReturn(true);
+        indexer = new PostSearchIndexer(elasticsearch, postMapper, extensionMapper, counterMapper, tagMapper, new ObjectMapper(), migrationCheckService);
+        lenient().when(migrationCheckService.tagGovernanceReady()).thenReturn(true);
+        lenient().when(elasticsearch.enabled()).thenReturn(true);
+        lenient().when(elasticsearch.available()).thenReturn(true);
+        lenient().when(elasticsearch.postIndex()).thenReturn("post_idx");
+        lenient().when(elasticsearch.indexExists("post_idx")).thenReturn(true);
+        lenient().when(elasticsearch.updateMapping(eq("post_idx"), any())).thenReturn(true);
+    }
+
+    @Test
+    void statusRefreshesExistingIndexMappingAndReportsReadyIndex() {
+        Map<String, Object> status = indexer.status();
+
+        assertEquals("UP", status.get("status"));
+        assertEquals(true, status.get("indexReady"));
+        assertEquals(false, status.get("publicSearchDegraded"));
+        assertEquals("elasticsearch", status.get("publicSearchSource"));
+        assertEquals("搜索索引已就绪，新发布内容会优先进入实时搜索。", status.get("message"));
+        assertEquals("Public search is using Elasticsearch index.", status.get("diagnosticMessage"));
+        verify(elasticsearch).updateMapping(eq("post_idx"), any());
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void statusAddsCommunitySearchFieldsToExistingIndexMapping() {
+        ArgumentCaptor<Map> captor = ArgumentCaptor.forClass(Map.class);
+
+        indexer.status();
+
+        verify(elasticsearch).updateMapping(eq("post_idx"), captor.capture());
+        Map<String, Object> props = captor.getValue();
+        assertEquals("keyword", ((Map<String, Object>) props.get("difficulty")).get("type"));
+        assertEquals("text", ((Map<String, Object>) props.get("scenario")).get("type"));
+        assertEquals("keyword", ((Map<String, Object>) props.get("contentType")).get("type"));
+        assertEquals("text", ((Map<String, Object>) props.get("techStacks")).get("type"));
+        assertEquals("text", ((Map<String, Object>) props.get("tagSynonyms")).get("type"));
+        assertEquals("text", ((Map<String, Object>) props.get("tagSearchTerms")).get("type"));
+        Map<String, Object> tags = (Map<String, Object>) props.get("tags");
+        assertEquals("nested", tags.get("type"));
+        assertTrue(((Map<String, Object>) tags.get("properties")).containsKey("synonyms"));
     }
 
     @Test
@@ -92,6 +132,43 @@ class PostSearchIndexerRebuildTest {
         assertEquals(1, result.get("failed"));
         assertEquals(1, result.get("total"));
         assertEquals("1 post documents failed to index", result.get("message"));
+    }
+
+    @Test
+    void statusExposesMysqlFallbackWhenElasticsearchIsUnavailable() {
+        when(elasticsearch.available()).thenReturn(false);
+        when(migrationCheckService.tagGovernanceReady()).thenReturn(false);
+
+        Map<String, Object> status = indexer.status();
+
+        assertEquals("DEGRADED", status.get("status"));
+        assertEquals(false, status.get("available"));
+        assertEquals(false, status.get("indexReady"));
+        assertEquals(true, status.get("publicSearchAvailable"));
+        assertEquals(true, status.get("publicSearchDegraded"));
+        assertEquals("mysql", status.get("publicSearchSource"));
+        assertEquals(true, status.get("dbFallbackAvailable"));
+        assertEquals("compat", status.get("fallbackMode"));
+        assertEquals(false, status.get("fallbackSchemaReady"));
+        assertEquals("Restore Elasticsearch and apply tag governance migration to enable full tag synonym recall.",
+                status.get("action"));
+    }
+
+    @Test
+    void statusReportsDownWhenBothIndexAndFallbackAreUnavailable() {
+        when(elasticsearch.available()).thenReturn(false);
+        when(migrationCheckService.tagGovernanceReady()).thenThrow(new IllegalStateException("db down"));
+
+        Map<String, Object> status = indexer.status();
+
+        assertEquals("DOWN", status.get("status"));
+        assertEquals(false, status.get("publicSearchAvailable"));
+        assertEquals(false, status.get("publicSearchDegraded"));
+        assertEquals("unavailable", status.get("publicSearchSource"));
+        assertEquals(false, status.get("dbFallbackAvailable"));
+        assertEquals("unavailable", status.get("fallbackMode"));
+        assertEquals("Check database connectivity and Elasticsearch readiness before signing off search.",
+                status.get("action"));
     }
 
     private static PostPO post(Long id) {

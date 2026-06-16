@@ -310,9 +310,9 @@ class QuestionSafetyGuardTest {
         assertTrue(facadeSource.contains("toInterviewResultCounts("), "facade must translate raw result codes before returning company prep data");
         assertTrue(facadeSource.contains(".interviewResultDistribution(interviewResultDistribution)"), "facade must map total result distribution into CompanyPrepDTO");
         assertTrue(facadeSource.contains(".recentResultDistribution(recentResultDistribution)"), "facade must map recent result distribution into CompanyPrepDTO");
-        assertTrue(facadeSource.contains("case 1 -> \"已 offer\""), "result code 1 should be user-readable in the prep pack");
-        assertTrue(facadeSource.contains("case 2 -> \"待结果\""), "result code 2 should be user-readable in the prep pack");
-        assertTrue(facadeSource.contains("case 3 -> \"已挂\""), "result code 3 should be user-readable in the prep pack");
+        assertTrue(facadeSource.contains("case 1 -> \"已通过\""), "result code 1 should be user-readable in the prep pack");
+        assertTrue(facadeSource.contains("case 2 -> \"待反馈\""), "result code 2 should be user-readable in the prep pack");
+        assertTrue(facadeSource.contains("case 3 -> \"未通过\""), "result code 3 should be user-readable in the prep pack");
         assertTrue(facadeSource.contains("default -> \"未选择\""), "missing result codes should remain explicit instead of looking like missing data");
         assertTrue(postSql.contains("interview_result"), "post extension table must keep the generated interview result column");
         assertTrue(postSql.contains("idx_company_result"), "company result trend queries need the company/result index");

@@ -4,14 +4,26 @@ This document is platform neutral. The stages below can be mapped to GitHub Acti
 
 ## Backend
 
-1. Unit and guard tests
+1. Read-only migration and schema gates
+   - `powershell -ExecutionPolicy Bypass -File .\scripts\check-migration-safety.ps1`
+   - `node .\scripts\check-schema-readiness.mjs --json`
+   - The schema readiness gate must be run against a dedicated local/test database. It intentionally fails when reviewed migrations are missing.
+
+2. Unit and guard tests
    - `mvn -pl community-domain-question,community-domain-search,community-domain-post,community-domain-interaction,community-domain-feed,community-domain-user,community-infrastructure -am test`
 
-2. Bootstrap compile and context readiness
+3. Bootstrap compile and context readiness
    - `mvn -pl community-bootstrap -am -DskipTests compile`
-   - Optional runtime smoke after services are configured: `GET /api/v1/health/liveness` and `GET /api/v1/health/readiness`
+   - Optional runtime smoke after services are configured: `GET /api/v1/health/liveness`, `GET /api/v1/health/readiness`, and `GET /api/v1/health/readiness/strict`
+   - Strict readiness must return HTTP 200 before a demo or release sign-off; HTTP 503 means schema, middleware, outbox, or retry backlog still blocks full readiness.
 
-3. Integration profile
+4. Local middleware preflight for Windows demos
+   - PowerShell UTF-8 artifact guard: `node .\scripts\test-powershell-utf8-guards.mjs`
+   - Warn-only, read-only check: `powershell -ExecutionPolicy Bypass -File .\scripts\check-local-middleware.ps1 -WarnOnly -SkipNetworkProbe`
+   - Strict check after services are expected to be running: `powershell -ExecutionPolicy Bypass -File .\scripts\verify-local.ps1 -StrictMiddleware`
+   - Do not fix Kafka `*.checkpoint.deleted` permissions, run database migrations, or modify system configuration in CI without a reviewed, explicitly confirmed operation.
+
+5. Integration profile
    - Run module integration tests only against disposable or dedicated test middleware.
    - Do not run destructive schema reset commands in CI unless the database is provisioned per run.
    - Suggested command shape: `mvn -pl community-infrastructure -Pit verify`
@@ -41,4 +53,5 @@ Each CI run should publish:
 - Frontend guard output
 - Frontend build logs
 - E2E traces or screenshots on failure
+- Visual snapshot `summary.json` and desktop/mobile screenshots when `npm run test:visual-snapshots` is enabled
 - Coverage reports when enabled by the selected test runner

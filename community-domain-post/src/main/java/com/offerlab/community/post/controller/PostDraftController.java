@@ -3,6 +3,7 @@ package com.offerlab.community.post.controller;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostDraftCmd;
 import com.offerlab.community.post.api.dto.PostDraftDTO;
 import com.offerlab.community.post.application.PostDraftService;
@@ -92,12 +93,12 @@ public class PostDraftController {
         private Integer postType;
         @Size(max = 255)
         private String title;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;

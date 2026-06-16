@@ -133,8 +133,47 @@ public interface SearchIndexRetryTaskMapper extends BaseMapper<SearchIndexRetryT
             """)
     List<SearchIndexRetryTaskPO> listRecent(@Param("status") Integer status, @Param("limit") int limit);
 
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_search_index_retry_task
+            <where>
+              <if test="status != null">
+                task_status = #{status}
+              </if>
+            </where>
+            </script>
+            """)
+    long countPage(@Param("status") Integer status);
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM t_search_index_retry_task
+            <where>
+              <if test="status != null">
+                task_status = #{status}
+              </if>
+            </where>
+            ORDER BY create_time DESC
+            LIMIT #{limit} OFFSET #{offset}
+            </script>
+            """)
+    List<SearchIndexRetryTaskPO> pageRecent(@Param("status") Integer status,
+                                            @Param("limit") int limit,
+                                            @Param("offset") int offset);
+
     @Select("SELECT * FROM t_search_index_retry_task WHERE id = #{id}")
     SearchIndexRetryTaskPO findById(@Param("id") Long id);
+
+    @Select("""
+            SELECT *
+            FROM t_search_index_retry_task
+            WHERE post_id = #{postId}
+            ORDER BY create_time DESC
+            LIMIT 1
+            """)
+    SearchIndexRetryTaskPO findLatestByPostId(@Param("postId") Long postId);
 
     @Update("""
             UPDATE t_search_index_retry_task

@@ -2,6 +2,7 @@ package com.offerlab.community.question.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.question.api.dto.MockInterviewAnswerDTO;
@@ -31,6 +32,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -54,6 +56,8 @@ class MockInterviewServiceAiReviewStateTest {
     private SnowflakeIdGenerator idGen;
     @Mock
     private MockInterviewAiReviewTaskService aiReviewTaskService;
+    @Mock
+    private MigrationCheckService migrationCheckService;
 
     private MockInterviewService service;
 
@@ -68,7 +72,9 @@ class MockInterviewServiceAiReviewStateTest {
                 prepTargetMapper,
                 idGen,
                 new AfterCommitExecutor(),
-                aiReviewTaskService);
+                aiReviewTaskService,
+                migrationCheckService);
+        lenient().when(migrationCheckService.mockInterviewAiReviewReady()).thenReturn(true);
     }
 
     @Test
@@ -87,6 +93,26 @@ class MockInterviewServiceAiReviewStateTest {
         assertEquals(1, dto.getAnsweredCount());
         assertEquals(5, dto.getTotalScore());
         verify(answerMapper).markPendingForSession(42L, 7L);
+        verify(aiReviewTaskService).reviewSession(42L, 7L);
+    }
+
+    @Test
+    void submitUsesCompatAiReviewUpdatesWhenTransparencyColumnsAreMissing() {
+        when(migrationCheckService.mockInterviewAiReviewReady()).thenReturn(false);
+        MockInterviewAnswerPO answer = answer(1L, "NOT_REQUESTED");
+        when(sessionMapper.selectByUser(7L, 42L)).thenReturn(session("started"), session("completed"));
+        when(answerMapper.selectBySession(7L, 42L)).thenReturn(List.of(answer), List.of(answer));
+        when(sessionMapper.complete(7L, 42L, 1, 5, 120, "completed")).thenReturn(1);
+        when(questionMapper.selectVisibleByIds(any(), eq(false))).thenReturn(List.of());
+        when(questionTagMapper.selectTagsByQuestionIds(any())).thenReturn(List.of());
+
+        MockInterviewSessionDTO dto = service.submit(42L, 7L, submitCmd(true));
+
+        assertEquals("completed", dto.getStatus());
+        verify(answerMapper).updateDraftCompat(42L, 7L, 1L, "answer", "review", 5);
+        verify(answerMapper, never()).updateDraft(anyLong(), anyLong(), anyLong(), anyString(), anyString(), anyInt());
+        verify(answerMapper).markPendingForSessionCompat(42L, 7L);
+        verify(answerMapper, never()).markPendingForSession(42L, 7L);
         verify(aiReviewTaskService).reviewSession(42L, 7L);
     }
 
@@ -119,6 +145,23 @@ class MockInterviewServiceAiReviewStateTest {
 
         assertEquals("completed", dto.getStatus());
         verify(answerMapper).markRetryPendingForSession(42L, 7L);
+        verify(aiReviewTaskService).reviewSession(42L, 7L);
+    }
+
+    @Test
+    void retryAiReviewUsesCompatPendingMarkWhenTransparencyColumnsAreMissing() {
+        when(migrationCheckService.mockInterviewAiReviewReady()).thenReturn(false);
+        MockInterviewAnswerPO answer = answer(1L, "FAILED");
+        when(sessionMapper.selectByUser(7L, 42L)).thenReturn(session("completed"), session("completed"));
+        when(answerMapper.selectBySession(7L, 42L)).thenReturn(List.of(answer));
+        when(questionMapper.selectVisibleByIds(any(), eq(false))).thenReturn(List.of());
+        when(questionTagMapper.selectTagsByQuestionIds(any())).thenReturn(List.of());
+
+        MockInterviewSessionDTO dto = service.retryAiReview(42L, 7L);
+
+        assertEquals("completed", dto.getStatus());
+        verify(answerMapper).markRetryPendingForSessionCompat(42L, 7L);
+        verify(answerMapper, never()).markRetryPendingForSession(42L, 7L);
         verify(aiReviewTaskService).reviewSession(42L, 7L);
     }
 

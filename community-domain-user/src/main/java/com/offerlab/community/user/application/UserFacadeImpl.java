@@ -26,12 +26,16 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserFacadeImpl implements UserFacade {
+
+    private static final int MAX_BATCH_BRIEF_UIDS = 500;
+    private static final int MAX_BATCH_FOLLOW_CHECK_UIDS = 500;
 
     private final UserRepository userRepo;
     private final FollowRepository followRepo;
@@ -55,9 +59,10 @@ public class UserFacadeImpl implements UserFacade {
 
     @Override
     public Map<Long, UserBriefDTO> batchGetUserBriefs(Collection<Long> uids) {
-        if (uids == null || uids.isEmpty()) return Map.of();
-        Map<Long, UserBriefDTO> result = new HashMap<>(uids.size());
-        for (Long uid : uids) {
+        List<Long> normalizedUids = normalizeBatchUids(uids, MAX_BATCH_BRIEF_UIDS);
+        if (normalizedUids.isEmpty()) return Map.of();
+        Map<Long, UserBriefDTO> result = new HashMap<>(normalizedUids.size());
+        for (Long uid : normalizedUids) {
             UserBriefDTO dto = getUserBrief(uid);
             if (dto != null) result.put(uid, dto);
         }
@@ -88,8 +93,9 @@ public class UserFacadeImpl implements UserFacade {
 
     @Override
     public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) {
-        if (toUids == null || toUids.isEmpty()) return Map.of();
-        return toUids.stream().distinct()
+        List<Long> normalizedToUids = normalizeBatchUids(toUids, MAX_BATCH_FOLLOW_CHECK_UIDS);
+        if (normalizedToUids.isEmpty()) return Map.of();
+        return normalizedToUids.stream()
                 .collect(Collectors.toMap(t -> t, t -> followRepo.isFollowing(fromUid, t)));
     }
 
@@ -136,6 +142,18 @@ public class UserFacadeImpl implements UserFacade {
     @Override
     public boolean isProfileVisible(Long viewerUid, Long targetUid) {
         return visible(viewerUid, targetUid, setting(targetUid).getProfileVisibility());
+    }
+
+    private static List<Long> normalizeBatchUids(Collection<Long> uids, int maxSize) {
+        if (uids == null || uids.isEmpty()) {
+            return List.of();
+        }
+        return uids.stream()
+                .filter(Objects::nonNull)
+                .filter(uid -> uid > 0)
+                .distinct()
+                .limit(maxSize)
+                .toList();
     }
 
     @Override
