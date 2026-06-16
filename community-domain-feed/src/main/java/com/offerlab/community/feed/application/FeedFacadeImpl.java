@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Slf4j
 @Service
@@ -43,14 +44,14 @@ public class FeedFacadeImpl implements FeedFacade {
     private final ObjectMapper objectMapper;
 
     @Override
-    public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size) {
+    public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size, Integer domain) {
         double maxScore = parseCursorScore(cursor);
         Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readInboxWithScore(uid, maxScore, size);
-        return assembleFromTuples(tuples, size, uid);
+        return filterByDomain(assembleFromTuples(tuples, size, uid), domain);
     }
 
     @Override
-    public PageResult<FeedItemVO> getRecommendFeed(Long uid, String cursor, int size) {
+    public PageResult<FeedItemVO> getRecommendFeed(Long uid, String cursor, int size, Integer domain) {
         long c = parseCursorAsEpoch(cursor);
         int candidateSize = Math.min(Math.max(size * 3, size), 50);
         var page = postFacade.getLatest(c, candidateSize);
@@ -65,23 +66,23 @@ public class FeedFacadeImpl implements FeedFacade {
                         .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(size)
                 .toList();
-        return assembleRecommendPosts(ranked, uid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()), intent);
+        return filterByDomain(assembleRecommendPosts(ranked, uid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()), intent), domain);
     }
 
     @Override
-    public PageResult<FeedItemVO> getLatestFeed(Long viewerUid, String cursor, int size) {
+    public PageResult<FeedItemVO> getLatestFeed(Long viewerUid, String cursor, int size, Integer domain) {
         PageResult<FeedItemVO> dbPage = fallbackLatestFromDb(viewerUid, cursor, size);
         if (cursor == null || cursor.isBlank()) {
-            return mergeFirstPageLatestWithRedis(viewerUid, size, dbPage);
+            return filterByDomain(mergeFirstPageLatestWithRedis(viewerUid, size, dbPage), domain);
         }
         if (dbPage != null && dbPage.getItems() != null && !dbPage.getItems().isEmpty()) {
-            return dbPage;
+            return filterByDomain(dbPage, domain);
         }
         Set<ZSetOperations.TypedTuple<String>> tuples = readGlobalLatestSafely(parseCursorScore(cursor), size);
         if (tuples == null || tuples.isEmpty()) {
             return PageResult.empty();
         }
-        return assembleFromTuples(tuples, size, viewerUid);
+        return filterByDomain(assembleFromTuples(tuples, size, viewerUid), domain);
     }
 
     private PageResult<FeedItemVO> mergeFirstPageLatestWithRedis(Long viewerUid,
@@ -158,12 +159,12 @@ public class FeedFacadeImpl implements FeedFacade {
     }
 
     @Override
-    public PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size) {
+    public PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size, Integer domain) {
         var page = postFacade.getHot(cursor, size);
         if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
-            return getLatestFeed(viewerUid, cursor, size);
+            return filterByDomain(getLatestFeed(viewerUid, cursor, size, domain), domain);
         }
-        return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+        return filterByDomain(assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore())), domain);
     }
 
     @Override
@@ -308,7 +309,7 @@ public class FeedFacadeImpl implements FeedFacade {
         JsonNode ext = parseExt(post.getExtJson());
         String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
         String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
-        String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
+        String content = searchableText(post, ext);
         double score = 0D;
         if (matchesAny(engineeringArea, intent.getTargetCompanies())) {
             score += 28D;
@@ -319,6 +320,9 @@ public class FeedFacadeImpl implements FeedFacade {
         if (matchesAny(content, intent.getTechStack())) {
             score += 14D;
         }
+        if (!firstMatchedInterest(content, interestCandidates(intent)).isBlank()) {
+            score += 36D;
+        }
         return score;
     }
 
@@ -327,7 +331,11 @@ public class FeedFacadeImpl implements FeedFacade {
         JsonNode ext = parseExt(post.getExtJson());
         String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
         String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
-        String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
+        String content = searchableText(post, ext);
+        String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
+        if (!matchedInterest.isBlank()) {
+            reasons.add("匹配你的兴趣：" + matchedInterest);
+        }
         if (intent != null && matchesAny(engineeringArea, intent.getTargetCompanies())) {
             reasons.add("覆盖你关注的工程场景：" + engineeringArea);
         }
@@ -362,6 +370,62 @@ public class FeedFacadeImpl implements FeedFacade {
         } catch (Exception e) {
             return objectMapper.createObjectNode();
         }
+    }
+
+    private static String searchableText(PostBriefDTO post, JsonNode ext) {
+        if (post == null) {
+            return "";
+        }
+        String tags = post.getTags() == null ? "" : post.getTags().stream()
+                .filter(Objects::nonNull)
+                .flatMap(tag -> Stream.of(tag.getName(), tag.getSlug(), tag.getCategory()))
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining(" "));
+        String extText = Stream.of(
+                        ext.path("contentType").asText(""),
+                        ext.path("topic").asText(""),
+                        ext.path("category").asText(""),
+                        ext.path("scenario").asText(""),
+                        ext.path("position").asText(""),
+                        ext.path("company").asText(""),
+                        firstArrayValue(ext, "techStacks"),
+                        firstArrayValue(ext, "topics"),
+                        firstArrayValue(ext, "tags"))
+                .collect(Collectors.joining(" "));
+        return clean(String.join(" ",
+                post.getTitle() == null ? "" : post.getTitle(),
+                post.getSummary() == null ? "" : post.getSummary(),
+                tags,
+                extText));
+    }
+
+    private static List<String> interestCandidates(UserIntentDTO intent) {
+        if (intent == null) {
+            return List.of();
+        }
+        return Stream.of(
+                        intent.getInterestTopics(),
+                        intent.getInterestTags(),
+                        intent.getContentPreferences())
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .filter(item -> item != null && !item.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    private static String firstMatchedInterest(String source, List<String> candidates) {
+        String text = clean(source).toLowerCase();
+        if (text.isBlank() || candidates == null || candidates.isEmpty()) {
+            return "";
+        }
+        return candidates.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .map(String::trim)
+                .filter(item -> text.contains(item.toLowerCase()))
+                .findFirst()
+                .orElse("");
     }
 
     private static String firstArrayValue(JsonNode ext, String field) {
@@ -403,6 +467,22 @@ public class FeedFacadeImpl implements FeedFacade {
 
     private static long safe(Long value) {
         return value == null ? 0L : value;
+    }
+
+    /**
+     * Filter PageResult items by domain. Items without a post or without a domain are excluded.
+     */
+    private PageResult<FeedItemVO> filterByDomain(PageResult<FeedItemVO> page, Integer domain) {
+        if (domain == null || page == null || page.getItems() == null || page.getItems().isEmpty()) {
+            return page;
+        }
+        List<FeedItemVO> filtered = page.getItems().stream()
+                .filter(item -> item.getPost() != null
+                        && item.getPost().getDomain() != null
+                        && item.getPost().getDomain().equals(domain))
+                .toList();
+        boolean hasMore = page.getHasMore() != null && page.getHasMore();
+        return PageResult.of(filtered, page.getNextCursor(), hasMore);
     }
 
     /** 当 cursor 表示 score (timestamp ms) 时；空则视为 +∞（从最新开始） */

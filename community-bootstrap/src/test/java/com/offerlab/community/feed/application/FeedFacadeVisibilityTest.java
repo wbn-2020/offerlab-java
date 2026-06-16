@@ -9,6 +9,7 @@ import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
+import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
@@ -76,7 +77,7 @@ class FeedFacadeVisibilityTest {
         when(interactionFacade.hasLiked(7L, 101L)).thenReturn(false);
         when(interactionFacade.hasFavorited(7L, 101L)).thenReturn(false);
 
-        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2);
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
 
         assertEquals(1, page.getItems().size());
         assertEquals(101L, page.getItems().get(0).getPost().getId());
@@ -100,7 +101,7 @@ class FeedFacadeVisibilityTest {
         when(userFacade.batchGetUserBriefs(Set.of(22L))).thenReturn(Map.of(
                 22L, UserBriefDTO.builder().uid(22L).nickname("author").build()));
 
-        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2);
+        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2, null);
 
         assertEquals(1, page.getItems().size());
         assertEquals(202L, page.getItems().get(0).getPost().getId());
@@ -136,7 +137,7 @@ class FeedFacadeVisibilityTest {
         when(userFacade.batchGetUserBriefs(Set.of(32L))).thenReturn(Map.of(
                 32L, UserBriefDTO.builder().uid(32L).nickname("redis-author").build()));
 
-        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2);
+        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2, null);
 
         assertEquals(2, page.getItems().size());
         assertEquals(302L, page.getItems().get(0).getPost().getId());
@@ -161,7 +162,7 @@ class FeedFacadeVisibilityTest {
         when(userFacade.batchGetUserBriefs(Set.of(41L))).thenReturn(Map.of(
                 41L, UserBriefDTO.builder().uid(41L).nickname("db-author").build()));
 
-        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2);
+        PageResult<FeedItemVO> page = facade.getLatestFeed(null, null, 2, null);
 
         assertEquals(1, page.getItems().size());
         assertEquals(401L, page.getItems().get(0).getPost().getId());
@@ -200,7 +201,7 @@ class FeedFacadeVisibilityTest {
         when(interactionFacade.hasLiked(7L, 501L)).thenReturn(false);
         when(interactionFacade.hasFavorited(7L, 501L)).thenReturn(false);
 
-        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 1);
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 1, null);
 
         List<String> reasons = page.getItems().get(0).getRecommendationReasons();
         assertEquals(List.of(
@@ -210,6 +211,66 @@ class FeedFacadeVisibilityTest {
         String joined = String.join(" ", reasons);
         assertFalse(joined.contains("目标公司"));
         assertFalse(joined.contains("目标岗位"));
+    }
+
+    @Test
+    void recommendFeedRanksInterestMatchedPostsFirstAndExplainsInterestReason() {
+        PostBriefDTO genericFreshPost = PostBriefDTO.builder()
+                .id(601L)
+                .authorId(61L)
+                .title("本周社区热门讨论合集")
+                .summary("整理最近更新的通用讨论")
+                .tags(List.of(TagDTO.builder().name("社区动态").build()))
+                .counter(PostCounterDTO.builder()
+                        .postId(601L)
+                        .viewCount(20L)
+                        .likeCount(1L)
+                        .commentCount(1L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(LocalDateTime.now())
+                .build();
+        PostBriefDTO interestMatchedPost = PostBriefDTO.builder()
+                .id(602L)
+                .authorId(62L)
+                .title("租房生活避坑清单")
+                .summary("城市生活里的通勤、合租和预算经验复盘")
+                .extJson("{\"contentType\":\"图文笔记\",\"topic\":\"城市生活\"}")
+                .tags(List.of(TagDTO.builder().name("租房生活").build()))
+                .counter(PostCounterDTO.builder()
+                        .postId(602L)
+                        .viewCount(0L)
+                        .likeCount(0L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(LocalDateTime.now().minusHours(48))
+                .build();
+        when(postFacade.getLatest(0L, 6)).thenReturn(PageResult.of(List.of(genericFreshPost, interestMatchedPost), null, false));
+        when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder()
+                .interestTopics(List.of("城市生活"))
+                .interestTags(List.of("租房生活"))
+                .contentPreferences(List.of("图文笔记"))
+                .build());
+        when(feedbackStore.hiddenPostIds(7L)).thenReturn(Set.of());
+        when(postFacade.batchGetCounters(List.of(602L, 601L))).thenReturn(Map.of(
+                601L, PostCounterDTO.builder().postId(601L).viewCount(20L).likeCount(1L).commentCount(1L).favoriteCount(0L).build(),
+                602L, PostCounterDTO.builder().postId(602L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(61L, 62L))).thenReturn(Map.of(
+                61L, UserBriefDTO.builder().uid(61L).nickname("fresh-author").build(),
+                62L, UserBriefDTO.builder().uid(62L).nickname("matched-author").build()));
+        when(interactionFacade.hasLiked(7L, 602L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 602L)).thenReturn(false);
+        when(interactionFacade.hasLiked(7L, 601L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 601L)).thenReturn(false);
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 2, null);
+
+        assertEquals(2, page.getItems().size());
+        assertEquals(602L, page.getItems().get(0).getPost().getId());
+        String reasons = String.join(" ", page.getItems().get(0).getRecommendationReasons());
+        assertTrue(reasons.contains("兴趣"));
+        assertTrue(reasons.contains("租房生活") || reasons.contains("城市生活") || reasons.contains("图文笔记"));
     }
 
     @SuppressWarnings("unchecked")

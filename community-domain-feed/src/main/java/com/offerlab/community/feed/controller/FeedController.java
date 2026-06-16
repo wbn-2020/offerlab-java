@@ -26,30 +26,34 @@ public class FeedController {
 
     @GetMapping("/following")
     public Result<PageResult<FeedItemVO>> following(@RequestParam(required = false) String cursor,
-                                                    @RequestParam(defaultValue = "20") int size) {
+                                                    @RequestParam(defaultValue = "20") int size,
+                                                    @RequestParam(required = false) Integer domain) {
         Long uid = UserContext.require();
-        return Result.ok(feedFacade.getFollowingFeed(uid, cursor, clamp(size)));
+        return Result.ok(feedFacade.getFollowingFeed(uid, cursor, clamp(size), domain));
     }
 
     @PublicApi
     @GetMapping("/recommend")
     public Result<PageResult<FeedItemVO>> recommend(@RequestParam(required = false) String cursor,
-                                                    @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size)));
+                                                    @RequestParam(defaultValue = "20") int size,
+                                                    @RequestParam(required = false) Integer domain) {
+        return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size), domain));
     }
 
     @PublicApi
     @GetMapping("/latest")
     public Result<PageResult<FeedItemVO>> latest(@RequestParam(required = false) String cursor,
-                                                 @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size)));
+                                                 @RequestParam(defaultValue = "20") int size,
+                                                 @RequestParam(required = false) Integer domain) {
+        return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size), domain));
     }
 
     @PublicApi
     @GetMapping("/hot")
     public Result<PageResult<FeedItemVO>> hot(@RequestParam(required = false) String cursor,
-                                              @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size)));
+                                              @RequestParam(defaultValue = "20") int size,
+                                              @RequestParam(required = false) Integer domain) {
+        return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), domain));
     }
 
     @PostMapping("/feedback")
