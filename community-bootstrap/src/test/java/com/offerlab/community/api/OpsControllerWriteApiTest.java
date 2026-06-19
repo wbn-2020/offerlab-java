@@ -14,6 +14,7 @@ import com.offerlab.community.infra.security.AdminRoleMapper;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.application.PostSearchIndexer;
@@ -71,6 +72,8 @@ class OpsControllerWriteApiTest {
     @Mock
     private AdminAuditService adminAuditService;
     @Mock
+    private DomainModeratorService domainModeratorService;
+    @Mock
     private ModerationAdminService moderationAdminService;
     @Mock
     private MigrationCheckService migrationCheckService;
@@ -99,6 +102,7 @@ class OpsControllerWriteApiTest {
                 adminRoleMapper,
                 adminPermissionService,
                 adminAuditService,
+                domainModeratorService,
                 moderationAdminService,
                 migrationCheckService,
                 userFacade,
@@ -423,6 +427,66 @@ class OpsControllerWriteApiTest {
     }
 
     @Test
+    void outboxSingleRetryRejectsLegacyRemarkOnlyBeforeWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        OutboxMessage failed = new OutboxMessage();
+        failed.setId(1L);
+        failed.setMsgStatus(2);
+        when(outboxMessageMapper.findById(1L)).thenReturn(failed);
+
+        for (String body : List.of(
+                "{\"remark\":\"retry failed outbox\"}",
+                "{\"remark\":\"retry failed outbox\",\"confirmationPhrase\":\"CONFIRM\"}",
+                "{\"remark\":\"retry failed outbox\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"outbox-single-missing-preview\"}"
+        )) {
+            mvc.perform(post("/api/v1/ops/outbox/1/retry")
+                            .header("Authorization", "Bearer token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+        }
+
+        verify(adminPermissionService, times(3)).requireScope(7L, AdminPermissionService.ROLE_OPS);
+        verify(outboxMessageMapper, times(3)).findById(1L);
+        verifyNoMoreInteractions(outboxMessageMapper);
+        verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void repeatedOutboxSingleRetryWithSameIdempotencyKeyIsBlockedBeforeWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        OutboxMessage failed = new OutboxMessage();
+        failed.setId(1L);
+        failed.setMsgStatus(2);
+        when(outboxMessageMapper.findById(1L)).thenReturn(failed);
+        when(outboxMessageMapper.markFailedForRetry(1L)).thenReturn(1);
+        String previewNonce = previewNonce("OUTBOX_RETRY_BATCH", List.of(1L));
+        String body = "{\"remark\":\"retry failed outbox\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"outbox-single-key-1\",\"previewNonce\":\"" + previewNonce + "\"}";
+
+        mvc.perform(post("/api/v1/ops/outbox/1/retry")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.idempotencyKey").value("outbox-single-key-1"))
+                .andExpect(jsonPath("$.data.retried").value(true));
+
+        mvc.perform(post("/api/v1/ops/outbox/1/retry")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
+                .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
+
+        verify(outboxMessageMapper, times(2)).findById(1L);
+        verify(outboxMessageMapper).markFailedForRetry(1L);
+        verify(adminAuditService).recordRequired(7L, "OUTBOX_RETRY", "OUTBOX", 1L, failed,
+                Map.of("retried", true, "idempotencyKey", "outbox-single-key-1"), "retry failed outbox");
+    }
+
+    @Test
     void invalidSearchIndexReplayBatchIdsReturn400() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
 
@@ -591,5 +655,65 @@ class OpsControllerWriteApiTest {
         verify(searchIndexRetryService).findById(9L);
         verify(searchIndexRetryService).findById(10L);
         verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void searchIndexSingleReplayRejectsLegacyRemarkOnlyBeforeWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        SearchIndexRetryTaskPO failed = new SearchIndexRetryTaskPO();
+        failed.setId(9L);
+        failed.setTaskStatus(SearchIndexRetryTaskMapper.STATUS_FAILED);
+        when(searchIndexRetryService.findById(9L)).thenReturn(failed);
+
+        for (String body : List.of(
+                "{\"remark\":\"replay failed search task\"}",
+                "{\"remark\":\"replay failed search task\",\"confirmationPhrase\":\"CONFIRM\"}",
+                "{\"remark\":\"replay failed search task\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"search-single-missing-preview\"}"
+        )) {
+            mvc.perform(post("/api/v1/ops/search-index-retry-tasks/9/replay")
+                            .header("Authorization", "Bearer token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+        }
+
+        verify(adminPermissionService, times(3)).requireScope(7L, AdminPermissionService.ROLE_OPS);
+        verify(searchIndexRetryService, times(3)).findById(9L);
+        verifyNoMoreInteractions(searchIndexRetryService);
+        verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void repeatedSearchIndexSingleReplayWithSameIdempotencyKeyIsBlockedBeforeWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        SearchIndexRetryTaskPO failed = new SearchIndexRetryTaskPO();
+        failed.setId(9L);
+        failed.setTaskStatus(SearchIndexRetryTaskMapper.STATUS_FAILED);
+        when(searchIndexRetryService.findById(9L)).thenReturn(failed);
+        when(searchIndexRetryService.replayFailed(9L)).thenReturn(true);
+        String previewNonce = previewNonce("SEARCH_INDEX_RETRY_REPLAY_BATCH", List.of(9L));
+        String body = "{\"remark\":\"replay failed search task\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"search-single-key-1\",\"previewNonce\":\"" + previewNonce + "\"}";
+
+        mvc.perform(post("/api/v1/ops/search-index-retry-tasks/9/replay")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.idempotencyKey").value("search-single-key-1"))
+                .andExpect(jsonPath("$.data.replayed").value(true));
+
+        mvc.perform(post("/api/v1/ops/search-index-retry-tasks/9/replay")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
+                .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
+
+        verify(searchIndexRetryService, times(2)).findById(9L);
+        verify(searchIndexRetryService).replayFailed(9L);
+        verify(adminAuditService).recordRequired(7L, "SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", 9L,
+                failed, Map.of("replayed", true, "idempotencyKey", "search-single-key-1"), "replay failed search task");
     }
 }

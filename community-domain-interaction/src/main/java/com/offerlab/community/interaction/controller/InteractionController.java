@@ -2,7 +2,6 @@ package com.offerlab.community.interaction.controller;
 
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
-import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
@@ -13,6 +12,7 @@ import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.application.CommentReportService;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import com.offerlab.community.post.application.DomainModeratorService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -37,7 +37,7 @@ public class InteractionController {
 
     private final InteractionFacade facade;
     private final CommentReportService reportService;
-    private final AdminPermissionService adminPermissionService;
+    private final DomainModeratorService domainModeratorService;
     private final ContentModerationService contentModerationService;
 
     @PostMapping("/posts/{postId}/like")
@@ -138,16 +138,16 @@ public class InteractionController {
 
     @GetMapping("/comments/admin/reports")
     public Result<List<CommentReportDTO>> listCommentReports(@RequestParam(required = false) Integer status,
+                                                             @RequestParam(required = false) Integer domain,
                                                              @RequestParam(defaultValue = "20") int limit,
                                                              @RequestParam(defaultValue = "false") boolean includeTestData) {
-        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        return Result.ok(reportService.listRecent(status, limit, includeTestData));
+        domainModeratorService.requireModerateDomain(UserContext.require(), domain);
+        return Result.ok(reportService.listRecent(status, domain, limit, includeTestData));
     }
 
     @PostMapping("/comments/admin/reports/{reportId}/review")
     public Result<CommentReportDTO> reviewCommentReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }

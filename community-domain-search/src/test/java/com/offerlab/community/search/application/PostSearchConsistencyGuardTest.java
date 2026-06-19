@@ -59,6 +59,9 @@ class PostSearchConsistencyGuardTest {
         assertTrue(taskService.contains("setIfAbsent"), "post index rebuild distributed gate must be claimed atomically");
         assertTrue(taskService.contains("remoteActiveSnapshot"), "post index rebuild must return the active remote task instead of creating a duplicate");
         assertTrue(taskService.contains("releaseDistributedActiveTask"), "post index rebuild must release its distributed gate after completion");
+        assertTrue(taskService.contains("ThreadPoolExecutor"), "post index rebuild must use a dedicated bounded executor");
+        assertTrue(taskService.contains("ArrayBlockingQueue<>(1)"), "post index rebuild executor must have a bounded queue");
+        assertTrue(!taskService.contains("ForkJoinPool.commonPool()"), "post index rebuild must not use the JVM common pool for blocking rebuild work");
 
         assertTrue(retryService.contains("@Scheduled(fixedDelay = 5000)"), "search retry service must periodically replay due tasks");
         assertTrue(retryService.contains("claimDue(owner, lockUntil, BATCH_SIZE)"), "search retry service must claim tasks before replaying");
@@ -81,7 +84,27 @@ class PostSearchConsistencyGuardTest {
         assertTrue(migration.contains("idx_search_index_retry_due"), "retry table must index due pending tasks");
     }
 
+    @Test
+    void mysqlFallbackMustPassThroughPostFacadeForAnonymousMasking() throws Exception {
+        String facade = read("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java");
+        String searchByMysql = methodBody(facade, "private PageResult<PostBriefDTO> searchByMysql");
+
+        assertTrue(searchByMysql.contains("filterVisibleSearchResults(items, includeTestData)"),
+                "MySQL fallback search must reuse PostFacade visibility/anonymous masking.");
+        assertTrue(!searchByMysql.contains("enrich(items)"),
+                "MySQL fallback search must not enrich authors directly from raw authorId.");
+    }
+
     private static String read(String path) throws Exception {
         return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+    }
+
+    private static String methodBody(String source, String signaturePrefix) {
+        int start = source.indexOf(signaturePrefix);
+        if (start < 0) {
+            return "";
+        }
+        int next = source.indexOf("\n    private ", start + signaturePrefix.length());
+        return next < 0 ? source.substring(start) : source.substring(start, next);
     }
 }

@@ -24,6 +24,8 @@ public class PostDraftCmd {
     @Size(max = 512)
     private String coverUrl;
     private Integer visibility;
+    private Integer domain;
+    private Boolean anonymous;
     @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
     private String extJson;
     private List<Long> tagIds;

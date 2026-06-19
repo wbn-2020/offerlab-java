@@ -45,6 +45,7 @@ public class PostReportService {
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
     private final ReviewQueuePublisher reviewQueuePublisher;
+    private final DomainModeratorService domainModeratorService;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
@@ -83,11 +84,17 @@ public class PostReportService {
     }
 
     public List<PostReportDTO> listRecent(Integer status, int limit, boolean includeTestData) {
+        return listRecent(status, null, limit, includeTestData);
+    }
+
+    public List<PostReportDTO> listRecent(Integer status, Integer domain, int limit, boolean includeTestData) {
         Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
         int safeLimit = clampLimit(limit);
         int queryLimit = includeTestData ? safeLimit : clampLimit(safeLimit * 5);
-        return reportMapper.selectRecent(effectiveStatus, queryLimit).stream()
-                .map(this::toDto)
+        List<PostReportPO> reports = reportMapper.selectRecent(effectiveStatus, domain, queryLimit);
+        Map<Long, Post> postsById = batchLoadReportPosts(reports);
+        return reports.stream()
+                .map(po -> toDto(po, postsById.get(po.getPostId())))
                 .filter(dto -> includeTestData || !isSyntheticReport(dto))
                 .limit(safeLimit)
                 .toList();
@@ -109,6 +116,9 @@ public class PostReportService {
         if (report == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        Post post = postRepo.findById(report.getPostId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -185,11 +195,30 @@ public class PostReportService {
         return trimmed.length() <= maxLen ? trimmed : trimmed.substring(0, maxLen);
     }
 
+    private Map<Long, Post> batchLoadReportPosts(List<PostReportPO> reports) {
+        if (reports == null || reports.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> postIds = reports.stream()
+                .map(PostReportPO::getPostId)
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .toList();
+        if (postIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Post> posts = postRepo.batchFindByIds(postIds);
+        return posts == null ? Map.of() : posts;
+    }
+
     private PostReportDTO toDto(PostReportPO po) {
+        return toDto(po, po == null ? null : postRepo.findById(po.getPostId()).orElse(null));
+    }
+
+    private PostReportDTO toDto(PostReportPO po, Post post) {
         if (po == null) {
             return null;
         }
-        Post post = postRepo.findById(po.getPostId()).orElse(null);
         return PostReportDTO.builder()
                 .id(po.getId())
                 .postId(po.getPostId())

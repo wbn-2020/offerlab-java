@@ -72,6 +72,15 @@ class AuthControllerApiTest {
     }
 
     @Test
+    void logoutWithoutAuthorizationHeaderIsIdempotentSuccess() throws Exception {
+        mvc.perform(post("/api/v1/auth/logout"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
     void registerRejectsInvalidBodyBeforeCallingService() throws Exception {
         mvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)

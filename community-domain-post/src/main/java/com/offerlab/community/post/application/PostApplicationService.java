@@ -13,6 +13,7 @@ import com.offerlab.community.post.api.event.PostDeletedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PostUpdatedEvent;
 import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostTagRefMapper;
@@ -29,6 +30,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -56,12 +58,14 @@ public class PostApplicationService {
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
+        Integer domain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), Post.DOMAIN_TECH);
         PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
                 cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
         long id = idGen.nextId();
         List<Long> resolvedTagIds = resolveTagIds(input.tagIds(), input.tagNames());
         requireResolvedTagCount(input.postType(), resolvedTagIds);
-        String enrichedExtJson = mergeDomainToExtJson(input.extJson(), cmd.getDomain());
+        String enrichedExtJson = mergeAnonymousToExtJson(
+                mergeDomainToExtJson(input.extJson(), domain), domain, cmd.getAnonymous());
         boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired());
         Post post = Post.builder()
                 .id(id)
@@ -74,7 +78,7 @@ public class PostApplicationService {
                 .postStatus(reviewRequired ? Post.STATUS_REVIEWING : Post.STATUS_PUBLISHED)
                 .extJson(enrichedExtJson)
                 .tagIds(resolvedTagIds)
-                .domain(cmd.getDomain())
+                .domain(domain)
                 .build();
         postRepo.save(post);
         counterMapper.initIfAbsent(id);
@@ -103,6 +107,7 @@ public class PostApplicationService {
         if (!post.getAuthorId().equals(cmd.getOperatorUid())) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
+        Integer nextDomain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), post.getDomain());
         boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
         List<Long> existingTagIds = currentTagIds(post.getId());
         List<Long> validationTagIds = tagsProvided ? cmd.getTagIds() : existingTagIds;
@@ -118,7 +123,8 @@ public class PostApplicationService {
         if (tagsProvided) {
             requireResolvedTagCount(input.postType(), resolvedTagIds);
         }
-        String enrichedExtJson = mergeDomainToExtJson(input.extJson(), cmd.getDomain());
+        String enrichedExtJson = mergeAnonymousToExtJson(
+                mergeDomainToExtJson(input.extJson(), nextDomain), nextDomain, cmd.getAnonymous());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
         versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
@@ -126,7 +132,7 @@ public class PostApplicationService {
 
         post.setVisibility(nextVisibility);
         post.setExtJson(enrichedExtJson);
-        post.setDomain(cmd.getDomain());
+        post.setDomain(nextDomain);
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
@@ -192,6 +198,75 @@ public class PostApplicationService {
             // If can't parse, return original
             return extJson;
         }
+    }
+
+    private String mergeAnonymousToExtJson(String extJson, Integer domain, Boolean anonymous) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode object = readObjectExtJson(mapper, extJson);
+            Integer effectiveDomain = domain != null ? domain : readDomain(object);
+            boolean hasAnonymous = object.has("anonymous");
+            if (anonymous == null && !hasAnonymous) {
+                return extJson;
+            }
+            boolean enabled = Objects.equals(effectiveDomain, Post.DOMAIN_CAREER) && Boolean.TRUE.equals(
+                    anonymous == null ? object.path("anonymous").asBoolean(false) : anonymous);
+            object.put("anonymous", enabled);
+            return mapper.writeValueAsString(object);
+        } catch (Exception e) {
+            return extJson;
+        }
+    }
+
+    private ObjectNode readObjectExtJson(ObjectMapper mapper, String extJson) throws Exception {
+        if (extJson != null && !extJson.isBlank()) {
+            JsonNode root = mapper.readTree(extJson);
+            if (root instanceof ObjectNode obj) {
+                return obj;
+            }
+        }
+        return mapper.createObjectNode();
+    }
+
+    private Integer readDomain(ObjectNode object) {
+        if (object != null && object.has("domain") && object.get("domain").canConvertToInt()) {
+            return object.get("domain").asInt();
+        }
+        return null;
+    }
+
+    private Integer resolveRequestedDomain(Integer explicitDomain, String extJson, Integer fallbackDomain) {
+        if (explicitDomain != null) {
+            return requireDomain(explicitDomain);
+        }
+        Integer extDomain = readDomainFromExtJson(extJson);
+        if (PostDomain.isValid(extDomain)) {
+            return extDomain;
+        }
+        return defaultDomain(fallbackDomain);
+    }
+
+    private Integer readDomainFromExtJson(String extJson) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            return readDomain(readObjectExtJson(mapper, extJson));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Integer defaultDomain(Integer domain) {
+        if (domain == null) {
+            return Post.DOMAIN_TECH;
+        }
+        return requireDomain(domain);
+    }
+
+    private Integer requireDomain(Integer domain) {
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw PostPublishQualityValidator.fieldError("domain", "领域不存在或已下线");
     }
 
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {

@@ -2,6 +2,7 @@ package com.offerlab.community.post.infrastructure.persistence;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
@@ -113,19 +114,19 @@ public class PostRepositoryImpl implements PostRepository {
         if (cursor > 0) {
             q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
-        return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
+        return toDomainListWithExt(postMapper.selectList(q));
     }
 
     @Override
     public List<Post> findLatest(long cursor, int size) {
         LambdaQueryWrapper<PostPO> q = baseListQuery(cursor, size);
-        return postMapper.selectList(q).stream().map(p -> toDomain(p, null)).toList();
+        return toDomainListWithExt(postMapper.selectList(q));
     }
 
     @Override
-    public List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size) {
+    public List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
         List<PostPO> posts = postMapper.selectPublicPosts(authorId, tagId != null && tagId > 0 ? tagId : null, postType,
-                featured, cursorTime(cursor), cursorId(cursor), listLimit(size));
+                featured, domain, cursorTime(cursor), cursorId(cursor), listLimit(size));
         return toDomainListWithExt(posts);
     }
 
@@ -204,7 +205,7 @@ public class PostRepositoryImpl implements PostRepository {
             try {
                 ObjectMapper mapper = new ObjectMapper();
                 JsonNode root = mapper.readTree(ext.getExtJson());
-                if (root.has("domain")) {
+                if (root.has("domain") && root.get("domain").canConvertToInt()) {
                     domain = root.get("domain").asInt();
                 }
             } catch (Exception e) {
@@ -224,7 +225,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .updateTime(po.getUpdateTime())
                 .extJson(ext == null ? null : ext.getExtJson())
                 .version(po.getVersion())
-                .domain(domain)
+                .domain(PostDomain.fromCode(domain).getCode())
                 .build();
     }
 }

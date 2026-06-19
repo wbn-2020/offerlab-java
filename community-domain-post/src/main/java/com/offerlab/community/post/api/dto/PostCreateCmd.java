@@ -32,6 +32,7 @@ public class PostCreateCmd {
     @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
     private String extJson;
     private Integer domain;
+    private Boolean anonymous;
     private List<Long> tagIds;
     private List<String> tagNames;
     private Boolean reviewRequired;

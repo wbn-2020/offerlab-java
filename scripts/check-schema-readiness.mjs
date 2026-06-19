@@ -47,6 +47,8 @@ const expectations = [
     't_review_queue',
     't_mock_interview_answer',
     't_ai_extract_task',
+    't_domain_moderator',
+    't_post_extension',
   ]),
   ...columns('t_tag', [
     'tag_status',
@@ -73,6 +75,18 @@ const expectations = [
     'estimated_cost_micros',
     'error_code',
   ]),
+  ...columns('t_domain_moderator', [
+    'id',
+    'uid',
+    'domain',
+    'enabled',
+    'created_by',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_post_extension', [
+    'domain',
+  ]),
   ...indexes('t_post_report', ['idx_post_reporter_status']),
   ...indexes('t_comment_report', ['idx_comment_reporter_status']),
   ...indexes('t_interview_question', ['idx_status_time']),
@@ -87,6 +101,13 @@ const expectations = [
     'idx_review_queue_assignee_status',
     'idx_review_queue_risk_status',
   ]),
+  ...indexes('t_domain_moderator', [
+    'uk_domain_moderator_uid_domain',
+    'idx_domain_moderator_domain_enabled',
+    'idx_domain_moderator_uid_enabled',
+  ]),
+  ...indexes('t_post_extension', ['idx_post_extension_domain_post']),
+  ...primaryKeys('t_domain_moderator', ['id']),
 ]
 
 const sql = `
@@ -106,7 +127,14 @@ SELECT CONCAT('index:', table_name, '.', index_name) AS item, COUNT(*) AS ready
 FROM information_schema.statistics
 WHERE table_schema = DATABASE()
   AND CONCAT(table_name, '.', index_name) IN (${sqlList(expectations.filter((item) => item.type === 'index').map((item) => `${item.table}.${item.name}`))})
-GROUP BY table_name, index_name;
+GROUP BY table_name, index_name
+UNION ALL
+SELECT CONCAT('primaryKey:', table_name, '.', column_name) AS item, COUNT(*) AS ready
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND column_key = 'PRI'
+  AND CONCAT(table_name, '.', column_name) IN (${sqlList(expectations.filter((item) => item.type === 'primaryKey').map((item) => `${item.table}.${item.name}`))})
+GROUP BY table_name, column_name;
 `
 
 let output
@@ -189,6 +217,10 @@ function indexes(table, values) {
   return values.map((name) => ({ type: 'index', table, name, migration: migrationForIndex(table, name) }))
 }
 
+function primaryKeys(table, values) {
+  return values.map((name) => ({ type: 'primaryKey', table, name, migration: migrationForConstraint(table, name) }))
+}
+
 function itemKey(item) {
   if (item.type === 'table') return `table:${item.table}`
   return `${item.type}:${item.table}.${item.name}`
@@ -208,6 +240,8 @@ function migrationForTable(table) {
   if (table === 't_mock_interview_answer') return 'db/migration/20260608_mock_interview_ai_review_transparency.sql'
   if (table === 't_ai_extract_task') return 'db/migration/20260605_ai_extract_task_metrics.sql'
   if (table === 't_tag') return 'db/migration/20260608_tag_governance.sql'
+  if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_post_extension') return 'db/migration/20260618_post_extension_domain_index.sql'
   return 'earlier governance/init migration'
 }
 
@@ -215,6 +249,8 @@ function migrationForColumn(table) {
   if (table === 't_tag') return 'db/migration/20260608_tag_governance.sql'
   if (table === 't_mock_interview_answer') return 'db/migration/20260608_mock_interview_ai_review_transparency.sql'
   if (table === 't_ai_extract_task') return 'db/migration/20260605_ai_extract_task_metrics.sql'
+  if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_post_extension') return 'db/migration/20260618_post_extension_domain_index.sql'
   return 'unknown'
 }
 
@@ -222,5 +258,12 @@ function migrationForIndex(table) {
   if (table === 't_tag') return 'db/migration/20260608_tag_governance.sql'
   if (table.startsWith('t_community_topic')) return 'db/migration/20260608_community_topics.sql'
   if (table === 't_review_queue') return 'db/migration/20260608_review_queue.sql'
+  if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_post_extension') return 'db/migration/20260618_post_extension_domain_index.sql'
   return 'earlier governance/init migration'
+}
+
+function migrationForConstraint(table) {
+  if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  return 'unknown'
 }

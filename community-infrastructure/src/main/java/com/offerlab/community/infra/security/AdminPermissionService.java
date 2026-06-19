@@ -2,11 +2,16 @@ package com.offerlab.community.infra.security;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.net.InetAddress;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -76,12 +81,13 @@ public class AdminPermissionService {
         if (environment.matchesProfiles("prod")) {
             return "LOCKED";
         }
-        return localOpenEnabled && isLocalBootstrapProfile() ? "LOCAL_OPEN" : "LOCKED";
+        return isLocalOpenMode() ? "LOCAL_OPEN" : "LOCKED";
     }
 
     public boolean isLocalOpenMode() {
         return localOpenEnabled
                 && isLocalBootstrapProfile()
+                && isLoopbackRequest()
                 && adminUids.isEmpty()
                 && (!adminTableExists() || countAdminRows() == 0);
     }
@@ -124,6 +130,27 @@ public class AdminPermissionService {
 
     private boolean isLocalBootstrapProfile() {
         return environment.matchesProfiles("local", "dev", "test");
+    }
+
+    private boolean isLoopbackRequest() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        if (!(attributes instanceof ServletRequestAttributes servletAttributes)) {
+            return false;
+        }
+        HttpServletRequest request = servletAttributes.getRequest();
+        return isLoopbackAddress(request.getRemoteAddr());
+    }
+
+    private boolean isLoopbackAddress(String remoteAddr) {
+        if (!StringUtils.hasText(remoteAddr)) {
+            return false;
+        }
+        try {
+            InetAddress address = InetAddress.getByName(remoteAddr);
+            return address.isLoopbackAddress() || address.isAnyLocalAddress();
+        } catch (Exception e) {
+            return "localhost".equalsIgnoreCase(remoteAddr);
+        }
     }
 
     public void requireStrictAdmin(Long uid) {

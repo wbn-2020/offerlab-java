@@ -17,6 +17,7 @@ import com.offerlab.community.interaction.infrastructure.persistence.po.CommentP
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentReportPO;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -55,6 +56,7 @@ public class CommentReportService {
     private final AdminAuditService adminAuditService;
     private final AfterCommitExecutor afterCommit;
     private final ReviewQueuePublisher reviewQueuePublisher;
+    private final DomainModeratorService domainModeratorService;
 
     @Transactional
     public Long reportComment(Long commentId, Long reporterUid, String reason, String detail) {
@@ -93,10 +95,14 @@ public class CommentReportService {
     }
 
     public List<CommentReportDTO> listRecent(Integer status, int limit, boolean includeTestData) {
+        return listRecent(status, null, limit, includeTestData);
+    }
+
+    public List<CommentReportDTO> listRecent(Integer status, Integer domain, int limit, boolean includeTestData) {
         Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
         int safeLimit = clampLimit(limit);
         int queryLimit = includeTestData ? safeLimit : clampLimit(safeLimit * 5);
-        return reportMapper.selectRecent(effectiveStatus, queryLimit).stream()
+        return reportMapper.selectRecent(effectiveStatus, domain, queryLimit).stream()
                 .map(this::toDto)
                 .filter(dto -> includeTestData || !isSyntheticReport(dto))
                 .limit(safeLimit)
@@ -119,6 +125,9 @@ public class CommentReportService {
         if (report == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        Post post = postRepo.findById(report.getPostId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }

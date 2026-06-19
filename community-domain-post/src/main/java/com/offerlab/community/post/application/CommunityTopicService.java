@@ -7,6 +7,7 @@ import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.post.api.PublicContentFilter;
+import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.CommunityTopicCmd;
 import com.offerlab.community.post.api.dto.CommunityTopicDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
@@ -71,6 +72,7 @@ public class CommunityTopicService {
     private final SnowflakeIdGenerator idGen;
     private final AdminAuditService auditService;
     private final MigrationCheckService migrationCheckService;
+    private final PostFacade postFacade;
 
     public List<CommunityTopicDTO> listPublic(Boolean featured, int limit, Long viewerUid) {
         if (!topicSchemaReady()) {
@@ -113,6 +115,10 @@ public class CommunityTopicService {
     }
 
     public PageResult<PostBriefDTO> listPosts(String slug, Integer postType, Boolean featured, long cursor, int size) {
+        return listPosts(slug, postType, featured, cursor, size, null);
+    }
+
+    public PageResult<PostBriefDTO> listPosts(String slug, Integer postType, Boolean featured, long cursor, int size, Long viewerUid) {
         TopicLookup lookup = resolveTopicForRead(slug);
         if (!lookup.virtualTopic() && !Objects.equals(lookup.topic().getTopicStatus(), 1)) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -124,7 +130,7 @@ public class CommunityTopicService {
                 .toList();
         List<PostPO> posts = postMapper.selectPublicPostsByTopic(lookup.topicId(), tagIds, lookup.keyword(),
                 postType, featured, cursorTime(cursor), cursorId(cursor), pageSize + 1);
-        return paged(posts, pageSize);
+        return paged(posts, pageSize, viewerUid);
     }
 
     /*
@@ -338,13 +344,17 @@ public class CommunityTopicService {
         return getAdmin(topicId);
     }
 
-    private PageResult<PostBriefDTO> paged(List<PostPO> posts, int pageSize) {
+    private PageResult<PostBriefDTO> paged(List<PostPO> posts, int pageSize, Long viewerUid) {
         if (posts == null || posts.isEmpty()) {
             return PageResult.empty();
         }
         boolean hasMore = posts.size() > pageSize;
         List<PostPO> items = hasMore ? posts.subList(0, pageSize) : posts;
-        List<PostBriefDTO> briefs = toBriefs(items).stream()
+        List<Long> postIds = items.stream().map(PostPO::getId).toList();
+        Map<Long, PostBriefDTO> visibleById = postFacade.batchGetPosts(postIds, viewerUid);
+        List<PostBriefDTO> briefs = postIds.stream()
+                .map(visibleById::get)
+                .filter(Objects::nonNull)
                 .filter(post -> !PublicContentFilter.isSyntheticPost(post))
                 .toList();
         PostPO cursorPost = hasMore && !items.isEmpty() ? items.get(items.size() - 1) : null;

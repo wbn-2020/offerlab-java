@@ -255,18 +255,59 @@ public interface TagMapper extends BaseMapper<TagPO> {
     int markMerged(@Param("sourceTagId") Long sourceTagId, @Param("targetTagId") Long targetTagId);
 
     @Select("""
+            <script>
             SELECT t.tag_name AS name, COUNT(*) AS count
             FROM t_post_tag_ref r
             JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
             JOIN t_post_main p ON p.id = r.post_id
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
               AND p.create_time >= #{since}
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
             GROUP BY t.id, t.tag_name
             ORDER BY COUNT(*) DESC, t.use_count DESC, t.id ASC
             LIMIT #{limit}
+            </script>
             """)
-    List<java.util.Map<String, Object>> countTopTags(@Param("since") java.time.LocalDateTime since, @Param("limit") int limit);
+    List<java.util.Map<String, Object>> countTopTags(@Param("since") java.time.LocalDateTime since,
+                                                     @Param("limit") int limit,
+                                                     @Param("domain") Integer domain);
+
+    @Select("""
+            SELECT domain, name, count
+            FROM (
+              SELECT grouped.*,
+                     ROW_NUMBER() OVER (PARTITION BY grouped.domain ORDER BY grouped.count DESC, grouped.useCount DESC, grouped.tagId ASC) AS rn
+              FROM (
+                SELECT COALESCE(e.domain, 1) AS domain,
+                       t.id AS tagId,
+                       t.tag_name AS name,
+                       t.use_count AS useCount,
+                       COUNT(*) AS count
+                FROM t_post_tag_ref r
+                JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                JOIN t_post_main p ON p.id = r.post_id
+                LEFT JOIN t_post_extension e ON e.post_id = p.id
+                WHERE p.is_deleted = 0
+                  AND p.post_status = 1
+                  AND p.visibility = 1
+                  AND p.create_time >= #{since}
+                GROUP BY COALESCE(e.domain, 1), t.id, t.tag_name, t.use_count
+              ) grouped
+            ) ranked
+            WHERE ranked.rn <= #{limitPerDomain}
+            ORDER BY ranked.domain ASC, ranked.rn ASC
+            """)
+    List<java.util.Map<String, Object>> countTopTagsByDomain(@Param("since") java.time.LocalDateTime since,
+                                                             @Param("limitPerDomain") int limitPerDomain);
+
+    default List<java.util.Map<String, Object>> countTopTags(@Param("since") java.time.LocalDateTime since,
+                                                             @Param("limit") int limit) {
+        return countTopTags(since, limit, null);
+    }
 
 }

@@ -187,7 +187,7 @@ class FeedFacadeVisibilityTest {
                         .build())
                 .createTime(LocalDateTime.now())
                 .build();
-        when(postFacade.getLatest(0L, 3)).thenReturn(PageResult.of(List.of(post), null, false));
+        when(postFacade.getLatest(0L, 1)).thenReturn(PageResult.of(List.of(post), null, false));
         when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder()
                 .targetCompanies(List.of("Redis"))
                 .targetPositions(List.of("支付链路"))
@@ -211,6 +211,58 @@ class FeedFacadeVisibilityTest {
         String joined = String.join(" ", reasons);
         assertFalse(joined.contains("目标公司"));
         assertFalse(joined.contains("目标岗位"));
+    }
+
+    @Test
+    void recommendFeedDoesNotAdvanceCursorPastUnshownCandidates() {
+        PostBriefDTO first = PostBriefDTO.builder()
+                .id(551L)
+                .authorId(55L)
+                .title("first")
+                .summary("first")
+                .counter(PostCounterDTO.builder()
+                        .postId(551L)
+                        .viewCount(3L)
+                        .likeCount(0L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(LocalDateTime.now())
+                .build();
+        PostBriefDTO second = PostBriefDTO.builder()
+                .id(552L)
+                .authorId(56L)
+                .title("second")
+                .summary("second")
+                .counter(PostCounterDTO.builder()
+                        .postId(552L)
+                        .viewCount(2L)
+                        .likeCount(0L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(LocalDateTime.now().minusMinutes(1))
+                .build();
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(first, second), "cursor-after-visible-page", true));
+        when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder().build());
+        when(feedbackStore.hiddenPostIds(7L)).thenReturn(Set.of());
+        when(postFacade.batchGetCounters(List.of(551L, 552L))).thenReturn(Map.of(
+                551L, PostCounterDTO.builder().postId(551L).viewCount(3L).likeCount(0L).commentCount(0L).favoriteCount(0L).build(),
+                552L, PostCounterDTO.builder().postId(552L).viewCount(2L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(55L, 56L))).thenReturn(Map.of(
+                55L, UserBriefDTO.builder().uid(55L).nickname("first-author").build(),
+                56L, UserBriefDTO.builder().uid(56L).nickname("second-author").build()));
+        when(interactionFacade.hasLiked(7L, 551L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 551L)).thenReturn(false);
+        when(interactionFacade.hasLiked(7L, 552L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 552L)).thenReturn(false);
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 2, null);
+
+        verify(postFacade).getLatest(0L, 2);
+        assertEquals(2, page.getItems().size());
+        assertEquals("cursor-after-visible-page", page.getNextCursor());
+        assertEquals(Boolean.TRUE, page.getHasMore());
     }
 
     @Test
@@ -246,7 +298,7 @@ class FeedFacadeVisibilityTest {
                         .build())
                 .createTime(LocalDateTime.now().minusHours(48))
                 .build();
-        when(postFacade.getLatest(0L, 6)).thenReturn(PageResult.of(List.of(genericFreshPost, interestMatchedPost), null, false));
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(genericFreshPost, interestMatchedPost), null, false));
         when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder()
                 .interestTopics(List.of("城市生活"))
                 .interestTags(List.of("租房生活"))

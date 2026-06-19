@@ -3,12 +3,12 @@ package com.offerlab.community.api;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.moderation.ContentModerationService;
-import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.application.CommentReportService;
 import com.offerlab.community.interaction.controller.InteractionController;
+import com.offerlab.community.post.application.DomainModeratorService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,7 +36,7 @@ class InteractionControllerApiTest {
     @Mock
     private CommentReportService reportService;
     @Mock
-    private AdminPermissionService adminPermissionService;
+    private DomainModeratorService domainModeratorService;
     @Mock
     private ContentModerationService contentModerationService;
     @Mock
@@ -47,7 +47,7 @@ class InteractionControllerApiTest {
     @BeforeEach
     void setUp() {
         mvc = ApiTestSupport.mvc(
-                new InteractionController(facade, reportService, adminPermissionService, contentModerationService),
+                new InteractionController(facade, reportService, domainModeratorService, contentModerationService),
                 jwtService);
     }
 
@@ -93,5 +93,35 @@ class InteractionControllerApiTest {
         assertEquals(99L, captor.getValue().getAuthorUid());
         assertEquals("hello", captor.getValue().getContent());
         assertEquals(false, captor.getValue().getReviewRequired());
+    }
+
+    @Test
+    void domainModeratorCanListCommentReportsForOwnDomain() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(88L);
+
+        mvc.perform(get("/api/v1/comments/admin/reports")
+                        .header("Authorization", "Bearer token")
+                        .param("domain", "2")
+                        .param("status", "0")
+                        .param("limit", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verify(domainModeratorService).requireModerateDomain(88L, 2);
+        verify(reportService).listRecent(0, 2, 10, false);
+    }
+
+    @Test
+    void commentReportReviewDelegatesDomainAuthorizationToService() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(88L);
+
+        mvc.perform(post("/api/v1/comments/admin/reports/42/review")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"approved\":false,\"note\":\"not actionable\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verify(reportService).reviewReport(42L, 88L, false, "not actionable");
     }
 }

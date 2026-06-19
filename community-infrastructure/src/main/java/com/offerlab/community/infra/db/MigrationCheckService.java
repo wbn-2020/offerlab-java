@@ -31,7 +31,9 @@ public class MigrationCheckService {
                 "t_community_topic_follow",
                 "t_review_queue",
                 "t_mock_interview_answer",
-                "t_ai_extract_task"
+                "t_ai_extract_task",
+                "t_domain_moderator",
+                "t_post_extension"
         )) {
             tables.put(table, tableExists(table));
         }
@@ -67,6 +69,18 @@ public class MigrationCheckService {
         )) {
             columns.put("t_ai_extract_task." + column, columnExists("t_ai_extract_task", column));
         }
+        for (String column : List.of(
+                "id",
+                "uid",
+                "domain",
+                "enabled",
+                "created_by",
+                "create_time",
+                "update_time"
+        )) {
+            columns.put("t_domain_moderator." + column, columnExists("t_domain_moderator", column));
+        }
+        columns.put("t_post_extension.domain", columnExists("t_post_extension", "domain"));
         Map<String, Boolean> indexes = new LinkedHashMap<>();
         indexes.put("t_post_report.idx_post_reporter_status", indexExists("t_post_report", "idx_post_reporter_status"));
         indexes.put("t_comment_report.idx_comment_reporter_status", indexExists("t_comment_report", "idx_comment_reporter_status"));
@@ -87,16 +101,24 @@ public class MigrationCheckService {
         indexes.put("t_review_queue.idx_review_queue_source_status", indexExists("t_review_queue", "idx_review_queue_source_status"));
         indexes.put("t_review_queue.idx_review_queue_assignee_status", indexExists("t_review_queue", "idx_review_queue_assignee_status"));
         indexes.put("t_review_queue.idx_review_queue_risk_status", indexExists("t_review_queue", "idx_review_queue_risk_status"));
+        indexes.put("t_domain_moderator.uk_domain_moderator_uid_domain", indexExists("t_domain_moderator", "uk_domain_moderator_uid_domain"));
+        indexes.put("t_domain_moderator.idx_domain_moderator_domain_enabled", indexExists("t_domain_moderator", "idx_domain_moderator_domain_enabled"));
+        indexes.put("t_domain_moderator.idx_domain_moderator_uid_enabled", indexExists("t_domain_moderator", "idx_domain_moderator_uid_enabled"));
+        indexes.put("t_post_extension.idx_post_extension_domain_post", indexExists("t_post_extension", "idx_post_extension_domain_post"));
+        Map<String, Boolean> constraints = new LinkedHashMap<>();
+        constraints.put("t_domain_moderator.PRIMARY(id)", primaryKeyExists("t_domain_moderator", "id"));
         boolean ready = tables.values().stream().allMatch(Boolean::booleanValue)
                 && columns.values().stream().allMatch(Boolean::booleanValue)
-                && indexes.values().stream().allMatch(Boolean::booleanValue);
-        List<String> missing = missingItems(tables, columns, indexes);
+                && indexes.values().stream().allMatch(Boolean::booleanValue)
+                && constraints.values().stream().allMatch(Boolean::booleanValue);
+        List<String> missing = missingItems(tables, columns, indexes, constraints);
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("ready", ready);
         status.put("status", ready ? "UP" : "BLOCKED_BY_SCHEMA");
         status.put("tables", tables);
         status.put("columns", columns);
         status.put("indexes", indexes);
+        status.put("constraints", constraints);
         status.put("missing", missing);
         status.put("migration", "db/migration/20260608_tag_governance.sql");
         status.put("migrations", List.of(
@@ -104,7 +126,9 @@ public class MigrationCheckService {
                 "db/migration/20260605_ai_extract_task_metrics.sql",
                 "db/migration/20260608_community_topics.sql",
                 "db/migration/20260608_review_queue.sql",
-                "db/migration/20260608_mock_interview_ai_review_transparency.sql"
+                "db/migration/20260608_mock_interview_ai_review_transparency.sql",
+                "db/migration/20260617_domain_moderators.sql",
+                "db/migration/20260618_post_extension_domain_index.sql"
         ));
         if (!ready) {
             status.put("message", "数据库迁移未补齐，标签治理、社区专题、审核队列、发布和搜索会降级或被阻断");
@@ -168,6 +192,27 @@ public class MigrationCheckService {
                 && indexExists("t_review_queue", "idx_review_queue_risk_status");
     }
 
+    public boolean domainModeratorReady() {
+        return tableExists("t_domain_moderator")
+                && columnExists("t_domain_moderator", "id")
+                && columnExists("t_domain_moderator", "uid")
+                && columnExists("t_domain_moderator", "domain")
+                && columnExists("t_domain_moderator", "enabled")
+                && columnExists("t_domain_moderator", "created_by")
+                && columnExists("t_domain_moderator", "create_time")
+                && columnExists("t_domain_moderator", "update_time")
+                && primaryKeyExists("t_domain_moderator", "id")
+                && indexExists("t_domain_moderator", "uk_domain_moderator_uid_domain")
+                && indexExists("t_domain_moderator", "idx_domain_moderator_domain_enabled")
+                && indexExists("t_domain_moderator", "idx_domain_moderator_uid_enabled");
+    }
+
+    public boolean postExtensionDomainReady() {
+        return tableExists("t_post_extension")
+                && columnExists("t_post_extension", "domain")
+                && indexExists("t_post_extension", "idx_post_extension_domain_post");
+    }
+
     private List<String> missingItems(Map<String, Boolean>... groups) {
         List<String> missing = new ArrayList<>();
         for (Map<String, Boolean> group : groups) {
@@ -208,6 +253,18 @@ public class MigrationCheckService {
                   AND table_name = ?
                   AND index_name = ?
                 """, Integer.class, tableName, indexName);
+        return count != null && count > 0;
+    }
+
+    private boolean primaryKeyExists(String tableName, String columnName) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = ?
+                  AND column_name = ?
+                  AND column_key = 'PRI'
+                """, Integer.class, tableName, columnName);
         return count != null && count > 0;
     }
 }

@@ -17,6 +17,7 @@ import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
@@ -71,6 +72,8 @@ class OpsControllerStatusApiTest {
     @Mock
     private AdminAuditService adminAuditService;
     @Mock
+    private DomainModeratorService domainModeratorService;
+    @Mock
     private ModerationAdminService moderationAdminService;
     @Mock
     private MigrationCheckService migrationCheckService;
@@ -97,6 +100,7 @@ class OpsControllerStatusApiTest {
                 adminRoleMapper,
                 adminPermissionService,
                 adminAuditService,
+                domainModeratorService,
                 moderationAdminService,
                 migrationCheckService,
                 userFacade,
@@ -206,6 +210,33 @@ class OpsControllerStatusApiTest {
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);
         verifyNoInteractions(outboxMessageMapper);
+    }
+
+    @Test
+    void permissionsExposeDomainModeratorAndModeratedDomains() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(88L);
+        when(adminPermissionService.mode()).thenReturn("RBAC");
+        when(domainModeratorService.listModeratedDomains(88L)).thenReturn(List.of(2, 5));
+
+        mvc.perform(get("/api/v1/ops/me/permissions")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.uid").value(88))
+                .andExpect(jsonPath("$.data.adminMode").value("RBAC"))
+                .andExpect(jsonPath("$.data.admin").value(false))
+                .andExpect(jsonPath("$.data.ops").value(false))
+                .andExpect(jsonPath("$.data.contentModerator").value(false))
+                .andExpect(jsonPath("$.data.domainModerator").value(true))
+                .andExpect(jsonPath("$.data.moderatedDomains[0]").value(2))
+                .andExpect(jsonPath("$.data.moderatedDomains[1]").value(5))
+                .andExpect(jsonPath("$.data.questionOperator").value(false))
+                .andExpect(jsonPath("$.data.localOpen").value(false));
+
+        verify(domainModeratorService).listModeratedDomains(88L);
+        verify(adminPermissionService).hasRole(88L, AdminPermissionService.ROLE_OPS);
+        verify(adminPermissionService).hasRole(88L, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        verify(adminPermissionService).hasRole(88L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
     }
 
     private static OutboxMessage outboxMessage() {

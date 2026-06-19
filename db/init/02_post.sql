@@ -30,11 +30,13 @@ CREATE TABLE t_post_extension (
     position        VARCHAR(64)  GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(ext_json, '$.position'))) VIRTUAL,
     years_of_exp    INT          GENERATED ALWAYS AS (JSON_EXTRACT(ext_json, '$.yearsOfExp')) VIRTUAL,
     interview_result TINYINT     GENERATED ALWAYS AS (JSON_EXTRACT(ext_json, '$.interviewResult')) VIRTUAL,
+    domain          TINYINT      GENERATED ALWAYS AS (CASE JSON_UNQUOTE(JSON_EXTRACT(ext_json, '$.domain')) WHEN '2' THEN 2 WHEN '3' THEN 3 WHEN '4' THEN 4 WHEN '5' THEN 5 ELSE 1 END) VIRTUAL,
     ext_json        JSON         NOT NULL,
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     KEY idx_company (company),
     KEY idx_position (position),
-    KEY idx_company_result (company, interview_result)
+    KEY idx_company_result (company, interview_result),
+    KEY idx_post_extension_domain_post (domain, post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子扩展';
 
 DROP TABLE IF EXISTS t_tag;

@@ -103,6 +103,17 @@ class CommunityTopicGuardTest {
         assertContains(schemaScript, "idx_topic_follow_uid");
     }
 
+    @Test
+    void topicPostListMustReusePostFacadeBriefAssemblyForAnonymousMasking() throws Exception {
+        String controller = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/controller/CommunityTopicController.java"));
+        String service = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/application/CommunityTopicService.java"));
+
+        assertContains(service, "private final PostFacade postFacade");
+        assertContains(service, "PageResult<PostBriefDTO> listPosts(String slug, Integer postType, Boolean featured, long cursor, int size, Long viewerUid)");
+        assertContains(service, "postFacade.batchGetPosts(postIds, viewerUid)");
+        assertContains(controller, "topicService.listPosts(slug, type, featured, cursor, size, UserContext.get())");
+    }
+
     private static String read(Path path) throws Exception {
         return Files.readString(path);
     }

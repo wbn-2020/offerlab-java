@@ -7,11 +7,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -117,5 +119,22 @@ class SearchIndexTaskServiceTest {
 
         assertEquals(ErrorCode.CACHE_ERROR.getCode(), error.getCode());
         verifyNoInteractions(indexer);
+    }
+
+    @Test
+    void submitRebuildTaskReleasesGateAndClearsLocalTaskWhenExecutorRejects() {
+        service = new SearchIndexTaskService(indexer, redis);
+        service.setRebuildExecutorForTest(command -> {
+            throw new RejectedExecutionException("executor closed");
+        });
+        when(redis.opsForValue()).thenReturn(valueOps);
+        when(valueOps.setIfAbsent(eq(REDIS_ACTIVE_REBUILD_KEY), anyString(), any(Duration.class))).thenReturn(true);
+
+        BizException error = assertThrows(BizException.class, () -> service.submitRebuildTask(7L));
+
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), error.getCode());
+        assertEquals(0, service.listRecentTasks(10).size());
+        verify(redis).execute(any(RedisCallback.class));
+        verify(indexer, never()).rebuildAll();
     }
 }

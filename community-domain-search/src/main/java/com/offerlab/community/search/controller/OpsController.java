@@ -27,6 +27,7 @@ import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
 import com.offerlab.community.search.application.SearchIndexRetryService;
@@ -91,6 +92,7 @@ public class OpsController {
     private final AdminRoleMapper adminRoleMapper;
     private final AdminPermissionService adminPermissionService;
     private final AdminAuditService adminAuditService;
+    private final DomainModeratorService domainModeratorService;
     private final ModerationAdminService moderationAdminService;
     private final MigrationCheckService migrationCheckService;
     private final UserFacade userFacade;
@@ -190,6 +192,9 @@ public class OpsController {
         permissions.put("admin", admin);
         permissions.put("ops", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS));
         permissions.put("contentModerator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR));
+        List<Integer> moderatedDomains = domainModeratorService.listModeratedDomains(uid);
+        permissions.put("domainModerator", !moderatedDomains.isEmpty());
+        permissions.put("moderatedDomains", moderatedDomains);
         permissions.put("questionOperator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR));
         permissions.put("localOpen", localOpen);
         return Result.ok(permissions);
@@ -244,12 +249,17 @@ public class OpsController {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         ensureOutboxReplayReady();
-        String remark = RiskConfirmation.requireHigh(actionRemark(request, null));
+        List<Long> ids = List.of(id);
+        String remark = RiskConfirmation.requireCritical(actionRemark(request, null),
+                request == null ? null : request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
+        idempotencyService.requirePreview(uid, "OUTBOX_RETRY_BATCH", ids, request == null ? null : request.previewNonce());
         adminAuditService.requireWritable("OUTBOX_RETRY", "OUTBOX", id);
+        idempotencyService.requireFresh(uid, "OUTBOX_RETRY_BATCH", ids, idempotencyKey);
         int updated = outboxMessageMapper.markFailedForRetry(id);
         adminAuditService.recordRequired(uid, "OUTBOX_RETRY", "OUTBOX", id, message,
-                Map.of("retried", updated > 0), remark);
-        return Result.ok(Map.of("id", id, "retried", updated > 0));
+                Map.of("retried", updated > 0, "idempotencyKey", idempotencyKey), remark);
+        return Result.ok(Map.of("id", id, "retried", updated > 0, "idempotencyKey", idempotencyKey));
     }
 
     @PostMapping("/outbox/retry-batch")
@@ -455,12 +465,18 @@ public class OpsController {
         if (task.getTaskStatus() == null || task.getTaskStatus() != SearchIndexRetryTaskMapper.STATUS_FAILED) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
-        String remark = RiskConfirmation.requireHigh(actionRemark(request, null));
+        List<Long> ids = List.of(id);
+        String remark = RiskConfirmation.requireCritical(actionRemark(request, null),
+                request == null ? null : request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
+        idempotencyService.requirePreview(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", ids,
+                request == null ? null : request.previewNonce());
         adminAuditService.requireWritable("SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id);
+        idempotencyService.requireFresh(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", ids, idempotencyKey);
         boolean replayed = searchIndexRetryService.replayFailed(id);
         adminAuditService.recordRequired(uid, "SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id,
-                task, Map.of("replayed", replayed), remark);
-        return Result.ok(Map.of("id", id, "replayed", replayed));
+                task, Map.of("replayed", replayed, "idempotencyKey", idempotencyKey), remark);
+        return Result.ok(Map.of("id", id, "replayed", replayed, "idempotencyKey", idempotencyKey));
     }
 
     @PostMapping("/search-index-retry-tasks/replay-batch")
@@ -1186,6 +1202,9 @@ public class OpsController {
 
     public record ActionRemarkRequest(
             @Size(max = 500) String remark,
-            @Size(max = 500) String reason) {
+            @Size(max = 500) String reason,
+            @Size(max = 32) String confirmationPhrase,
+            @Size(max = 80) String idempotencyKey,
+            @Size(max = 80) String previewNonce) {
     }
 }

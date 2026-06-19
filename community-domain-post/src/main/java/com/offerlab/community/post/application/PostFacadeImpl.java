@@ -7,6 +7,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
@@ -18,6 +19,7 @@ import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
@@ -29,8 +31,12 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.ZoneOffset;
 import java.time.Instant;
@@ -59,11 +65,14 @@ public class PostFacadeImpl implements PostFacade {
     private final PostApplicationService postService;
     private final UserFacade userFacade;
     private final MigrationCheckService migrationCheckService;
+    private final AdminPermissionService adminPermissionService;
 
     private static final int SUMMARY_LEN = 120;
     private static final int MAX_SYNTHETIC_SCAN_ROWS = 1000;
     private static final int SYNTHETIC_SCAN_MULTIPLIER = 6;
     private static final int MAX_BATCH_LOOKUP_IDS = 500;
+    private static final long ANONYMOUS_AUTHOR_ID = 0L;
+    private static final ObjectMapper EXT_JSON_MAPPER = new ObjectMapper();
 
     @Override
     public PostDTO getPost(Long postId) {
@@ -80,7 +89,7 @@ public class PostFacadeImpl implements PostFacade {
         if (!isVisible(dto, viewerUid)) {
             return null;
         }
-        return enrichFull(dto);
+        return enrichFull(dto, viewerUid);
     }
 
     @Override
@@ -106,7 +115,7 @@ public class PostFacadeImpl implements PostFacade {
                 result.put(p.getId(), toBrief(p, tags.getOrDefault(p.getId(), List.of())));
             }
         }
-        enrichBriefs(result.values());
+        enrichBriefs(result.values(), viewerUid);
         if (!includeTestData) {
             result.entrySet().removeIf(entry -> PublicContentFilter.isSyntheticPost(entry.getValue()));
         }
@@ -194,9 +203,15 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public PageResult<PostBriefDTO> getHot(String cursor, int size) {
+        return getHot(cursor, size, null);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> getHot(String cursor, int size, Integer domain) {
         int limit = pageSize(size);
+        Integer activeDomain = requireOptionalDomain(domain);
         HotCursor hotCursor = HotCursor.parse(cursor);
-        return pagedHotPo(postMapper.selectHotPosts(hotCursor.score(), hotCursor.time(), hotCursor.id(), scanSize(limit)), limit);
+        return pagedHotPo(postMapper.selectHotPosts(hotCursor.score(), hotCursor.time(), hotCursor.id(), activeDomain, scanSize(limit)), limit);
     }
 
     @Override
@@ -207,15 +222,9 @@ public class PostFacadeImpl implements PostFacade {
     @Override
     public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
                                              long cursor, int size, boolean includeTestData) {
+        Integer activeDomain = requireOptionalDomain(domain);
         int limit = pageSize(size);
-        List<Post> list = scanPublicPosts(authorId, tagId, postType, featured, cursor, limit);
-
-        // In-memory domain filter for Phase 1
-        if (domain != null) {
-            list = list.stream()
-                    .filter(p -> p.getDomain() != null && p.getDomain().equals(domain))
-                    .toList();
-        }
+        List<Post> list = scanPublicPosts(authorId, tagId, postType, featured, activeDomain, cursor, limit);
 
         return paged(list, limit, includeTestData);
     }
@@ -242,7 +251,7 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, Post> postById = list.stream().collect(Collectors.toMap(Post::getId, post -> post, (left, right) -> left));
         Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
         List<PostBriefDTO> visible = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
-        enrichBriefs(visible);
+        enrichBriefs(visible, null);
         int syntheticFiltered = 0;
         if (!includeTestData) {
             int beforeFilter = visible.size();
@@ -289,11 +298,13 @@ public class PostFacadeImpl implements PostFacade {
                         .summary(summary(p.getContent()))
                         .coverUrl(p.getCoverUrl())
                         .extJson(extJson.get(p.getId()))
+                        .domain(domainOf(extJson.get(p.getId())))
+                        .anonymous(isAnonymousPost(extJson.get(p.getId())))
                         .tags(tags.getOrDefault(p.getId(), List.of()))
                         .createTime(p.getCreateTime())
                         .build())
                 .toList();
-        enrichBriefs(items);
+        enrichBriefs(items, null);
         items = items.stream()
                 .filter(post -> !PublicContentFilter.isSyntheticPost(post))
                 .toList();
@@ -319,11 +330,13 @@ public class PostFacadeImpl implements PostFacade {
                         .summary(summary(p.getContent()))
                         .coverUrl(p.getCoverUrl())
                         .extJson(extJson.get(p.getId()))
+                        .domain(domainOf(extJson.get(p.getId())))
+                        .anonymous(isAnonymousPost(extJson.get(p.getId())))
                         .tags(tags.getOrDefault(p.getId(), List.of()))
                         .createTime(p.getCreateTime())
                         .build())
                 .toList();
-        enrichBriefs(visible);
+        enrichBriefs(visible, null);
         visible = visible.stream()
                 .filter(post -> !PublicContentFilter.isSyntheticPost(post))
                 .toList();
@@ -364,7 +377,8 @@ public class PostFacadeImpl implements PostFacade {
                 .toList();
     }
 
-    private List<Post> scanPublicPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int pageSize) {
+    private List<Post> scanPublicPosts(Long authorId, Long tagId, Integer postType, Boolean featured,
+                                       Integer domain, long cursor, int pageSize) {
         int scanLimit = scanSize(pageSize);
         int maxRows = Math.min(MAX_SYNTHETIC_SCAN_ROWS,
                 Math.max(scanLimit, scanLimit * SYNTHETIC_SCAN_MULTIPLIER));
@@ -372,7 +386,7 @@ public class PostFacadeImpl implements PostFacade {
         long scanCursor = cursor;
         while (scanned.size() < maxRows) {
             int remaining = Math.min(scanLimit, maxRows - scanned.size());
-            List<Post> batch = postRepo.findPosts(authorId, tagId, postType, featured, scanCursor, remaining);
+            List<Post> batch = postRepo.findPosts(authorId, tagId, postType, featured, domain, scanCursor, remaining);
             if (batch.isEmpty()) {
                 break;
             }
@@ -438,33 +452,44 @@ public class PostFacadeImpl implements PostFacade {
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
                 .extJson(p.getExtJson())
+                .domain(effectiveDomain(p.getDomain()))
+                .anonymous(isAnonymousPost(p))
                 .tags(tags)
                 .createTime(p.getCreateTime())
                 .build();
     }
 
     private void enrichBriefs(Collection<PostBriefDTO> posts) {
+        enrichBriefs(posts, null);
+    }
+
+    private void enrichBriefs(Collection<PostBriefDTO> posts, Long viewerUid) {
         if (posts == null || posts.isEmpty()) {
             return;
         }
         List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
         Map<Long, PostCounterDTO> counters = batchGetCounters(postIds);
-        Map<Long, com.offerlab.community.user.api.dto.UserBriefDTO> authors = userFacade.batchGetUserBriefs(
+        Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(
                 posts.stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet()));
         posts.forEach(p -> {
             p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
-            p.setAuthor(authors.get(p.getAuthorId()));
+            boolean revealAuthor = !isAnonymousPost(p) || canViewRealAuthor(viewerUid, p.getAuthorId());
+            p.setAuthor(revealAuthor ? authors.get(p.getAuthorId()) : anonymousAuthor());
+            if (!revealAuthor) {
+                p.setAuthorId(ANONYMOUS_AUTHOR_ID);
+            }
         });
     }
 
-    private PostDTO enrichFull(PostDTO dto) {
+    private PostDTO enrichFull(PostDTO dto, Long viewerUid) {
         if (dto == null) {
             return null;
         }
+        boolean revealAuthor = !isAnonymousPost(dto) || canViewRealAuthor(viewerUid, dto.getAuthorId());
         return PostDTO.builder()
                 .id(dto.getId())
-                .authorId(dto.getAuthorId())
-                .author(userFacade.getUserBrief(dto.getAuthorId()))
+                .authorId(revealAuthor ? dto.getAuthorId() : ANONYMOUS_AUTHOR_ID)
+                .author(revealAuthor ? userFacade.getUserBrief(dto.getAuthorId()) : anonymousAuthor())
                 .postType(dto.getPostType())
                 .title(dto.getTitle())
                 .content(dto.getContent())
@@ -472,6 +497,8 @@ public class PostFacadeImpl implements PostFacade {
                 .visibility(dto.getVisibility())
                 .postStatus(dto.getPostStatus())
                 .extJson(dto.getExtJson())
+                .domain(effectiveDomain(dto.getDomain()))
+                .anonymous(isAnonymousPost(dto))
                 .tags(dto.getTags())
                 .counter(batchGetCounters(List.of(dto.getId())).getOrDefault(dto.getId(), emptyCounter(dto.getId())))
                 .createTime(dto.getCreateTime())
@@ -513,9 +540,84 @@ public class PostFacadeImpl implements PostFacade {
                 .visibility(p.getVisibility())
                 .postStatus(p.getPostStatus())
                 .extJson(p.getExtJson())
+                .domain(effectiveDomain(p.getDomain()))
+                .anonymous(isAnonymousPost(p))
                 .tags(tags)
                 .createTime(p.getCreateTime())
                 .updateTime(p.getUpdateTime())
+                .build();
+    }
+
+    private boolean isAnonymousPost(Post post) {
+        return post != null && Objects.equals(effectiveDomain(post.getDomain()), Post.DOMAIN_CAREER) && isAnonymousPost(post.getExtJson());
+    }
+
+    private boolean isAnonymousPost(PostBriefDTO post) {
+        return post != null && Objects.equals(effectiveDomain(post.getDomain()), Post.DOMAIN_CAREER) && Boolean.TRUE.equals(post.getAnonymous());
+    }
+
+    private boolean isAnonymousPost(PostDTO post) {
+        return post != null && Objects.equals(effectiveDomain(post.getDomain()), Post.DOMAIN_CAREER) && Boolean.TRUE.equals(post.getAnonymous());
+    }
+
+    private boolean isAnonymousPost(String extJson) {
+        try {
+            JsonNode root = EXT_JSON_MAPPER.readTree(extJson);
+            return root != null && root.path("anonymous").asBoolean(false);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private Integer domainOf(String extJson) {
+        try {
+            JsonNode root = EXT_JSON_MAPPER.readTree(extJson);
+            Integer domain = root != null && root.has("domain") && root.get("domain").canConvertToInt()
+                    ? root.get("domain").asInt()
+                    : null;
+            return effectiveDomain(domain);
+        } catch (Exception ignored) {
+            return Post.DOMAIN_TECH;
+        }
+    }
+
+    private Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private Integer effectiveDomain(Integer domain) {
+        return PostDomain.fromCode(domain).getCode();
+    }
+
+    private boolean canViewRealAuthor(Long viewerUid, Long authorId) {
+        if (viewerUid == null) {
+            return false;
+        }
+        if (Objects.equals(viewerUid, authorId)) {
+            return true;
+        }
+        return adminPermissionService.isAdmin(viewerUid)
+                || adminPermissionService.hasRole(viewerUid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+    }
+
+    private UserBriefDTO anonymousAuthor() {
+        return UserBriefDTO.builder()
+                .uid(ANONYMOUS_AUTHOR_ID)
+                .nickname("匿名用户")
+                .avatarUrl("")
+                .bio("")
+                .followerCount(0L)
+                .followingCount(0L)
+                .postCount(0L)
+                .profileVisible(false)
+                .intentVisible(false)
+                .privacyReason("匿名发布")
                 .build();
     }
 

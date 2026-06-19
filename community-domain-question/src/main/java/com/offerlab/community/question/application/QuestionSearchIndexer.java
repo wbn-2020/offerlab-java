@@ -23,6 +23,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 @RequiredArgsConstructor
 public class QuestionSearchIndexer {
+    private static final int MAX_SEARCH_WINDOW = 10_000;
+    private static final int MAX_SEARCH_SIZE = 100;
+
     private final ElasticsearchHttpClient elasticsearch;
     private final InterviewQuestionMapper questionMapper;
     private final InterviewQuestionTagMapper questionTagMapper;
@@ -129,8 +132,9 @@ public class QuestionSearchIndexer {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("query", buildQuery(query));
         body.put("sort", buildSort(query == null ? null : query.getSort()));
-        body.put("from", offset);
-        body.put("size", limit);
+        int safeLimit = safeSearchLimit(limit);
+        body.put("from", safeSearchOffset(offset, safeLimit));
+        body.put("size", safeLimit);
         if (!clean(query == null ? null : query.getKeyword()).isBlank()) {
             body.put("highlight", Map.of(
                     "pre_tags", List.of("<em>"),
@@ -143,6 +147,15 @@ public class QuestionSearchIndexer {
             ));
         }
         return elasticsearch.search(elasticsearch.questionIndex(), body).map(this::extractHits);
+    }
+
+    private int safeSearchLimit(int limit) {
+        return Math.max(1, Math.min(limit, MAX_SEARCH_SIZE));
+    }
+
+    private int safeSearchOffset(int offset, int limit) {
+        int maxOffset = Math.max(0, MAX_SEARCH_WINDOW - limit);
+        return (int) Math.min(Math.max(0L, (long) offset), maxOffset);
     }
 
     private Map<String, Object> toDocument(InterviewQuestionPO row) {

@@ -53,4 +53,5 @@ class InfrastructureSafetyGuardTest {
         assertFalse(source.contains("kafkaTemplate.send(kafkaMsg).get();"),
                 "outbox Kafka send must not use an unbounded Future#get()");
     }
+
 }

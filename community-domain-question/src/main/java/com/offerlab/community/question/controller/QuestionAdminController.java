@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.utils.RiskConfirmation;
 import com.offerlab.community.infra.audit.AdminAuditService;
+import com.offerlab.community.infra.ops.AdminOperationIdempotencyService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -46,10 +47,15 @@ import java.util.Map;
 @RequiredArgsConstructor
 @Validated
 public class QuestionAdminController {
+    private static final int PREVIEW_EXPIRES_IN_SECONDS = 300;
+    private static final String OP_AI_TASK_RETRY = "AI_TASK_RETRY";
+    private static final String OP_QUESTION_INDEX_TASK_RETRY = "QUESTION_INDEX_REBUILD_TASK_RETRY";
+
     private final QuestionFacade questionFacade;
     private final AdminPermissionService adminPermissionService;
     private final AdminAuditService adminAuditService;
     private final QuestionIndexTaskService questionIndexTaskService;
+    private final AdminOperationIdempotencyService idempotencyService;
 
     @PostMapping("/posts/{postId}/extract-questions")
     public Result<Map<String, Long>> extractPostQuestions(@PathVariable @Positive Long postId,
@@ -92,12 +98,41 @@ public class QuestionAdminController {
                                        @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
-        String remark = RiskConfirmation.requireHigh(request == null ? null : request.remark());
+        String remark = RiskConfirmation.requireCritical(request == null ? null : request.remark(),
+                request == null ? null : request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
+        List<Long> ids = List.of(id);
+        idempotencyService.requirePreview(uid, OP_AI_TASK_RETRY, ids, request == null ? null : request.previewNonce());
         adminAuditService.requireWritable("AI_TASK_RETRY", "AI_TASK", id);
+        idempotencyService.requireFresh(uid, OP_AI_TASK_RETRY, ids, idempotencyKey);
         AiTaskDTO task = questionFacade.retryTask(id);
         adminAuditService.recordRequired(uid, "AI_TASK_RETRY", "AI_TASK", id, null, task,
                 remark);
         return Result.ok(task);
+    }
+
+    @PostMapping("/ai-tasks/{id}/retry/preview")
+    public Result<Map<String, Object>> previewRetryTask(@PathVariable Long id) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        AiTaskDetailDTO detail = questionFacade.getTaskDetail(id);
+        AiTaskDTO task = detail == null ? null : detail.getTask();
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", id);
+        if (task == null) {
+            item.put("eligible", false);
+            item.put("reason", "NOT_FOUND");
+            item.put("reasonText", "AI task not found");
+        } else {
+            boolean eligible = Integer.valueOf(QuestionConstants.TASK_FAILED).equals(task.getTaskStatus());
+            item.put("eligible", eligible);
+            item.put("reason", eligible ? "READY" : "STATUS_NOT_FAILED");
+            item.put("reasonText", eligible ? "Failed AI task can be retried" : "Only failed AI tasks can be retried");
+            item.put("status", task.getTaskStatus());
+            item.put("objectLabel", "post:" + task.getPostId());
+            item.put("retryCount", task.getRetryCount());
+        }
+        return Result.ok(previewResult(uid, OP_AI_TASK_RETRY, List.of(id), List.of(item)));
     }
 
     @PostMapping("/questions/rebuild")
@@ -154,12 +189,40 @@ public class QuestionAdminController {
             @Valid @RequestBody(required = false) RemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
-        String remark = RiskConfirmation.requireHigh(request == null ? null : request.remark());
-        adminAuditService.requireWritable("QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", taskId);
+        String remark = RiskConfirmation.requireCritical(request == null ? null : request.remark(),
+                request == null ? null : request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
+        List<String> ids = List.of(taskId);
+        idempotencyService.requirePreview(uid, OP_QUESTION_INDEX_TASK_RETRY, ids, request == null ? null : request.previewNonce());
+        adminAuditService.requireWritable(OP_QUESTION_INDEX_TASK_RETRY, "QUESTION_INDEX", taskId);
+        idempotencyService.requireFresh(uid, OP_QUESTION_INDEX_TASK_RETRY, ids, idempotencyKey);
         QuestionIndexTaskService.QuestionIndexTask task = questionIndexTaskService.retryTask(taskId);
-        adminAuditService.recordRequired(uid, "QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", taskId,
+        adminAuditService.recordRequired(uid, OP_QUESTION_INDEX_TASK_RETRY, "QUESTION_INDEX", taskId,
                 null, task, remark);
         return Result.ok(task);
+    }
+
+    @PostMapping("/questions/index-tasks/{taskId}/retry/preview")
+    public Result<Map<String, Object>> previewRetryQuestionIndexTask(@PathVariable String taskId) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        QuestionIndexTaskService.QuestionIndexTask task = questionIndexTaskService.getTask(taskId);
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", taskId);
+        if (task == null) {
+            item.put("eligible", false);
+            item.put("reason", "NOT_FOUND");
+            item.put("reasonText", "Question index task not found");
+        } else {
+            boolean eligible = task.isRetryable() || "FAILED".equals(task.getStatus());
+            item.put("eligible", eligible);
+            item.put("reason", eligible ? "READY" : "STATUS_NOT_FAILED");
+            item.put("reasonText", eligible ? "Failed index task can be retried" : "Only failed index tasks can be retried");
+            item.put("status", task.getStatus());
+            item.put("objectLabel", task.getIndexName() == null ? task.getTaskId() : task.getIndexName());
+            item.put("retryCount", task.isRetryable() ? 1 : 0);
+        }
+        return Result.ok(previewResult(uid, OP_QUESTION_INDEX_TASK_RETRY, List.of(taskId), List.of(item)));
     }
 
     @GetMapping("/questions/index-tasks")
@@ -391,7 +454,29 @@ public class QuestionAdminController {
     }
 
     public record RemarkRequest(@Size(max = 500) String remark,
-                                @Size(max = 32) String confirmationPhrase) {
+                                @Size(max = 32) String confirmationPhrase,
+                                @Size(max = 80) String idempotencyKey,
+                                @Size(max = 80) String previewNonce) {
+    }
+
+    private Map<String, Object> previewResult(Long uid, String operation, List<?> ids, List<Map<String, Object>> items) {
+        long eligible = items.stream()
+                .filter(item -> Boolean.TRUE.equals(item.get("eligible")))
+                .count();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("operation", operation);
+        result.put("previewNonce", idempotencyService.issuePreview(uid, operation, ids));
+        result.put("requested", ids.size());
+        result.put("eligible", eligible);
+        result.put("skipped", ids.size() - eligible);
+        result.put("estimatedImpact", eligible);
+        result.put("maxBatchSize", 1);
+        result.put("previewExpiresInSeconds", PREVIEW_EXPIRES_IN_SECONDS);
+        result.put("requiresAuditReason", true);
+        result.put("confirmationPhrase", RiskConfirmation.CONFIRM_PHRASE);
+        result.put("riskReason", eligible == ids.size() ? "ALL_READY" : "PARTIAL_SKIPPED");
+        result.put("items", items);
+        return result;
     }
 
     private static Map<String, Object> duplicateAuditAfter(String idKey, Long idValue, QuestionDuplicateGroupDTO dto) {

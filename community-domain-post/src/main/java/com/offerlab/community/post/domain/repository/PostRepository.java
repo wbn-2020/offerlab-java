@@ -25,9 +25,9 @@ public interface PostRepository {
     /** 全站最新（公开 + 已发布） */
     List<Post> findLatest(long cursor, int size);
 
-    List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, long cursor, int size);
+    List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size);
 
     default List<Post> findPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
-        return findPosts(authorId, tagId, postType, null, cursor, size);
+        return findPosts(authorId, tagId, postType, null, null, cursor, size);
     }
 }

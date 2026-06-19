@@ -43,6 +43,10 @@ public interface PostFacade {
 
     PageResult<PostBriefDTO> getHot(String cursor, int size);
 
+    default PageResult<PostBriefDTO> getHot(String cursor, int size, Integer domain) {
+        return getHot(cursor, size);
+    }
+
 
     List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit);
     PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size);

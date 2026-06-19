@@ -21,6 +21,8 @@ public class PostDraftDTO {
     private String content;
     private String coverUrl;
     private Integer visibility;
+    private Integer domain;
+    private Boolean anonymous;
     private String extJson;
     private List<Long> tagIds;
     private List<String> tagNames;

@@ -10,6 +10,7 @@ import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.DomainModeratorDTO;
 import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostContentTypeDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
@@ -18,12 +19,14 @@ import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostFeaturedService;
 import com.offerlab.community.post.application.PostKnowledgeReviewService;
 import com.offerlab.community.post.application.PostReportService;
 import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -54,6 +57,7 @@ public class PostController {
     private final PostFeaturedService featuredService;
     private final PostKnowledgeReviewService knowledgeReviewService;
     private final PostDraftService draftService;
+    private final DomainModeratorService domainModeratorService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
 
@@ -88,13 +92,14 @@ public class PostController {
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
     public Result<Map<String, Object>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
+        Integer domain = requireOptionalDomain(req.getDomain());
         contentModerationService.requireUserCanPublish(uid);
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
                 uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
         Long id = postFacade.publishPost(PostCreateCmd.builder()
                 .authorId(uid)
                 .postType(req.getPostType())
-                .domain(req.getDomain())
+                .domain(domain)
                 .title(req.getTitle())
                 .content(req.getContent())
                 .coverUrl(req.getCoverUrl())
@@ -102,6 +107,7 @@ public class PostController {
                 .extJson(req.getExtJson())
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
+                .anonymous(req.getAnonymous())
                 .reviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
@@ -115,6 +121,7 @@ public class PostController {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         Long uid = UserContext.require();
+        Integer domain = requireOptionalDomain(req.getDomain());
         contentModerationService.requireUserCanPublish(uid);
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
                 uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
@@ -124,12 +131,13 @@ public class PostController {
                 .operatorUid(uid)
                 .title(req.getTitle())
                 .content(req.getContent())
-                .domain(req.getDomain())
+                .domain(domain)
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
+                .anonymous(req.getAnonymous())
                 .reviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
@@ -168,7 +176,8 @@ public class PostController {
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
         Long effectiveTagId = tagId != null ? tagId : tag;
-        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured, domain, cursor, size, includeTestData));
+        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured,
+                requireOptionalDomain(domain), cursor, size, includeTestData));
     }
 
     @PublicApi
@@ -195,16 +204,16 @@ public class PostController {
 
     @GetMapping("/admin/reports")
     public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
+                                                   @RequestParam(required = false) Integer domain,
                                                    @RequestParam(defaultValue = "20") int limit,
                                                    @RequestParam(defaultValue = "false") boolean includeTestData) {
-        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        return Result.ok(reportService.listRecent(status, limit, includeTestData));
+        domainModeratorService.requireModerateDomain(UserContext.require(), domain);
+        return Result.ok(reportService.listRecent(status, domain, limit, includeTestData));
     }
 
     @PostMapping("/admin/reports/{reportId}/review")
     public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
     }
@@ -213,7 +222,6 @@ public class PostController {
     public Result<Map<String, Object>> updateFeatured(@PathVariable Long postId,
                                                       @Valid @RequestBody FeaturedReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         return Result.ok(featuredService.updateFeatured(postId, Boolean.TRUE.equals(req.getFeatured()), uid, req.getNote()));
     }
 
@@ -221,7 +229,6 @@ public class PostController {
     public Result<Map<String, Object>> reviewKnowledge(@PathVariable Long postId,
                                                        @Valid @RequestBody KnowledgeReviewReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         return Result.ok(knowledgeReviewService.applyReview(postId, uid,
                 new PostKnowledgeReviewService.KnowledgeReviewCmd(
                         req.getSummary(),
@@ -231,6 +238,29 @@ public class PostController {
                         req.getSuggestedTags(),
                         req.getNote()
                 )));
+    }
+
+    @GetMapping("/admin/domain-moderators")
+    public Result<List<DomainModeratorDTO>> listDomainModerators(@RequestParam(required = false) Integer domain,
+                                                                 @RequestParam(required = false) Boolean enabled,
+                                                                 @RequestParam(defaultValue = "100") int limit) {
+        domainModeratorService.requireModerateDomain(UserContext.require(), domain);
+        return Result.ok(domainModeratorService.listModerators(domain, enabled, limit));
+    }
+
+    @PostMapping("/admin/domain-moderators")
+    public Result<DomainModeratorDTO> addDomainModerator(@Valid @RequestBody DomainModeratorReq req) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireAdmin(uid);
+        return Result.ok(domainModeratorService.upsertModerator(req.getUid(), req.getDomain(), uid, req.getNote()));
+    }
+
+    @PostMapping("/admin/domain-moderators/{uid}/status")
+    public Result<DomainModeratorDTO> updateDomainModeratorStatus(@PathVariable Long uid,
+                                                                  @Valid @RequestBody DomainModeratorStatusReq req) {
+        Long operatorUid = UserContext.require();
+        adminPermissionService.requireAdmin(operatorUid);
+        return Result.ok(domainModeratorService.updateModeratorStatus(uid, req.getDomain(), req.getEnabled(), operatorUid, req.getNote()));
     }
 
     @Data
@@ -250,6 +280,7 @@ public class PostController {
         private Integer visibility;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
+        private Boolean anonymous;
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
@@ -273,6 +304,7 @@ public class PostController {
         private Integer domain;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
+        private Boolean anonymous;
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
@@ -349,5 +381,35 @@ public class PostController {
         private List<@Size(max = 64) String> suggestedTags;
         @Size(max = 500)
         private String note;
+    }
+
+    @Data
+    public static class DomainModeratorReq {
+        @NotNull
+        private Long uid;
+        @NotNull
+        private Integer domain;
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
+    public static class DomainModeratorStatusReq {
+        @NotNull
+        private Integer domain;
+        @NotNull
+        private Boolean enabled;
+        @Size(max = 500)
+        private String note;
+    }
+
+    private static Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
     }
 }

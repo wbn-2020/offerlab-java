@@ -4,6 +4,7 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.exception.SystemException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
+import com.offerlab.community.infra.ops.AdminOperationIdempotencyService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.question.api.dto.AiTaskDTO;
@@ -14,6 +15,7 @@ import com.offerlab.community.question.api.dto.CompanyAliasDTO;
 import com.offerlab.community.question.api.dto.QuestionAdminUpdateCmd;
 import com.offerlab.community.question.api.dto.QuestionDTO;
 import com.offerlab.community.question.api.dto.QuestionDuplicateGroupDTO;
+import com.offerlab.community.question.application.QuestionConstants;
 import com.offerlab.community.question.application.QuestionFacade;
 import com.offerlab.community.question.application.QuestionIndexTaskService;
 import com.offerlab.community.question.controller.QuestionAdminController;
@@ -31,6 +33,7 @@ import java.util.Map;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -52,14 +55,20 @@ class QuestionAdminControllerApiTest {
     private QuestionIndexTaskService questionIndexTaskService;
     @Mock
     private JwtService jwtService;
+    private AdminOperationIdempotencyService idempotencyService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
+        idempotencyService = new AdminOperationIdempotencyService();
         mvc = ApiTestSupport.mvc(
-                new QuestionAdminController(questionFacade, adminPermissionService, adminAuditService, questionIndexTaskService),
+                new QuestionAdminController(questionFacade, adminPermissionService, adminAuditService, questionIndexTaskService, idempotencyService),
                 jwtService);
+    }
+
+    private String previewNonce(String operation, List<?> ids) {
+        return idempotencyService.issuePreview(7L, operation, ids);
     }
 
     @Test
@@ -321,6 +330,134 @@ class QuestionAdminControllerApiTest {
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         verify(questionFacade).getTaskMetrics(100);
         verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void aiTaskRetryRequiresCriticalConfirmationAndIdempotencyBeforeSideEffects() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        mvc.perform(post("/api/v1/admin/ai-tasks/501/retry")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"retry failed AI task\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"ai-retry-key-1\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        verify(questionFacade, never()).retryTask(501L);
+        verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void questionIndexTaskRetryRequiresCriticalConfirmationAndIdempotencyBeforeSideEffects() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        mvc.perform(post("/api/v1/admin/questions/index-tasks/task-1/retry")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"retry failed question index task\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"index-retry-key-1\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        verify(questionIndexTaskService, never()).retryTask("task-1");
+        verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void aiTaskRetryPreviewAndExecuteUsePreviewBoundIdempotencyKey() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(questionFacade.getTaskDetail(501L)).thenReturn(AiTaskDetailDTO.builder()
+                .task(AiTaskDTO.builder()
+                        .id(501L)
+                        .postId(123L)
+                        .taskStatus(QuestionConstants.TASK_FAILED)
+                        .retryCount(1)
+                        .build())
+                .sourcePostId(123L)
+                .sourcePostTitle("Java interview recap")
+                .build());
+        AiTaskDTO retried = AiTaskDTO.builder()
+                .id(501L)
+                .postId(123L)
+                .taskStatus(QuestionConstants.TASK_PENDING)
+                .retryCount(2)
+                .build();
+        when(questionFacade.retryTask(501L)).thenReturn(retried);
+
+        mvc.perform(post("/api/v1/admin/ai-tasks/501/retry/preview")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.operation").value("AI_TASK_RETRY"))
+                .andExpect(jsonPath("$.data.previewNonce").isNotEmpty())
+                .andExpect(jsonPath("$.data.confirmationPhrase").value("CONFIRM"))
+                .andExpect(jsonPath("$.data.items[0].eligible").value(true));
+
+        String nonce = previewNonce("AI_TASK_RETRY", List.of(501L));
+        mvc.perform(post("/api/v1/admin/ai-tasks/501/retry")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"retry failed AI task\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"ai-retry-key-1\",\"previewNonce\":\"" + nonce + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.id").value(501));
+
+        verify(adminPermissionService, times(2)).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        verify(questionFacade).getTaskDetail(501L);
+        verify(adminAuditService).requireWritable("AI_TASK_RETRY", "AI_TASK", 501L);
+        verify(questionFacade).retryTask(501L);
+        verify(adminAuditService).recordRequired(7L, "AI_TASK_RETRY", "AI_TASK", 501L, null, retried,
+                "retry failed AI task");
+    }
+
+    @Test
+    void questionIndexTaskRetryPreviewAndExecuteUsePreviewBoundIdempotencyKey() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(questionIndexTaskService.getTask("task-1")).thenReturn(QuestionIndexTaskService.QuestionIndexTask.builder()
+                .taskId("task-1")
+                .type("QUESTION_INDEX_REBUILD")
+                .status("FAILED")
+                .operatorUid(7L)
+                .retryable(true)
+                .indexed(2)
+                .failed(1)
+                .total(3)
+                .message("index failed")
+                .build());
+        QuestionIndexTaskService.QuestionIndexTask retried = QuestionIndexTaskService.QuestionIndexTask.builder()
+                .taskId("task-1")
+                .type("QUESTION_INDEX_REBUILD")
+                .status("PENDING")
+                .operatorUid(7L)
+                .retryable(false)
+                .build();
+        when(questionIndexTaskService.retryTask("task-1")).thenReturn(retried);
+
+        mvc.perform(post("/api/v1/admin/questions/index-tasks/task-1/retry/preview")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.operation").value("QUESTION_INDEX_REBUILD_TASK_RETRY"))
+                .andExpect(jsonPath("$.data.previewNonce").isNotEmpty())
+                .andExpect(jsonPath("$.data.confirmationPhrase").value("CONFIRM"))
+                .andExpect(jsonPath("$.data.items[0].eligible").value(true));
+
+        String nonce = previewNonce("QUESTION_INDEX_REBUILD_TASK_RETRY", List.of("task-1"));
+        mvc.perform(post("/api/v1/admin/questions/index-tasks/task-1/retry")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"remark\":\"retry failed question index task\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"index-retry-key-1\",\"previewNonce\":\"" + nonce + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.taskId").value("task-1"));
+
+        verify(adminPermissionService, times(2)).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        verify(questionIndexTaskService).getTask("task-1");
+        verify(adminAuditService).requireWritable("QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", "task-1");
+        verify(questionIndexTaskService).retryTask("task-1");
+        verify(adminAuditService).recordRequired(7L, "QUESTION_INDEX_REBUILD_TASK_RETRY", "QUESTION_INDEX", "task-1",
+                null, retried, "retry failed question index task");
     }
 
     @Test

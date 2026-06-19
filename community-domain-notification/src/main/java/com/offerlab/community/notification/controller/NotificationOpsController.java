@@ -87,12 +87,18 @@ public class NotificationOpsController {
         if (task.getTaskStatus() == null || task.getTaskStatus() != NotificationRetryTaskMapper.STATUS_FAILED) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
-        String remark = RiskConfirmation.requireHigh(actionRemark(request));
+        List<Long> ids = List.of(id);
+        String remark = RiskConfirmation.requireCritical(actionRemark(request),
+                request == null ? null : request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
+        idempotencyService.requirePreview(uid, "NOTIF_RETRY_REPLAY_BATCH", ids,
+                request == null ? null : request.previewNonce());
         adminAuditService.requireWritable("NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", id);
+        idempotencyService.requireFresh(uid, "NOTIF_RETRY_REPLAY_BATCH", ids, idempotencyKey);
         boolean replayed = retryService.replayFailed(id);
         adminAuditService.recordRequired(uid, "NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", id,
-                task, Map.of("replayed", replayed), remark);
-        return Result.ok(Map.of("id", id, "replayed", replayed));
+                task, Map.of("replayed", replayed, "idempotencyKey", idempotencyKey), remark);
+        return Result.ok(Map.of("id", id, "replayed", replayed, "idempotencyKey", idempotencyKey));
     }
 
     @PostMapping("/notification-retry-tasks/replay-batch")
@@ -213,7 +219,10 @@ public class NotificationOpsController {
     }
 
     public record ActionRemarkRequest(@Size(max = 500) String remark,
-                                      @Size(max = 500) String reason) {
+                                      @Size(max = 500) String reason,
+                                      @Size(max = 32) String confirmationPhrase,
+                                      @Size(max = 80) String idempotencyKey,
+                                      @Size(max = 80) String previewNonce) {
     }
 
     private static String actionRemark(ActionRemarkRequest request) {

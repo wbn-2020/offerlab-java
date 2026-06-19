@@ -454,15 +454,10 @@ public class SearchFacadeImpl implements SearchFacade {
                 .tags(tags.getOrDefault(p.getId(), List.of()))
                 .createTime(p.getCreateTime())
                 .build()).toList();
-        items = enrich(items);
-        int syntheticFiltered = 0;
-        if (!includeTestData) {
-            int beforeFilter = items.size();
-            items = items.stream()
-                    .filter(post -> !PublicContentFilter.isSyntheticPost(post))
-                    .toList();
-            syntheticFiltered = beforeFilter - items.size();
-        }
+        int syntheticFiltered = includeTestData ? 0 : (int) items.stream()
+                .filter(PublicContentFilter::isSyntheticPost)
+                .count();
+        items = filterVisibleSearchResults(items, includeTestData);
         if ("hot".equals(sort)) {
             items = items.stream()
                     .sorted(Comparator.comparingDouble(this::hotScore).reversed()

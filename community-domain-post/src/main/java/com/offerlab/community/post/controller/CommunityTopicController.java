@@ -77,7 +77,7 @@ public class CommunityTopicController {
                                                   @RequestParam(required = false) Boolean featured,
                                                   @RequestParam(defaultValue = "0") long cursor,
                                                   @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(topicService.listPosts(slug, type, featured, cursor, size));
+        return Result.ok(topicService.listPosts(slug, type, featured, cursor, size, UserContext.get()));
     }
 
     @GetMapping("/admin")

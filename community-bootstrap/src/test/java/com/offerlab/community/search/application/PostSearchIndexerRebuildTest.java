@@ -101,8 +101,8 @@ class PostSearchIndexerRebuildTest {
                 .toList();
         when(postMapper.selectPublicPostsForIndexAfterId(0L, 500)).thenReturn(firstBatch);
         when(postMapper.selectPublicPostsForIndexAfterId(500L, 500)).thenReturn(List.of(post(501L)));
-        when(extensionMapper.selectById(any(Long.class))).thenAnswer(invocation -> extension(invocation.getArgument(0)));
-        when(counterMapper.selectById(any(Long.class))).thenAnswer(invocation -> counter(invocation.getArgument(0)));
+        when(extensionMapper.selectBatchIds(any())).thenAnswer(invocation -> extensions(invocation.getArgument(0)));
+        when(counterMapper.selectBatchIds(any())).thenAnswer(invocation -> counters(invocation.getArgument(0)));
         when(tagMapper.selectTagsByPostIds(any())).thenReturn(List.of());
         when(elasticsearch.indexDocument(eq("post_idx"), any(String.class), any())).thenReturn(true);
 
@@ -120,8 +120,8 @@ class PostSearchIndexerRebuildTest {
     void rebuildAllReportsFailedWhenAnyDocumentCannotBeIndexed() {
         PostPO first = post(1L);
         when(postMapper.selectPublicPostsForIndexAfterId(0L, 500)).thenReturn(List.of(first));
-        when(extensionMapper.selectById(1L)).thenReturn(extension(1L));
-        when(counterMapper.selectById(1L)).thenReturn(counter(1L));
+        when(extensionMapper.selectBatchIds(any())).thenAnswer(invocation -> extensions(invocation.getArgument(0)));
+        when(counterMapper.selectBatchIds(any())).thenAnswer(invocation -> counters(invocation.getArgument(0)));
         when(tagMapper.selectTagsByPostIds(any())).thenReturn(List.of());
         when(elasticsearch.indexDocument(eq("post_idx"), eq("1"), any())).thenReturn(false);
 
@@ -202,5 +202,19 @@ class PostSearchIndexerRebuildTest {
         counter.setCommentCount(0L);
         counter.setFavoriteCount(0L);
         return counter;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<PostExtensionPO> extensions(Object ids) {
+        return ((List<Long>) ids).stream()
+                .map(PostSearchIndexerRebuildTest::extension)
+                .toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<PostCounterPO> counters(Object ids) {
+        return ((List<Long>) ids).stream()
+                .map(PostSearchIndexerRebuildTest::counter)
+                .toList();
     }
 }

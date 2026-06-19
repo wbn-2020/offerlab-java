@@ -19,10 +19,13 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -40,7 +43,7 @@ public class SearchIndexTaskService {
     private final StringRedisTemplate redis;
     private final Map<String, SearchIndexTask> tasks = new ConcurrentHashMap<>();
     private final Object rebuildSubmitLock = new Object();
-    private Executor rebuildExecutor = ForkJoinPool.commonPool();
+    private Executor rebuildExecutor = defaultRebuildExecutor();
 
     public SearchIndexTaskService(PostSearchIndexer indexer) {
         this(indexer, null);
@@ -78,7 +81,14 @@ public class SearchIndexTaskService {
             pruneOldTasks();
         }
 
-        CompletableFuture.runAsync(() -> runRebuild(task.getTaskId()), rebuildExecutor);
+        try {
+            CompletableFuture.runAsync(() -> runRebuild(task.getTaskId()), rebuildExecutor);
+        } catch (RuntimeException e) {
+            tasks.remove(task.getTaskId());
+            releaseDistributedActiveTask(task.getTaskId());
+            log.error("search index rebuild task scheduling failed: taskId={}", task.getTaskId(), e);
+            throw new BizException(ErrorCode.SYSTEM_ERROR.getCode(), "Search index rebuild task could not be scheduled");
+        }
         return snapshot(task);
     }
 
@@ -123,7 +133,23 @@ public class SearchIndexTaskService {
     }
 
     void setRebuildExecutorForTest(Executor rebuildExecutor) {
-        this.rebuildExecutor = rebuildExecutor == null ? ForkJoinPool.commonPool() : rebuildExecutor;
+        this.rebuildExecutor = rebuildExecutor == null ? defaultRebuildExecutor() : rebuildExecutor;
+    }
+
+    private static Executor defaultRebuildExecutor() {
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, "offerlab-search-index-rebuild");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return new ThreadPoolExecutor(
+                1,
+                1,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1),
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     private SearchIndexTask findActiveRebuildTask() {

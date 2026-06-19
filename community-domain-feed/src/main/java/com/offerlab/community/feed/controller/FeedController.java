@@ -1,5 +1,7 @@
 package com.offerlab.community.feed.controller;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.feed.api.FeedFacade;
@@ -8,6 +10,7 @@ import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.post.domain.model.PostDomain;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,7 +32,7 @@ public class FeedController {
                                                     @RequestParam(defaultValue = "20") int size,
                                                     @RequestParam(required = false) Integer domain) {
         Long uid = UserContext.require();
-        return Result.ok(feedFacade.getFollowingFeed(uid, cursor, clamp(size), domain));
+        return Result.ok(feedFacade.getFollowingFeed(uid, cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
@@ -37,7 +40,7 @@ public class FeedController {
     public Result<PageResult<FeedItemVO>> recommend(@RequestParam(required = false) String cursor,
                                                     @RequestParam(defaultValue = "20") int size,
                                                     @RequestParam(required = false) Integer domain) {
-        return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size), domain));
+        return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
@@ -45,7 +48,7 @@ public class FeedController {
     public Result<PageResult<FeedItemVO>> latest(@RequestParam(required = false) String cursor,
                                                  @RequestParam(defaultValue = "20") int size,
                                                  @RequestParam(required = false) Integer domain) {
-        return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size), domain));
+        return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
@@ -53,7 +56,7 @@ public class FeedController {
     public Result<PageResult<FeedItemVO>> hot(@RequestParam(required = false) String cursor,
                                               @RequestParam(defaultValue = "20") int size,
                                               @RequestParam(required = false) Integer domain) {
-        return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), domain));
+        return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PostMapping("/feedback")
@@ -70,5 +73,15 @@ public class FeedController {
     private int clamp(int size) {
         if (size <= 0) return 20;
         return Math.min(size, 50);
+    }
+
+    private Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
     }
 }

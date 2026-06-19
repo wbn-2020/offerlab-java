@@ -1,6 +1,9 @@
 package com.offerlab.community.analytics.application;
 
 import com.offerlab.community.analytics.api.AnalyticsFacade;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import lombok.RequiredArgsConstructor;
@@ -37,25 +40,31 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
     }
 
     @Override
-    public Map<String, Object> getTrendDashboard(String range) {
+    public Map<String, Object> getTrendDashboard(String range, Integer domain) {
         String normalizedRange = normalizeRange(range);
+        Integer activeDomain = normalizeDomain(domain);
         int days = rangeDays(normalizedRange);
         LocalDateTime since = LocalDate.now().minusDays(days - 1L).atStartOfDay();
-        long total = postMapper.countPublishedSince(since);
+        long total = postMapper.countPublishedSince(since, activeDomain);
+        long allDomainTotal = postMapper.countPublishedSince(since, null);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("range", normalizedRange);
         data.put("days", days);
+        data.put("activeDomain", activeDomain);
         data.put("totalPosts", total);
-        data.put("featuredPosts", postMapper.countFeaturedPostsSince(since));
-        data.put("activeAuthors", postMapper.countActiveAuthorsSince(since));
-        data.put("publishTrend", fillTrend(days, postMapper.countPublishedByDate(since)));
-        data.put("topCompanies", postMapper.countCompanies(since, 10));
-        data.put("topTags", tagMapper.countTopTags(since, 10));
-        data.put("contentTypeDistribution", withPercentage(labelPostTypes(postMapper.countPostTypes(since, 10)), total));
-        data.put("featuredContent", postMapper.listFeaturedContent(since, 8));
-        data.put("positionDistribution", withPercentage(postMapper.countPositions(since, 10), total));
-        data.put("resultDistribution", postMapper.countInterviewResults(since, 10));
+        data.put("featuredPosts", postMapper.countFeaturedPostsSince(since, activeDomain));
+        data.put("activeAuthors", postMapper.countActiveAuthorsSince(since, activeDomain));
+        data.put("publishTrend", fillTrend(days, postMapper.countPublishedByDate(since, activeDomain)));
+        data.put("topCompanies", postMapper.countCompanies(since, 10, activeDomain));
+        data.put("topTags", tagMapper.countTopTags(since, 10, activeDomain));
+        data.put("contentTypeDistribution", withPercentage(labelPostTypes(postMapper.countPostTypes(since, 10, activeDomain)), total));
+        data.put("featuredContent", postMapper.listFeaturedContent(since, 8, activeDomain));
+        data.put("positionDistribution", withPercentage(postMapper.countPositions(since, 10, activeDomain), total));
+        data.put("resultDistribution", postMapper.countInterviewResults(since, 10, activeDomain));
+        data.put("domainDistribution", withPercentage(labelDomains(postMapper.countDomainDistribution(since)), allDomainTotal));
+        data.put("domainComparison", buildDomainComparison(since, allDomainTotal));
+        data.put("domainHotContent", postMapper.listDomainHotContent(since, 8, activeDomain));
         return data;
     }
 
@@ -81,6 +90,16 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
             case "90d" -> 90;
             default -> 30;
         };
+    }
+
+    private static Integer normalizeDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (!PostDomain.isValid(domain)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return domain;
     }
 
     private static List<Map<String, Object>> fillTrend(int days, List<Map<String, Object>> rows) {
@@ -124,6 +143,86 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
                     return copy;
                 })
                 .toList();
+    }
+
+    private static List<Map<String, Object>> labelDomains(List<Map<String, Object>> rows) {
+        return rows.stream()
+                .map(row -> {
+                    Map<String, Object> copy = new LinkedHashMap<>(row);
+                    copy.put("name", domainName(row.get("name")));
+                    return copy;
+                })
+                .toList();
+    }
+
+    private List<Map<String, Object>> buildDomainComparison(LocalDateTime since, long allDomainTotal) {
+        Map<Integer, Map<String, Object>> statsByDomain = byDomain(postMapper.listDomainComparisonStats(since));
+        Map<Integer, List<Map<String, Object>>> topTagsByDomain = groupRowsByDomain(tagMapper.countTopTagsByDomain(since, 5));
+        Map<Integer, List<Map<String, Object>>> hotContentByDomain = groupRowsByDomain(postMapper.listDomainHotContentByDomain(since, 5));
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (PostDomain postDomain : PostDomain.values()) {
+            Integer domainCode = postDomain.getCode();
+            Map<String, Object> stats = statsByDomain.getOrDefault(domainCode, Map.of());
+            long postCount = asLong(stats.get("postCount"));
+            long featuredCount = asLong(stats.get("featuredCount"));
+            long activeAuthors = asLong(stats.get("activeAuthors"));
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("domain", domainCode);
+            item.put("name", postDomain.getDisplayName());
+            item.put("postCount", postCount);
+            item.put("featuredCount", featuredCount);
+            item.put("activeAuthors", activeAuthors);
+            item.put("share", allDomainTotal <= 0 ? 0 : Math.round(postCount * 100.0 / allDomainTotal));
+            item.put("featuredRate", postCount <= 0 ? 0 : Math.round(featuredCount * 100.0 / postCount));
+            item.put("topTags", topTagsByDomain.getOrDefault(domainCode, List.of()));
+            item.put("hotContent", hotContentByDomain.getOrDefault(domainCode, List.of()));
+            result.add(item);
+        }
+        return result;
+    }
+
+    private static Map<Integer, Map<String, Object>> byDomain(List<Map<String, Object>> rows) {
+        Map<Integer, Map<String, Object>> result = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows == null ? List.<Map<String, Object>>of() : rows) {
+            Integer domain = asInteger(row.get("domain"));
+            if (domain != null) {
+                result.put(domain, row);
+            }
+        }
+        return result;
+    }
+
+    private static Map<Integer, List<Map<String, Object>>> groupRowsByDomain(List<Map<String, Object>> rows) {
+        Map<Integer, List<Map<String, Object>>> result = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows == null ? List.<Map<String, Object>>of() : rows) {
+            Integer domain = asInteger(row.get("domain"));
+            if (domain == null) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>(row);
+            copy.remove("domain");
+            result.computeIfAbsent(domain, ignored -> new ArrayList<>()).add(copy);
+        }
+        return result;
+    }
+
+    private static String domainName(Object value) {
+        Integer code = asInteger(value);
+        return PostDomain.fromCode(code).getDisplayName();
+    }
+
+    private static Integer asInteger(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static String postTypeName(Object value) {

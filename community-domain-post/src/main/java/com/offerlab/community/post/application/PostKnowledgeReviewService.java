@@ -35,6 +35,7 @@ public class PostKnowledgeReviewService {
     private final ObjectMapper objectMapper;
     private final AdminAuditService adminAuditService;
     private final MultiLevelCache<PostDTO> postDetailCache;
+    private final DomainModeratorService domainModeratorService;
 
     @Transactional
     public Map<String, Object> applyReview(Long postId, Long operatorUid, KnowledgeReviewCmd cmd) {
@@ -46,6 +47,7 @@ public class PostKnowledgeReviewService {
         }
         Post post = postRepo.findById(postId)
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(operatorUid, post.getDomain());
         String beforeExtJson = post.getExtJson();
         String afterExtJson = writeKnowledgeExt(beforeExtJson, operatorUid, cmd);
         post.setExtJson(afterExtJson);

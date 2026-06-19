@@ -110,21 +110,23 @@ class NotificationOpsControllerApiTest {
         task.setTaskStatus(NotificationRetryTaskMapper.STATUS_FAILED);
         when(retryService.findById(100L)).thenReturn(task);
         when(retryService.replayFailed(100L)).thenReturn(true);
+        String previewNonce = previewNonce("NOTIF_RETRY_REPLAY_BATCH", List.of(100L));
 
         mvc.perform(post("/api/v1/ops/notification-retry-tasks/100/replay")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"remark\":\"replay failed notification\"}"))
+                        .content("{\"remark\":\"replay failed notification\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"notif-single-success-1\",\"previewNonce\":\"" + previewNonce + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.id").value(100))
-                .andExpect(jsonPath("$.data.replayed").value(true));
+                .andExpect(jsonPath("$.data.replayed").value(true))
+                .andExpect(jsonPath("$.data.idempotencyKey").value("notif-single-success-1"));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);
         verify(retryService).findById(100L);
         verify(retryService).replayFailed(100L);
         verify(adminAuditService).recordRequired(7L, "NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", 100L, task,
-                Map.of("replayed", true), "replay failed notification");
+                Map.of("replayed", true, "idempotencyKey", "notif-single-success-1"), "replay failed notification");
     }
 
     @Test
@@ -135,20 +137,22 @@ class NotificationOpsControllerApiTest {
         task.setTaskStatus(NotificationRetryTaskMapper.STATUS_FAILED);
         when(retryService.findById(100L)).thenReturn(task);
         when(retryService.replayFailed(100L)).thenReturn(true);
+        String previewNonce = previewNonce("NOTIF_RETRY_REPLAY_BATCH", List.of(100L));
 
         mvc.perform(post("/api/v1/ops/notification-retry-tasks/100/replay")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"reason\":\"replay failed notification by reason\"}"))
+                        .content("{\"reason\":\"replay failed notification by reason\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"notif-single-reason-1\",\"previewNonce\":\"" + previewNonce + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
-                .andExpect(jsonPath("$.data.replayed").value(true));
+                .andExpect(jsonPath("$.data.replayed").value(true))
+                .andExpect(jsonPath("$.data.idempotencyKey").value("notif-single-reason-1"));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);
         verify(retryService).findById(100L);
         verify(retryService).replayFailed(100L);
         verify(adminAuditService).recordRequired(7L, "NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", 100L, task,
-                Map.of("replayed", true), "replay failed notification by reason");
+                Map.of("replayed", true, "idempotencyKey", "notif-single-reason-1"), "replay failed notification by reason");
     }
 
     @Test
@@ -169,6 +173,65 @@ class NotificationOpsControllerApiTest {
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);
         verify(retryService).findById(100L);
         verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void notificationSingleReplayRejectsLegacyRemarkOnlyBeforeWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        NotificationRetryTaskPO task = new NotificationRetryTaskPO();
+        task.setId(100L);
+        task.setTaskStatus(NotificationRetryTaskMapper.STATUS_FAILED);
+        when(retryService.findById(100L)).thenReturn(task);
+
+        for (String body : List.of(
+                "{\"remark\":\"replay failed notification\"}",
+                "{\"remark\":\"replay failed notification\",\"confirmationPhrase\":\"CONFIRM\"}",
+                "{\"remark\":\"replay failed notification\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"notif-single-missing-preview\"}"
+        )) {
+            mvc.perform(post("/api/v1/ops/notification-retry-tasks/100/replay")
+                            .header("Authorization", "Bearer token")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+        }
+
+        verify(adminPermissionService, times(3)).requireScope(7L, AdminPermissionService.ROLE_OPS);
+        verify(retryService, times(3)).findById(100L);
+        verifyNoInteractions(adminAuditService);
+    }
+
+    @Test
+    void repeatedNotificationSingleReplayWithSameIdempotencyKeyIsBlockedBeforeWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        NotificationRetryTaskPO task = new NotificationRetryTaskPO();
+        task.setId(100L);
+        task.setTaskStatus(NotificationRetryTaskMapper.STATUS_FAILED);
+        when(retryService.findById(100L)).thenReturn(task);
+        when(retryService.replayFailed(100L)).thenReturn(true);
+        String previewNonce = previewNonce("NOTIF_RETRY_REPLAY_BATCH", List.of(100L));
+        String body = "{\"remark\":\"replay failed notification\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"notif-single-key-1\",\"previewNonce\":\"" + previewNonce + "\"}";
+
+        mvc.perform(post("/api/v1/ops/notification-retry-tasks/100/replay")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.idempotencyKey").value("notif-single-key-1"))
+                .andExpect(jsonPath("$.data.replayed").value(true));
+
+        mvc.perform(post("/api/v1/ops/notification-retry-tasks/100/replay")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
+                .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
+
+        verify(retryService, times(2)).findById(100L);
+        verify(retryService).replayFailed(100L);
+        verify(adminAuditService).recordRequired(7L, "NOTIF_RETRY_REPLAY", "NOTIF_RETRY_TASK", 100L, task,
+                Map.of("replayed", true, "idempotencyKey", "notif-single-key-1"), "replay failed notification");
     }
 
     @Test

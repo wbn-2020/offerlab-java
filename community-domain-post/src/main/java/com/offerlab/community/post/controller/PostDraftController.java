@@ -1,5 +1,7 @@
 package com.offerlab.community.post.controller;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -7,6 +9,7 @@ import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostDraftCmd;
 import com.offerlab.community.post.api.dto.PostDraftDTO;
 import com.offerlab.community.post.application.PostDraftService;
+import com.offerlab.community.post.domain.model.PostDomain;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -80,6 +83,8 @@ public class PostDraftController {
                 .content(req.getContent())
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
+                .domain(requireOptionalDomain(req.getDomain()))
+                .anonymous(req.getAnonymous())
                 .extJson(req.getExtJson())
                 .tagIds(req.getTagIds() != null ? req.getTagIds() : req.getTags())
                 .tagNames(req.getTagNames())
@@ -98,10 +103,22 @@ public class PostDraftController {
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
+        private Integer domain;
+        private Boolean anonymous;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
+    }
+
+    private static Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
     }
 }

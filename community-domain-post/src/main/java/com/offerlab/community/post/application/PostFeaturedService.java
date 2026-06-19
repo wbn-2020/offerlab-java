@@ -29,6 +29,7 @@ public class PostFeaturedService {
     private final ObjectMapper objectMapper;
     private final AdminAuditService adminAuditService;
     private final MultiLevelCache<PostDTO> postDetailCache;
+    private final DomainModeratorService domainModeratorService;
 
     @Transactional
     public Map<String, Object> updateFeatured(Long postId, boolean featured, Long operatorUid, String note) {
@@ -37,6 +38,7 @@ public class PostFeaturedService {
         }
         Post post = postRepo.findById(postId)
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(operatorUid, post.getDomain());
         String beforeExtJson = post.getExtJson();
         String afterExtJson = writeFeaturedExt(beforeExtJson, featured, operatorUid, note);
         post.setExtJson(afterExtJson);

@@ -15,18 +15,25 @@ import java.util.Map;
 public interface PostMapper extends BaseMapper<PostPO> {
 
     @Select("""
-            SELECT DATE(create_time) AS label, COUNT(*) AS count
-            FROM t_post_main
-            WHERE is_deleted = 0
-              AND post_status = 1
-              AND visibility = 1
-              AND create_time >= #{since}
-            GROUP BY DATE(create_time)
-            ORDER BY DATE(create_time) ASC
+            <script>
+            SELECT DATE(p.create_time) AS label, COUNT(*) AS count
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
+            GROUP BY DATE(p.create_time)
+            ORDER BY DATE(p.create_time) ASC
+            </script>
             """)
-    List<Map<String, Object>> countPublishedByDate(@Param("since") LocalDateTime since);
+    List<Map<String, Object>> countPublishedByDate(@Param("since") LocalDateTime since, @Param("domain") Integer domain);
 
     @Select("""
+            <script>
             SELECT x.company AS name, COUNT(*) AS count
             FROM (
                 SELECT COALESCE(
@@ -39,13 +46,21 @@ public interface PostMapper extends BaseMapper<PostPO> {
                   AND p.post_status = 1
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
+                  <if test="domain != null">
+                  AND COALESCE(e.domain, 1) = #{domain}
+                  </if>
             ) x
             WHERE x.company IS NOT NULL
             GROUP BY x.company
             ORDER BY COUNT(*) DESC, x.company ASC
             LIMIT #{limit}
+            </script>
             """)
-    List<Map<String, Object>> countCompanies(@Param("since") LocalDateTime since, @Param("limit") int limit);
+    List<Map<String, Object>> countCompanies(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
+
+    default List<Map<String, Object>> countCompanies(@Param("since") LocalDateTime since, @Param("limit") int limit) {
+        return countCompanies(since, limit, null);
+    }
 
     @Select("""
             SELECT x.company AS name, COUNT(*) AS count
@@ -66,6 +81,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<Map<String, Object>> countInterviewCompaniesForAliasCandidates(@Param("limit") int limit);
 
     @Select("""
+            <script>
             SELECT x.position AS name, COUNT(*) AS count
             FROM (
                 SELECT COALESCE(
@@ -78,15 +94,24 @@ public interface PostMapper extends BaseMapper<PostPO> {
                   AND p.post_status = 1
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
+                  <if test="domain != null">
+                  AND COALESCE(e.domain, 1) = #{domain}
+                  </if>
             ) x
             WHERE x.position IS NOT NULL
             GROUP BY x.position
             ORDER BY COUNT(*) DESC, x.position ASC
             LIMIT #{limit}
+            </script>
             """)
-    List<Map<String, Object>> countPositions(@Param("since") LocalDateTime since, @Param("limit") int limit);
+    List<Map<String, Object>> countPositions(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
+
+    default List<Map<String, Object>> countPositions(@Param("since") LocalDateTime since, @Param("limit") int limit) {
+        return countPositions(since, limit, null);
+    }
 
     @Select("""
+            <script>
             SELECT x.result AS name, COUNT(*) AS count
             FROM (
                 SELECT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.interviewResult')), '') AS result
@@ -96,13 +121,17 @@ public interface PostMapper extends BaseMapper<PostPO> {
                   AND p.post_status = 1
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
+                  <if test="domain != null">
+                  AND COALESCE(e.domain, 1) = #{domain}
+                  </if>
             ) x
             WHERE x.result IS NOT NULL
             GROUP BY x.result
             ORDER BY COUNT(*) DESC, x.result ASC
             LIMIT #{limit}
+            </script>
             """)
-    List<Map<String, Object>> countInterviewResults(@Param("since") LocalDateTime since, @Param("limit") int limit);
+    List<Map<String, Object>> countInterviewResults(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
 
     @Select("""
             SELECT x.result AS name, COUNT(*) AS count
@@ -124,14 +153,20 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                                              @Param("since") LocalDateTime since);
 
     @Select("""
+            <script>
             SELECT COUNT(*)
-            FROM t_post_main
-            WHERE is_deleted = 0
-              AND post_status = 1
-              AND visibility = 1
-              AND create_time >= #{since}
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
+            </script>
             """)
-    long countPublishedSince(@Param("since") LocalDateTime since);
+    long countPublishedSince(@Param("since") LocalDateTime since, @Param("domain") Integer domain);
 
     @Select("""
             SELECT
@@ -159,9 +194,12 @@ public interface PostMapper extends BaseMapper<PostPO> {
             SELECT p.*
             FROM t_post_main p
             LEFT JOIN t_post_counter c ON c.post_id = p.id
+            LEFT JOIN t_post_extension e_domain ON e_domain.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND (#{domain} IS NULL
+                   OR COALESCE(e_domain.domain, 1) = #{domain})
               AND (
                 #{cursorScore} IS NULL
                 OR (
@@ -209,6 +247,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<PostPO> selectHotPosts(@Param("cursorScore") Double cursorScore,
                                 @Param("cursorTime") LocalDateTime cursorTime,
                                 @Param("cursorId") Long cursorId,
+                                @Param("domain") Integer domain,
                                 @Param("limit") int limit);
 
     @Select("""
@@ -217,6 +256,9 @@ public interface PostMapper extends BaseMapper<PostPO> {
             FROM t_post_main p
             <if test="featured != null">
             LEFT JOIN t_post_extension e_featured ON e_featured.post_id = p.id
+            </if>
+            <if test="domain != null">
+            LEFT JOIN t_post_extension e_domain ON e_domain.post_id = p.id
             </if>
             <if test="tagId != null">
             JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
@@ -236,6 +278,9 @@ public interface PostMapper extends BaseMapper<PostPO> {
               <if test="featured != null and featured == false">
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') NOT IN ('true', '1')
               </if>
+              <if test="domain != null">
+              AND COALESCE(e_domain.domain, 1) = #{domain}
+              </if>
               <if test="cursorTime != null">
               AND (p.create_time &lt; #{cursorTime}
                    OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId}))
@@ -248,6 +293,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                    @Param("tagId") Long tagId,
                                    @Param("postType") Integer postType,
                                    @Param("featured") Boolean featured,
+                                   @Param("domain") Integer domain,
                                    @Param("cursorTime") LocalDateTime cursorTime,
                                    @Param("cursorId") Long cursorId,
                                    @Param("limit") int limit);
@@ -484,19 +530,26 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                                  @Param("limit") int limit);
 
     @Select("""
+            <script>
             SELECT p.post_type AS name, COUNT(*) AS count
             FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
               AND p.create_time >= #{since}
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
             GROUP BY p.post_type
             ORDER BY COUNT(*) DESC, p.post_type ASC
             LIMIT #{limit}
+            </script>
             """)
-    List<Map<String, Object>> countPostTypes(@Param("since") LocalDateTime since, @Param("limit") int limit);
+    List<Map<String, Object>> countPostTypes(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
 
     @Select("""
+            <script>
             SELECT COUNT(*)
             FROM t_post_main p
             JOIN t_post_extension e ON e.post_id = p.id
@@ -505,20 +558,31 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
+            </script>
             """)
-    long countFeaturedPostsSince(@Param("since") LocalDateTime since);
+    long countFeaturedPostsSince(@Param("since") LocalDateTime since, @Param("domain") Integer domain);
 
     @Select("""
+            <script>
             SELECT COUNT(DISTINCT p.author_id)
             FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
               AND p.create_time >= #{since}
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
+            </script>
             """)
-    long countActiveAuthorsSince(@Param("since") LocalDateTime since);
+    long countActiveAuthorsSince(@Param("since") LocalDateTime since, @Param("domain") Integer domain);
 
     @Select("""
+            <script>
             SELECT p.title AS name,
                    CAST(COALESCE(c.like_count, 0) + COALESCE(c.favorite_count, 0) + COALESCE(c.comment_count, 0) AS SIGNED) AS count
             FROM t_post_main p
@@ -529,10 +593,99 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
             ORDER BY count DESC, p.create_time DESC, p.id DESC
             LIMIT #{limit}
+            </script>
             """)
-    List<Map<String, Object>> listFeaturedContent(@Param("since") LocalDateTime since, @Param("limit") int limit);
+    List<Map<String, Object>> listFeaturedContent(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
+
+    @Select("""
+            SELECT COALESCE(e.domain, 1) AS name,
+                   COUNT(*) AS count
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+            GROUP BY COALESCE(e.domain, 1)
+            ORDER BY COUNT(*) DESC, name ASC
+            """)
+    List<Map<String, Object>> countDomainDistribution(@Param("since") LocalDateTime since);
+
+    @Select("""
+            SELECT COALESCE(e.domain, 1) AS domain,
+                   COUNT(*) AS postCount,
+                   SUM(CASE WHEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1') THEN 1 ELSE 0 END) AS featuredCount,
+                   COUNT(DISTINCT p.author_id) AS activeAuthors
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+            GROUP BY COALESCE(e.domain, 1)
+            ORDER BY domain ASC
+            """)
+    List<Map<String, Object>> listDomainComparisonStats(@Param("since") LocalDateTime since);
+
+    @Select("""
+            <script>
+            SELECT p.title AS name,
+                   CAST(
+                       COALESCE(c.like_count, 0) * 3
+                       + COALESCE(c.favorite_count, 0) * 4
+                       + COALESCE(c.comment_count, 0) * 5
+                       + COALESCE(c.view_count, 0) * 0.2
+                   AS SIGNED) AS count
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time >= #{since}
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
+            ORDER BY count DESC, p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<Map<String, Object>> listDomainHotContent(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
+
+    @Select("""
+            SELECT domain, name, count
+            FROM (
+              SELECT grouped.*,
+                     ROW_NUMBER() OVER (PARTITION BY grouped.domain ORDER BY grouped.count DESC, grouped.createTime DESC, grouped.postId DESC) AS rn
+              FROM (
+                SELECT COALESCE(e.domain, 1) AS domain,
+                       p.id AS postId,
+                       p.create_time AS createTime,
+                       p.title AS name,
+                       CAST(
+                           COALESCE(c.like_count, 0) * 3
+                           + COALESCE(c.favorite_count, 0) * 4
+                           + COALESCE(c.comment_count, 0) * 5
+                           + COALESCE(c.view_count, 0) * 0.2
+                       AS SIGNED) AS count
+                FROM t_post_main p
+                LEFT JOIN t_post_extension e ON e.post_id = p.id
+                LEFT JOIN t_post_counter c ON c.post_id = p.id
+                WHERE p.is_deleted = 0
+                  AND p.post_status = 1
+                  AND p.visibility = 1
+                  AND p.create_time >= #{since}
+              ) grouped
+            ) ranked
+            WHERE ranked.rn <= #{limitPerDomain}
+            ORDER BY ranked.domain ASC, ranked.rn ASC
+            """)
+    List<Map<String, Object>> listDomainHotContentByDomain(@Param("since") LocalDateTime since, @Param("limitPerDomain") int limitPerDomain);
 
     @Select("""
             <script>

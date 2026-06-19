@@ -12,12 +12,14 @@ import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostFeaturedService;
 import com.offerlab.community.post.application.PostKnowledgeReviewService;
 import com.offerlab.community.post.application.PostReportService;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.controller.PostController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
@@ -27,6 +29,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -45,6 +48,8 @@ class PostControllerApiTest {
     @Mock
     private PostDraftService draftService;
     @Mock
+    private DomainModeratorService domainModeratorService;
+    @Mock
     private AdminPermissionService adminPermissionService;
     @Mock
     private ContentModerationService contentModerationService;
@@ -57,7 +62,7 @@ class PostControllerApiTest {
     void setUp() {
         mvc = ApiTestSupport.mvc(
                 new PostController(postFacade, postService, reportService, featuredService, knowledgeReviewService,
-                        draftService, adminPermissionService, contentModerationService),
+                        draftService, domainModeratorService, adminPermissionService, contentModerationService),
                 jwtService);
     }
 
@@ -83,8 +88,8 @@ class PostControllerApiTest {
                 .andExpect(jsonPath("$.data[0].code").value("TECH_ARTICLE"))
                 .andExpect(jsonPath("$.data[0].label").value("技术文章"))
                 .andExpect(jsonPath("$.data[0].minContentLength").value(40))
-                .andExpect(jsonPath("$.data[6].value").value(1))
-                .andExpect(jsonPath("$.data[6].legacy").value(true));
+                .andExpect(jsonPath("$.data[8].value").value(1))
+                .andExpect(jsonPath("$.data[8].legacy").value(true));
 
         verifyNoInteractions(postFacade, postService);
     }
@@ -98,7 +103,7 @@ class PostControllerApiTest {
                 .summary("regular community content")
                 .createTime(LocalDateTime.now())
                 .build();
-        when(postFacade.listPosts(null, null, 10, null, 0L, 20, false))
+        when(postFacade.listPosts(null, null, 10, null, null, 0L, 20, false))
                 .thenReturn(PageResult.of(List.of(post), null, false));
 
         mvc.perform(get("/api/v1/posts")
@@ -108,6 +113,56 @@ class PostControllerApiTest {
                 .andExpect(jsonPath("$.data.items[0].id").value(8001))
                 .andExpect(jsonPath("$.data.items[0].postType").value(10));
 
-        verify(postFacade).listPosts(null, null, 10, null, 0L, 20, false);
+        verify(postFacade).listPosts(null, null, 10, null, null, 0L, 20, false);
+    }
+
+    @Test
+    void invalidListDomainReturnsParamErrorBeforeFacade() throws Exception {
+        mvc.perform(get("/api/v1/posts")
+                        .param("domain", "999"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verifyNoInteractions(postFacade);
+    }
+
+    @Test
+    void postListPassesDomainFilterAndPaginationMetadataToFacade() throws Exception {
+        PostBriefDTO post = PostBriefDTO.builder()
+                .id(8102L)
+                .postType(10)
+                .domain(2)
+                .title("career domain post")
+                .summary("domain filtered content")
+                .createTime(LocalDateTime.now())
+                .build();
+        when(postFacade.listPosts(null, null, null, null, 2, 123L, 2, false))
+                .thenReturn(PageResult.of(List.of(post), "456", true));
+
+        mvc.perform(get("/api/v1/posts")
+                        .param("domain", "2")
+                        .param("cursor", "123")
+                        .param("size", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].id").value(8102))
+                .andExpect(jsonPath("$.data.items[0].domain").value(2))
+                .andExpect(jsonPath("$.data.nextCursor").value("456"))
+                .andExpect(jsonPath("$.data.hasMore").value(true));
+
+        verify(postFacade).listPosts(null, null, null, null, 2, 123L, 2, false);
+    }
+
+    @Test
+    void invalidPublishDomainReturnsParamErrorBeforePublishing() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        mvc.perform(post("/api/v1/posts")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"postType\":10,\"domain\":999,\"title\":\"bad domain\",\"content\":\"content\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verifyNoInteractions(postFacade, postService, draftService);
     }
 }
