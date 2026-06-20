@@ -23,10 +23,15 @@
         </rollingPolicy>
     </appender>
 
+    <logger name="com.offerlab.community" level="${OFFERLAB_LOG_LEVEL:-INFO}"/>
+    <logger name="org.apache.kafka.clients.admin.AdminClientConfig" level="WARN"/>
+    <logger name="org.apache.kafka.clients.producer.ProducerConfig" level="WARN"/>
+    <logger name="org.apache.kafka.clients.consumer.ConsumerConfig" level="WARN"/>
+    <logger name="org.apache.kafka.clients.NetworkClient" level="ERROR"/>
+    <logger name="org.apache.kafka.common.utils.AppInfoParser" level="WARN"/>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </root>
-
-    <logger name="com.offerlab.community" level="DEBUG"/>
 </configuration>

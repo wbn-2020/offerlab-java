@@ -19,7 +19,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final AuthInterceptor authInterceptor;
     private final Environment environment;
 
-    @Value("${offerlab.web.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174}")
+    @Value("${offerlab.web.cors.allowed-origins:http://localhost:*,http://127.0.0.1:*}")
     private String allowedOrigins;
 
     @PostConstruct
@@ -42,7 +42,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/api/v1/auth/**", "/v3/api-docs/**", "/swagger-ui/**", "/error");
+                .excludePathPatterns("/api/v1/auth/**", "/api/v1/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/error");
     }
 
     @Override

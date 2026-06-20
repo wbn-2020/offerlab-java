@@ -131,6 +131,36 @@ public interface NotificationRetryTaskMapper extends BaseMapper<NotificationRetr
             """)
     List<NotificationRetryTaskPO> listRecent(@Param("status") Integer status, @Param("limit") int limit);
 
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_notif_retry_task
+            <where>
+              <if test="status != null">
+                task_status = #{status}
+              </if>
+            </where>
+            </script>
+            """)
+    long countPage(@Param("status") Integer status);
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM t_notif_retry_task
+            <where>
+              <if test="status != null">
+                task_status = #{status}
+              </if>
+            </where>
+            ORDER BY create_time DESC
+            LIMIT #{limit} OFFSET #{offset}
+            </script>
+            """)
+    List<NotificationRetryTaskPO> pageRecent(@Param("status") Integer status,
+                                             @Param("limit") int limit,
+                                             @Param("offset") int offset);
+
     @Select("SELECT * FROM t_notif_retry_task WHERE id = #{id}")
     NotificationRetryTaskPO findById(@Param("id") Long id);
 

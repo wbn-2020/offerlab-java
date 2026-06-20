@@ -13,4 +13,7 @@ public class SearchAnalyticsTrackCmd {
 
     @Size(max = 128)
     private String company;
+
+    @Size(max = 128)
+    private String target;
 }

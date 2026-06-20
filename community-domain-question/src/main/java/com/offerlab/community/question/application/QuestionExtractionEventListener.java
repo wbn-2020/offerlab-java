@@ -14,7 +14,7 @@ public class QuestionExtractionEventListener {
     private final QuestionFacade questionFacade;
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onQuestionExtractRequested(QuestionExtractRequestedEvent event) {
         try {
             questionFacade.processExtractTask(event.getTaskId());

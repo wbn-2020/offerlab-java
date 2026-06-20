@@ -7,6 +7,9 @@ import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.domain.model.Post;
@@ -41,6 +44,8 @@ public class PostReportService {
     private final MultiLevelCache<PostDTO> postDetailCache;
     private final ContentModerationService contentModerationService;
     private final AdminAuditService adminAuditService;
+    private final ReviewQueuePublisher reviewQueuePublisher;
+    private final DomainModeratorService domainModeratorService;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
@@ -70,13 +75,28 @@ public class PostReportService {
         po.setDetail(clean(detail, MAX_DETAIL_LEN, null));
         po.setReportStatus(STATUS_PENDING);
         reportMapper.insert(po);
+        publishReportQueueItem(reportId, post, po);
         return reportId;
     }
 
     public List<PostReportDTO> listRecent(Integer status, int limit) {
+        return listRecent(status, limit, false);
+    }
+
+    public List<PostReportDTO> listRecent(Integer status, int limit, boolean includeTestData) {
+        return listRecent(status, null, limit, includeTestData);
+    }
+
+    public List<PostReportDTO> listRecent(Integer status, Integer domain, int limit, boolean includeTestData) {
         Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
-        return reportMapper.selectRecent(effectiveStatus, clampLimit(limit)).stream()
-                .map(this::toDto)
+        int safeLimit = clampLimit(limit);
+        int queryLimit = includeTestData ? safeLimit : clampLimit(safeLimit * 5);
+        List<PostReportPO> reports = reportMapper.selectRecent(effectiveStatus, domain, queryLimit);
+        Map<Long, Post> postsById = batchLoadReportPosts(reports);
+        return reports.stream()
+                .map(po -> toDto(po, postsById.get(po.getPostId())))
+                .filter(dto -> includeTestData || !isSyntheticReport(dto))
+                .limit(safeLimit)
                 .toList();
     }
 
@@ -96,6 +116,9 @@ public class PostReportService {
         if (report == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        Post post = postRepo.findById(report.getPostId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -111,9 +134,35 @@ public class PostReportService {
         }
 
         PostReportDTO dto = toDto(reportMapper.selectById(reportId));
-        adminAuditService.record(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
+        adminAuditService.recordRequired(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
                 "POST_REPORT", reportId, report, Map.of("approved", approved, "postId", report.getPostId()), reviewNote);
+        reviewQueuePublisher.resolve("POST_REPORT", reportId,
+                approved ? "approved" : "rejected",
+                approved ? "post taken down" : "report rejected",
+                reviewNote,
+                reviewerUid);
         return dto;
+    }
+
+    private void publishReportQueueItem(Long reportId, Post post, PostReportPO report) {
+        String title = post == null || !StringUtils.hasText(post.getTitle())
+                ? "帖子举报 " + report.getPostId()
+                : "帖子举报：" + post.getTitle();
+        String summary = String.join(" / ", List.of(
+                "原因：" + clean(report.getReason(), MAX_REASON_LEN, "OTHER"),
+                "说明：" + clean(report.getDetail(), 180, "")
+        )).trim();
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "POST_REPORT",
+                reportId,
+                title,
+                summary,
+                "high",
+                report.getReporterUid(),
+                80,
+                "{\"postId\":" + report.getPostId() + "}",
+                "post report created"
+        ));
     }
 
     private void takeDownPost(Long postId) {
@@ -146,11 +195,30 @@ public class PostReportService {
         return trimmed.length() <= maxLen ? trimmed : trimmed.substring(0, maxLen);
     }
 
+    private Map<Long, Post> batchLoadReportPosts(List<PostReportPO> reports) {
+        if (reports == null || reports.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> postIds = reports.stream()
+                .map(PostReportPO::getPostId)
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .toList();
+        if (postIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Post> posts = postRepo.batchFindByIds(postIds);
+        return posts == null ? Map.of() : posts;
+    }
+
     private PostReportDTO toDto(PostReportPO po) {
+        return toDto(po, po == null ? null : postRepo.findById(po.getPostId()).orElse(null));
+    }
+
+    private PostReportDTO toDto(PostReportPO po, Post post) {
         if (po == null) {
             return null;
         }
-        Post post = postRepo.findById(po.getPostId()).orElse(null);
         return PostReportDTO.builder()
                 .id(po.getId())
                 .postId(po.getPostId())
@@ -166,6 +234,16 @@ public class PostReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private boolean isSyntheticReport(PostReportDTO dto) {
+        if (dto == null) {
+            return false;
+        }
+        return PublicContentFilter.isSyntheticText(dto.getPostTitle())
+                || PublicContentFilter.isSyntheticText(dto.getPostSummary())
+                || PublicContentFilter.isSyntheticText(dto.getReason())
+                || PublicContentFilter.isSyntheticText(dto.getDetail());
     }
 
     private String summary(String value) {

@@ -10,6 +10,10 @@ public interface SearchFacade {
     PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
                                          Integer type, String sort, String cursor, int size);
 
+    PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
+                                         Integer type, String sort, String cursor, int size,
+                                         boolean includeTestData);
+
     List<String> suggest(String prefix, int size);
 
     List<String> getHotKeywords(int size);

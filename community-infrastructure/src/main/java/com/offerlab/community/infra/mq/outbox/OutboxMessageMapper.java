@@ -111,8 +111,49 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
             """)
     List<OutboxMessage> listRecent(@Param("status") Integer status, @Param("limit") int limit);
 
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_outbox_message
+            <where>
+              <if test="status != null">
+                msg_status = #{status}
+              </if>
+            </where>
+            </script>
+            """)
+    long countPage(@Param("status") Integer status);
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM t_outbox_message
+            <where>
+              <if test="status != null">
+                msg_status = #{status}
+              </if>
+            </where>
+            ORDER BY create_time DESC
+            LIMIT #{limit} OFFSET #{offset}
+            </script>
+            """)
+    List<OutboxMessage> pageRecent(@Param("status") Integer status,
+                                   @Param("limit") int limit,
+                                   @Param("offset") int offset);
+
     @Select("SELECT * FROM t_outbox_message WHERE id = #{id}")
     OutboxMessage findById(@Param("id") Long id);
+
+    @Select("""
+            SELECT *
+            FROM t_outbox_message
+            WHERE aggregate_type = #{aggregateType}
+              AND aggregate_id = #{aggregateId}
+            ORDER BY create_time DESC, id DESC
+            LIMIT 1
+            """)
+    OutboxMessage findLatestByAggregate(@Param("aggregateType") String aggregateType,
+                                        @Param("aggregateId") Long aggregateId);
 
     @Update("""
             UPDATE t_outbox_message

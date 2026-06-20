@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 帖子发布事件
  */
@@ -17,5 +19,20 @@ public class PostPublishedEvent {
     private Long authorId;
     private String title;
     private String content;
+    private Integer visibility;
+    private Integer postStatus;
     private Long timestamp;
+    private List<Long> tagIds;
+    private List<TopicNotificationTarget> topicNotificationTargets;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TopicNotificationTarget {
+        private Long topicId;
+        private String topicSlug;
+        private String topicName;
+        private List<Long> followerUids;
+    }
 }

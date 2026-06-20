@@ -8,6 +8,7 @@ import com.offerlab.community.question.infrastructure.persistence.mapper.Intervi
 import com.offerlab.community.question.infrastructure.persistence.po.InterviewQuestionPO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.time.ZoneOffset;
@@ -22,9 +23,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 @RequiredArgsConstructor
 public class QuestionSearchIndexer {
+    private static final int MAX_SEARCH_WINDOW = 10_000;
+    private static final int MAX_SEARCH_SIZE = 100;
+
     private final ElasticsearchHttpClient elasticsearch;
     private final InterviewQuestionMapper questionMapper;
     private final InterviewQuestionTagMapper questionTagMapper;
+    private final ApplicationEventPublisher events;
 
     private final AtomicBoolean indexReady = new AtomicBoolean(false);
 
@@ -47,38 +52,77 @@ public class QuestionSearchIndexer {
     }
 
     public boolean indexQuestion(Long questionId) {
+        return indexQuestion(questionId, true);
+    }
+
+    boolean indexQuestionForRetry(Long questionId) {
+        return indexQuestion(questionId, false);
+    }
+
+    private boolean indexQuestion(Long questionId, boolean enqueueOnFailure) {
         if (questionId == null || !ensureQuestionIndex()) {
+            publishRetry(enqueueOnFailure, questionId, QuestionIndexRetryService.OP_INDEX, "question index unavailable");
             return false;
         }
         List<InterviewQuestionPO> rows = questionMapper.selectVisibleByIds(List.of(questionId), true);
         if (rows.isEmpty()) {
-            return elasticsearch.deleteDocument(elasticsearch.questionIndex(), String.valueOf(questionId));
+            boolean deleted = elasticsearch.deleteDocument(elasticsearch.questionIndex(), String.valueOf(questionId));
+            if (!deleted) {
+                publishRetry(enqueueOnFailure, questionId, QuestionIndexRetryService.OP_DELETE, "question index delete returned false");
+            }
+            return deleted;
         }
-        return elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(questionId), toDocument(rows.get(0)));
+        boolean indexed = elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(questionId), toDocument(rows.get(0)));
+        if (!indexed) {
+            publishRetry(enqueueOnFailure, questionId, QuestionIndexRetryService.OP_INDEX, "question index returned false");
+        }
+        return indexed;
     }
 
     public boolean deleteQuestion(Long questionId) {
+        return deleteQuestion(questionId, true);
+    }
+
+    boolean deleteQuestionForRetry(Long questionId) {
+        return deleteQuestion(questionId, false);
+    }
+
+    private boolean deleteQuestion(Long questionId, boolean enqueueOnFailure) {
         if (questionId == null || !ensureQuestionIndex()) {
+            publishRetry(enqueueOnFailure, questionId, QuestionIndexRetryService.OP_DELETE, "question index unavailable");
             return false;
         }
-        return elasticsearch.deleteDocument(elasticsearch.questionIndex(), String.valueOf(questionId));
+        boolean deleted = elasticsearch.deleteDocument(elasticsearch.questionIndex(), String.valueOf(questionId));
+        if (!deleted) {
+            publishRetry(enqueueOnFailure, questionId, QuestionIndexRetryService.OP_DELETE, "question index delete returned false");
+        }
+        return deleted;
     }
 
     public Map<String, Object> rebuildAll() {
         if (!ensureQuestionIndex()) {
             return Map.of("accepted", false, "indexed", 0, "failed", 0, "indexName", elasticsearch.questionIndex());
         }
-        List<InterviewQuestionPO> rows = questionMapper.selectAllIndexable(10000);
         int indexed = 0;
         int failed = 0;
-        for (InterviewQuestionPO row : rows) {
-            if (elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(row.getId()), toDocument(row))) {
-                indexed++;
-            } else {
-                failed++;
+        long total = 0;
+        Long cursorId = null;
+        while (true) {
+            List<InterviewQuestionPO> rows = questionMapper.selectAllIndexableAfter(cursorId, 500);
+            if (rows.isEmpty()) {
+                break;
             }
+            for (InterviewQuestionPO row : rows) {
+                if (elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(row.getId()), toDocument(row))) {
+                    indexed++;
+                } else {
+                    failed++;
+                }
+                total++;
+            }
+            cursorId = rows.get(rows.size() - 1).getId();
         }
-        return Map.of("accepted", true, "indexed", indexed, "failed", failed, "total", rows.size(), "indexName", elasticsearch.questionIndex());
+        return Map.of("accepted", true, "indexed", indexed, "failed", failed, "total", total, "indexName", elasticsearch.questionIndex());
     }
 
     public Optional<List<QuestionSearchHit>> search(QuestionQuery query, int offset, int limit) {
@@ -88,8 +132,9 @@ public class QuestionSearchIndexer {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("query", buildQuery(query));
         body.put("sort", buildSort(query == null ? null : query.getSort()));
-        body.put("from", offset);
-        body.put("size", limit);
+        int safeLimit = safeSearchLimit(limit);
+        body.put("from", safeSearchOffset(offset, safeLimit));
+        body.put("size", safeLimit);
         if (!clean(query == null ? null : query.getKeyword()).isBlank()) {
             body.put("highlight", Map.of(
                     "pre_tags", List.of("<em>"),
@@ -102,6 +147,15 @@ public class QuestionSearchIndexer {
             ));
         }
         return elasticsearch.search(elasticsearch.questionIndex(), body).map(this::extractHits);
+    }
+
+    private int safeSearchLimit(int limit) {
+        return Math.max(1, Math.min(limit, MAX_SEARCH_SIZE));
+    }
+
+    private int safeSearchOffset(int offset, int limit) {
+        int maxOffset = Math.max(0, MAX_SEARCH_WINDOW - limit);
+        return (int) Math.min(Math.max(0L, (long) offset), maxOffset);
     }
 
     private Map<String, Object> toDocument(InterviewQuestionPO row) {
@@ -292,6 +346,13 @@ public class QuestionSearchIndexer {
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private void publishRetry(boolean enabled, Long questionId, String operation, String message) {
+        if (!enabled || questionId == null || questionId <= 0) {
+            return;
+        }
+        events.publishEvent(new QuestionIndexRetryEvent(questionId, operation, new IllegalStateException(message)));
     }
 
     private String clean(String value) {

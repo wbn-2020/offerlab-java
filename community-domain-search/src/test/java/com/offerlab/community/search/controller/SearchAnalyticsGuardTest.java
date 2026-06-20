@@ -24,18 +24,22 @@ class SearchAnalyticsGuardTest {
         assertTrue(migrationSql.contains("CREATE TABLE IF NOT EXISTS t_search_analytics_event"), "migration must create search analytics table without destructive reset");
         assertTrue(migrationSql.contains("idx_event_time"), "search analytics table must index event type and time");
         assertTrue(migrationSql.contains("idx_keyword_time"), "search analytics table must index keyword stats");
-        assertTrue(migrationSql.contains("idx_company_time"), "search analytics table must index company prep clicks");
+        assertTrue(migrationSql.contains("idx_company_time"), "search analytics table must index click targets");
 
         assertTrue(mapperSource.contains("tableExists()"), "analytics mapper must tolerate missing migration table");
         assertTrue(mapperSource.contains("insertEvent"), "analytics mapper must insert events");
         assertTrue(mapperSource.contains("topSearchKeywords"), "analytics mapper must aggregate hot keywords");
         assertTrue(mapperSource.contains("topNoResultKeywords"), "analytics mapper must aggregate zero-result keywords");
-        assertTrue(mapperSource.contains("topPrepClicks"), "analytics mapper must aggregate prep-pack clicks");
+        assertTrue(mapperSource.contains("topRecommendationClicks"), "analytics mapper must aggregate community recommendation clicks");
         assertTrue(mapperSource.contains("event_type = 'SEARCH'"), "search events must be distinct from click events");
-        assertTrue(mapperSource.contains("event_type = 'PREP_CLICK'"), "prep click events must be queryable separately");
+        assertTrue(mapperSource.contains("COMMUNITY_RECOMMEND_CLICK"), "community recommendation click events must be queryable separately");
+        assertTrue(mapperSource.contains("includeTestData"), "ops analytics must be able to explicitly include test data");
+        assertTrue(mapperSource.contains("NOT LIKE '%E2E%'"), "ops analytics must hide E2E data by default");
+        assertTrue(mapperSource.contains("NOT LIKE '%CODEX%'"), "ops analytics must hide Codex test data by default");
 
         assertTrue(serviceSource.contains("EVENT_SEARCH"), "analytics service must record search events");
-        assertTrue(serviceSource.contains("EVENT_PREP_CLICK"), "analytics service must record prep click events");
+        assertTrue(serviceSource.contains("EVENT_COMMUNITY_RECOMMEND_CLICK"), "analytics service must record community recommendation click events");
+        assertTrue(serviceSource.contains("recordCommunityRecommendClick"), "analytics service must expose community recommendation tracking");
         assertTrue(serviceSource.contains("tableReady()"), "analytics service must fail open when table is not ready");
         assertTrue(serviceSource.contains("Math.max(1, Math.min(days, 90))"), "analytics summary must clamp days");
         assertTrue(serviceSource.contains("Math.max(1, Math.min(limit, 50))"), "analytics summary must clamp limit");
@@ -45,12 +49,13 @@ class SearchAnalyticsGuardTest {
 
         assertTrue(searchControllerSource.contains("/analytics/track"), "search controller must expose client analytics tracking endpoint");
         assertTrue(searchControllerSource.contains("SearchAnalyticsTrackCmd"), "search tracking endpoint must use a typed DTO");
-        assertTrue(searchControllerSource.contains("PREP_CLICK"), "search tracking endpoint must accept prep click events");
-        assertTrue(searchControllerSource.contains("recordPrepClick"), "search tracking endpoint must record prep clicks");
+        assertTrue(searchControllerSource.contains("COMMUNITY_RECOMMEND_CLICK"), "search tracking endpoint must accept community recommendation click events");
+        assertTrue(searchControllerSource.contains("recordCommunityRecommendClick"), "search tracking endpoint must record community recommendation clicks");
 
         assertTrue(opsControllerSource.contains("/search/analytics"), "ops controller must expose search analytics summary");
         assertTrue(opsControllerSource.contains("SearchAnalyticsDTO"), "ops search analytics endpoint must return structured DTO");
         assertTrue(opsControllerSource.contains("searchAnalyticsService.summary"), "ops endpoint must call analytics summary service");
+        assertTrue(opsControllerSource.contains("includeTestData"), "ops endpoint must expose an explicit test-data switch");
     }
     @Test
     void mysqlFallbackSearchMustStayBoundedAndDatabaseFiltered() throws Exception {
@@ -62,6 +67,10 @@ class SearchAnalyticsGuardTest {
         assertTrue(facadeSource.contains("postMapper.searchPublicPostsFallback"), "search fallback must use a mapper query");
         assertTrue(facadeSource.contains("postMapper.suggestPublicPostsFallback"), "suggest fallback must use a mapper query");
         assertTrue(postMapperSource.contains("searchPublicPostsFallback"), "post mapper must expose DB-side filtered fallback search");
+        assertTrue(postMapperSource.contains("e.company LIKE CONCAT('%', #{keyword}, '%')"), "keyword fallback search must include company metadata");
+        assertTrue(postMapperSource.contains("e.position LIKE CONCAT('%', #{keyword}, '%')"), "keyword fallback search must include position metadata");
+        assertTrue(postMapperSource.contains("t.tag_name LIKE CONCAT('%', #{keyword}, '%')"), "keyword fallback search must include post tags");
+        assertTrue(postMapperSource.contains("t.tag_name LIKE CONCAT('%', #{prefix}, '%')"), "suggest fallback search must include post tags");
         assertTrue(postMapperSource.contains("e.company LIKE CONCAT('%', #{company}, '%')"), "company filter must run in SQL before loading rows");
         assertTrue(postMapperSource.contains("e.position = #{position}"), "position filter must run in SQL before loading rows");
         assertTrue(postMapperSource.contains("LIMIT #{limit}"), "fallback SQL must be limit-bound");

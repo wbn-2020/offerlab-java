@@ -27,16 +27,26 @@ public interface CommentReportMapper extends BaseMapper<CommentReportPO> {
                    review_time AS reviewTime,
                    create_time AS createTime,
                    update_time AS updateTime
-            FROM t_comment_report
+            FROM t_comment_report r
+            LEFT JOIN t_post_extension e ON e.post_id = r.post_id
             WHERE 1 = 1
             <if test="status != null">
-              AND report_status = #{status}
+              AND r.report_status = #{status}
             </if>
-            ORDER BY create_time DESC
+            <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+            </if>
+            ORDER BY r.create_time DESC
             LIMIT #{limit}
             </script>
             """)
-    List<CommentReportPO> selectRecent(@Param("status") Integer status, @Param("limit") int limit);
+    List<CommentReportPO> selectRecent(@Param("status") Integer status,
+                                       @Param("domain") Integer domain,
+                                       @Param("limit") int limit);
+
+    default List<CommentReportPO> selectRecent(Integer status, int limit) {
+        return selectRecent(status, null, limit);
+    }
 
     @Select("""
             SELECT id,

@@ -1,3 +1,8 @@
+# LOCAL DEVELOPMENT ONLY.
+# This compose file intentionally uses local passwords, plaintext Kafka, and
+# Elasticsearch security disabled for isolated developer machines. Do not reuse
+# it for staging or production; use the prod profile with external secrets and
+# authenticated managed services instead.
 services:
   mysql:
     image: mysql:8.0
@@ -47,10 +52,20 @@ services:
     volumes:
       - kafka_data:/bitnami/kafka
 
-  # 二期开启
-  # elasticsearch:
-  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
-  #   ...
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    container_name: offerlab-elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+  # Optional analytics dependency for future stages.
   # clickhouse:
   #   image: clickhouse/clickhouse-server:24.1
   #   ...
@@ -59,3 +74,4 @@ volumes:
   mysql_data:
   redis_data:
   kafka_data:
+  elasticsearch_data:

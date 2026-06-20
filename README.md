@@ -1,19 +1,19 @@
 # OfferLab Java Backend
 
-OfferLab 是一个面向求职者的面经、技术内容和面试题库社区。后端采用 Java 17、Spring Boot 3、MyBatis-Plus、MySQL、Redis、Kafka、Elasticsearch 的模块化单体架构，当前主开发分支为 `dev-v2`。
+OfferLab 是一个面向技术人的经验沉淀社区，帮助开发者发布、发现、讨论、搜索和结构化项目复盘、技术踩坑、架构实践、学习路线与工具资源。后端采用 Java 17、Spring Boot 3、MyBatis-Plus、MySQL、Redis、Kafka、Elasticsearch 的模块化单体架构，当前主开发分支为 `dev-v2`。
 
 ## 项目能力
 
-- 用户体系：注册、登录、当前用户、个人主页、资料编辑、求职意向、隐私设置、关注、粉丝和关注列表。
+- 用户体系：注册、登录、当前用户、个人主页、资料编辑、学习偏好、隐私设置、关注、粉丝和关注列表。
 - 内容社区：帖子发布、编辑、删除、详情、列表、标签、标签详情、内容举报和审核。
 - 互动能力：点赞、收藏、评论、评论点赞、个人点赞和收藏列表。
 - Feed 流：关注流、推荐流、最新流、热门流，支持 Kafka `post.published` fanout 写入关注收件箱。
 - 通知中心：关注、点赞、评论、收藏、mention 通知，支持列表、未读数、单条已读和全部已读。
 - 搜索能力：Elasticsearch 搜索、建议词、热词、MySQL fallback、索引状态、异步索引重建任务。
-- 面试题库：面经帖题目提取、题目列表、题目详情、刷题进度、公司备战页、公司别名治理。
-- AI 提取：支持可选 DeepSeek 大模型题目提取；未启用或调用失败时回退到本地规则提取。
+- 知识库：公开内容结构化、知识卡列表、知识卡详情、学习进度、主题学习包、实体别名治理。
+- AI 知识沉淀：支持可选 DeepSeek 大模型结构化提取；未启用或调用失败时回退到本地规则提取。
 - 运营治理：运维状态、Outbox 重试、Admin 角色、权限检查、审计日志、内容治理关键词。
-- 趋势看板：基于真实公开帖子和扩展字段统计发布趋势、热门公司、高频标签和岗位分布。
+- 趋势看板：基于真实公开帖子和扩展字段统计发布趋势、热门实体、高频标签和场景分布。
 
 ## 模块结构
 
@@ -26,7 +26,7 @@ community-domain-post            帖子、标签、计数器、举报
 community-domain-interaction     点赞、收藏、评论
 community-domain-feed            Feed 收件箱与 Kafka fanout
 community-domain-search          搜索、索引、运维状态、内容治理
-community-domain-question        面试题库、AI/规则提取、题目治理
+community-domain-question        知识库、AI/规则提取、知识卡治理
 community-domain-notification    通知
 community-domain-analytics       趋势看板统计
 community-archtest               架构与生产安全测试
@@ -101,9 +101,18 @@ mvn -pl community-bootstrap -am spring-boot:run
 
 ```sql
 SOURCE db/migration/20260524_ops_governance.sql;
+SOURCE db/migration/20260601_demo_question_seed_existing_db.sql;
 ```
 
 迁移脚本预期只创建缺失表和缺失索引，不应删除表、清空数据或重置 schema。执行前建议先备份数据库，并在测试库验证。
+
+如果你是给现有本地库补演示数据，请先确认 schema 已跑到 20260601，再执行：
+
+```powershell
+mysql -h 127.0.0.1 -P 3306 -u offerlab -p offerlab
+SOURCE db/migration/20260601_demo_question_seed_existing_db.sql;
+node scripts/verify-demo-question-data.mjs --admin-email=admin
+```
 
 ## AI 调用说明
 
@@ -134,7 +143,7 @@ offerlab:
       timeout-millis: 15000
 ```
 
-当前 AI 主要用于从面经帖子中提取面试题。建议线上启用前补齐限流、成本统计、调用审计、敏感内容脱敏和更细的失败告警。
+当前 AI 主要用于从社区内容中提炼知识卡、摘要、标签建议和结构化线索。建议线上启用前补齐限流、成本统计、调用审计、敏感内容脱敏和更细的失败告警。
 
 ## 常用接口
 
@@ -144,7 +153,7 @@ offerlab:
 | POST | `/api/v1/auth/login` | 登录 | 否 |
 | GET | `/api/v1/users/me` | 当前用户 | 是 |
 | PATCH | `/api/v1/users/me` | 修改资料 | 是 |
-| PUT | `/api/v1/users/me/intent` | 修改求职意向 | 是 |
+| PUT | `/api/v1/users/me/intent` | 修改学习偏好 | 是 |
 | GET | `/api/v1/users/me/privacy-settings` | 查询隐私设置 | 是 |
 | PUT | `/api/v1/users/me/privacy-settings` | 保存隐私设置 | 是 |
 | GET | `/api/v1/users/{uid}` | 用户主页 | 否 |
@@ -164,11 +173,11 @@ offerlab:
 | GET | `/api/v1/search/status` | 搜索状态 | 否 |
 | POST | `/api/v1/search/admin/rebuild` | 异步重建索引 | 是，admin |
 | GET | `/api/v1/search/admin/tasks/{taskId}` | 查询重建任务 | 是，admin |
-| GET | `/api/v1/questions` | 面试题列表 | 否 |
-| GET | `/api/v1/questions/{id}` | 面试题详情 | 否 |
-| POST | `/api/v1/admin/posts/{postId}/extract-questions` | 从帖子提取题目 | 是，admin |
-| GET | `/api/v1/admin/ai-tasks` | AI 提取任务列表 | 是，admin |
-| POST | `/api/v1/admin/ai-tasks/{id}/retry` | 重试 AI 提取任务 | 是，admin |
+| GET | `/api/v1/questions` | 知识卡列表 | 否 |
+| GET | `/api/v1/questions/{id}` | 知识卡详情 | 否 |
+| POST | `/api/v1/admin/posts/{postId}/extract-questions` | 从帖子提取知识卡 | 是，admin |
+| GET | `/api/v1/admin/ai-tasks` | AI 结构化任务列表 | 是，admin |
+| POST | `/api/v1/admin/ai-tasks/{id}/retry` | 重试 AI 结构化任务 | 是，admin |
 | GET | `/api/v1/ops/status` | 运维状态 | 是，admin |
 | GET | `/api/v1/ops/outbox` | Outbox 最近消息 | 是，admin |
 | POST | `/api/v1/ops/outbox/{id}/retry` | 单条失败消息重试 | 是，admin |

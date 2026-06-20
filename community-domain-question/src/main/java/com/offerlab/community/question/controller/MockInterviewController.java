@@ -64,4 +64,10 @@ public class MockInterviewController {
     public Result<MockInterviewSessionDTO> submit(@PathVariable Long id, @Valid @RequestBody MockInterviewSubmitCmd cmd) {
         return Result.ok(mockInterviewService.submit(UserContext.require(), id, cmd));
     }
+
+    @PostMapping("/{id}/ai-review/retry")
+    @RateLimit(key = "'mock-interview:ai-review:retry:' + #uid", rate = 30, per = 3600)
+    public Result<MockInterviewSessionDTO> retryAiReview(@PathVariable Long id) {
+        return Result.ok(mockInterviewService.retryAiReview(UserContext.require(), id));
+    }
 }

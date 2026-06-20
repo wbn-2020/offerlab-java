@@ -41,6 +41,13 @@ class QuestionDuplicateGovernanceGuardTest {
         assertTrue(controllerSource.contains("QUESTION_DUPLICATE_CANONICAL"), "canonical changes must be audited");
         assertTrue(controllerSource.contains("QUESTION_DUPLICATE_MERGE_CANDIDATE"), "semantic candidate merges must be audited");
         assertTrue(controllerSource.contains("QUESTION_DUPLICATE_HIDE"), "duplicate hide changes must be audited");
+        assertTrue(controllerSource.contains("requireWritable(\"QUESTION_DUPLICATE_CANONICAL\""), "canonical changes must fail closed when audit is unavailable");
+        assertTrue(controllerSource.contains("RiskConfirmation.requireCritical(request == null ? null : request.remark()"),
+                "duplicate governance writes must require remark plus CONFIRM");
+        assertTrue(controllerSource.contains("@Size(max = 32) String confirmationPhrase"),
+                "duplicate governance requests must carry an explicit confirmation phrase");
+        assertTrue(controllerSource.contains("recordRequired(uid, \"QUESTION_DUPLICATE_MERGE_CANDIDATE\""), "semantic candidate merges must require audit writes");
+        assertTrue(controllerSource.contains("recordRequired(uid, \"QUESTION_DUPLICATE_HIDE\""), "duplicate hide changes must require audit writes");
 
         assertTrue(facadeSource.contains("!Objects.equals(question.getNormalizedHash(), canonical.getNormalizedHash())"), "canonical adjustment must reject cross-group questions");
         assertTrue(facadeSource.contains("semanticSimilarityScore(question, candidate)"), "semantic merges must validate the candidate similarity");

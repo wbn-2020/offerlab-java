@@ -10,4 +10,8 @@ public class PostTagView {
     private Integer tagType;
     private Long useCount;
     private Integer isOfficial;
+    private Integer tagStatus;
+    private Integer recommended;
+    private String synonyms;
+    private Long mergeTargetId;
 }

@@ -20,6 +20,9 @@ public interface PostTagRefMapper extends BaseMapper<PostTagRefPO> {
     @Update("UPDATE t_tag SET use_count = use_count + 1 WHERE id = #{tagId} AND is_deleted = 0")
     int incrUseCount(@Param("tagId") Long tagId);
 
+    @Update("UPDATE t_tag SET use_count = GREATEST(use_count - 1, 0) WHERE id = #{tagId} AND is_deleted = 0")
+    int decrUseCount(@Param("tagId") Long tagId);
+
     @Delete("DELETE FROM t_post_tag_ref WHERE post_id = #{postId}")
     int deleteByPostId(@Param("postId") Long postId);
 

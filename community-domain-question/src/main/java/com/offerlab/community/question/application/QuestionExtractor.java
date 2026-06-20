@@ -6,4 +6,8 @@ import java.util.List;
 
 public interface QuestionExtractor {
     List<ExtractedQuestion> extract(PostDTO post);
+
+    default QuestionExtractionResult extractWithMetrics(PostDTO post) {
+        return QuestionExtractionResult.rules(extract(post));
+    }
 }

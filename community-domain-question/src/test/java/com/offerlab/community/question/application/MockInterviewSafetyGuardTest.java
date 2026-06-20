@@ -36,9 +36,13 @@ class MockInterviewSafetyGuardTest {
         assertTrue(initSql.contains("ai_project_expression"), "mock answers must persist project-expression feedback");
         assertTrue(initSql.contains("ai_follow_up_suggestion"), "mock answers must persist follow-up suggestions");
         String aiReviewMigrationSql = Files.readString(Path.of("../db/migration/20260530_mock_interview_ai_review.sql"), StandardCharsets.UTF_8).toLowerCase();
+        String aiReviewStatusMigrationSql = Files.readString(Path.of("../db/migration/20260601_mock_interview_ai_review_status.sql"), StandardCharsets.UTF_8).toLowerCase();
         assertFalse(aiReviewMigrationSql.contains("drop table"), "mock interview AI review migration must not drop tables");
+        assertFalse(aiReviewStatusMigrationSql.contains("drop table"), "mock interview AI review status migration must not drop tables");
         assertTrue(aiReviewMigrationSql.contains("add column ai_reviewed"), "existing databases must receive AI review flag non-destructively");
         assertTrue(aiReviewMigrationSql.contains("add column ai_follow_up_suggestion"), "existing databases must receive follow-up suggestion non-destructively");
+        assertTrue(aiReviewStatusMigrationSql.contains("add column ai_review_status"), "existing databases must receive durable AI review status non-destructively");
+        assertTrue(aiReviewStatusMigrationSql.contains("add column ai_review_error"), "existing databases must receive AI review failure reason non-destructively");
     }
 
     @Test
@@ -55,10 +59,12 @@ class MockInterviewSafetyGuardTest {
         String answerDto = Files.readString(Path.of("src/main/java/com/offerlab/community/question/api/dto/MockInterviewAnswerDTO.java"), StandardCharsets.UTF_8);
         String answerPo = Files.readString(Path.of("src/main/java/com/offerlab/community/question/infrastructure/persistence/po/MockInterviewAnswerPO.java"), StandardCharsets.UTF_8);
         String aiReviewService = Files.readString(Path.of("src/main/java/com/offerlab/community/question/application/MockInterviewAiReviewService.java"), StandardCharsets.UTF_8);
+        String aiReviewTaskService = Files.readString(Path.of("src/main/java/com/offerlab/community/question/application/MockInterviewAiReviewTaskService.java"), StandardCharsets.UTF_8);
 
         assertTrue(controller.contains("UserContext.require()"), "mock interview endpoints must require login");
         assertTrue(controller.contains("@GetMapping(\"/stats\")"), "mock interview should expose a personal stats endpoint");
         assertTrue(controller.contains("@PutMapping(\"/{id}/draft\")"), "mock interview should expose a server-side draft save endpoint");
+        assertTrue(controller.contains("@PostMapping(\"/{id}/ai-review/retry\")"), "mock interview should expose an AI review retry endpoint");
         assertTrue(controller.contains("@RateLimit"), "mock interview mutations should be rate limited");
         assertTrue(service.contains("@Transactional"), "start and submit must persist session and answers atomically");
         assertTrue(service.contains("selectByUser(sessionId, uid)"), "submit/detail must enforce session ownership");
@@ -82,22 +88,35 @@ class MockInterviewSafetyGuardTest {
         assertFalse(service.contains("tagsByQuestionIds(List.of(row.getId()))"), "mock interview answer DTO assembly must not query tags once per question");
         assertTrue(service.contains("cmd.getFocusTag()"), "mock interview start should accept a focused weak tag");
         assertTrue(service.contains("selectMockInterviewQuestionsByTag"), "mock interview should support tag-focused question selection");
-        assertTrue(service.contains("answerMapper.updateDraft(uid, sessionId, old.getQuestionId(), answerText, selfReview, score)"), "submit must persist user answers by updating existing answer rows");
+        assertTrue(service.contains("updateDraft(uid, sessionId, old.getQuestionId(), answerText, selfReview, score)"), "submit must persist user answers by updating existing answer rows");
+        assertTrue(countOccurrences(service, "validateSessionQuestionIds(existing, byQuestionId.keySet())") >= 2, "submit and draft save must reject question ids that do not belong to the session");
+        assertTrue(service.contains("throw new BizException(ErrorCode.PARAM_ERROR)"), "wrong mock interview question ids must return a client validation error instead of being silently ignored");
+        assertTrue(service.contains("answerMapper.updateDraftCompat(uid, sessionId, questionId, answerText, selfReview, score)"), "submit must keep a migration-safe draft fallback before AI transparency columns exist");
         assertTrue(submitCmd.contains("private Boolean aiReviewEnabled"), "mock interview submit must allow users to turn optional AI review on or off");
         assertTrue(service.contains("Boolean.TRUE.equals(cmd == null ? null : cmd.getAiReviewEnabled())"), "submit must only generate AI review when explicitly enabled");
-        assertTrue(service.contains("reviewAnswers(uid, sessionId, existing)"), "submit must review answers after the session is completed");
-        assertTrue(service.contains("aiReviewService.review(answer)"), "mock interview service must delegate AI/rule feedback generation");
+        assertTrue(service.contains("answerMapper.markPendingForSession(uid, sessionId)"), "submit must mark AI review pending instead of doing slow review in the request transaction");
+        assertTrue(service.contains("afterCommit.execute(() -> aiReviewTaskService.reviewSession(uid, sessionId)"), "submit must dispatch AI review after commit");
+        assertTrue(aiReviewTaskService.contains("@Async"), "AI review generation must run asynchronously");
+        assertTrue(aiReviewTaskService.contains("aiReviewService.review(answer)"), "async AI review task must delegate AI/rule feedback generation");
+        assertTrue(aiReviewTaskService.contains("updateAiReviewFailed"), "AI review failures must be persisted per answer");
         assertTrue(answerMapper.contains("updateAiReview"), "answer mapper must persist AI/rule review fields");
+        assertTrue(answerMapper.contains("markPendingForSession"), "answer mapper must persist pending review state");
+        assertTrue(answerMapper.contains("markRetryPendingForSession"), "answer mapper must support manual retry of failed reviews");
         assertTrue(answerMapper.contains("ai_completeness"), "answer mapper must persist completeness feedback");
         assertTrue(answerMapper.contains("ai_project_expression"), "answer mapper must persist project-expression feedback");
         assertTrue(answerMapper.contains("ai_follow_up_suggestion"), "answer mapper must persist follow-up suggestion feedback");
         assertTrue(answerDto.contains("aiReviewed"), "answer DTO must expose AI/rule review state");
+        assertTrue(answerDto.contains("aiReviewStatus"), "answer DTO must expose pending/succeeded/failed review state");
+        assertTrue(answerDto.contains("aiReviewError"), "answer DTO must expose review failure reason");
         assertTrue(answerDto.contains("aiScore"), "answer DTO must expose AI/rule score");
         assertTrue(answerDto.contains("aiCompleteness"), "answer DTO must expose completeness feedback");
         assertTrue(answerPo.contains("aiReviewProvider"), "answer PO must persist the feedback provider");
+        assertTrue(answerPo.contains("aiReviewStatus"), "answer PO must persist review status");
+        assertTrue(answerPo.contains("aiReviewError"), "answer PO must persist review errors");
         assertTrue(aiReviewService.contains("offerlab.ai.deepseek.enabled"), "AI review should reuse the existing DeepSeek switch");
         assertTrue(aiReviewService.contains("callDeepseek"), "AI review should call DeepSeek when configured");
-        assertTrue(aiReviewService.contains("return ruleReview(answer)"), "AI review must fall back to deterministic rules");
+        assertTrue(aiReviewService.contains("return ruleReview(answer, true, normalizeErrorCode(e))"), "AI review must fall back to deterministic rules after model failures");
+        assertTrue(aiReviewService.contains("return ruleReview(answer, false, null)"), "AI review must use deterministic rules when the model switch is disabled");
         assertTrue(aiReviewService.contains("completeness"), "AI review must include completeness feedback");
         assertTrue(aiReviewService.contains("projectExpression"), "AI review must include project expression feedback");
         assertTrue(aiReviewService.contains("followUpSuggestion"), "AI review must include follow-up suggestions");
@@ -105,6 +124,7 @@ class MockInterviewSafetyGuardTest {
         assertTrue(countOccurrences(normalizedService, "answered++;\n                totalScore += score;") >= 2, "mock interview submit and draft summaries must count score only inside the answered branch");
         assertTrue(answerMapper.contains("selectBySessions"), "mock interview list and stats should batch load answers by session ids");
         assertTrue(answerMapper.contains("int updateDraft"), "draft save must update existing answer rows instead of recreating snapshots");
+        assertTrue(answerMapper.contains("int updateDraftCompat"), "draft save must have a compatibility SQL path without AI transparency columns");
         assertFalse(answerMapper.contains("deleteBySession"), "mock interview answers should not be deleted during submit");
         assertTrue(answerMapper.contains("AND EXISTS"), "draft answer updates must be guarded by the started session state");
         assertTrue(sessionMapper.contains("AND status = 'started'"), "draft session updates must not complete or overwrite completed sessions");

@@ -9,6 +9,10 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
@@ -19,6 +23,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.question.api.dto.AiTaskDetailDTO;
 import com.offerlab.community.question.api.dto.AiTaskDTO;
+import com.offerlab.community.question.api.dto.AiTaskMetricsDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasCmd;
 import com.offerlab.community.question.api.dto.CompanyAliasCandidateDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasDTO;
@@ -62,9 +67,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -105,10 +112,15 @@ public class QuestionFacadeImpl implements QuestionFacade {
     private final PlatformTransactionManager transactionManager;
     private final QuestionSearchIndexer questionSearchIndexer;
     private final QuestionPrepAssembler prepAssembler;
+    private final AfterCommitExecutor afterCommit;
+    private final ReviewQueuePublisher reviewQueuePublisher;
 
     @Override
     @Transactional
     public Long extractPostQuestions(Long postId, boolean manual) {
+        if (postId == null || postId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
         AiExtractTaskPO task = newTask(postId);
         taskMapper.insert(task);
         events.publishEvent(QuestionExtractRequestedEvent.builder()
@@ -125,35 +137,45 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (task == null) {
             return;
         }
+        long startedNanos = System.nanoTime();
         taskMapper.updateStatus(taskId, QuestionConstants.TASK_RUNNING);
         PostDTO post = postFacade.getPost(task.getPostId());
         if (post == null) {
             PostPO rawPost = postMapper.selectById(task.getPostId());
             if (rawPost != null) {
                 new TransactionTemplate(transactionManager).executeWithoutResult(status -> hidePostQuestions(task.getPostId()));
+                applyExtractionMetrics(task, QuestionExtractionResult.none(null), startedNanos, null);
                 succeed(task, 0);
                 return;
             }
+            applyExtractionMetrics(task, QuestionExtractionResult.none("SOURCE_POST_NOT_VISIBLE"), startedNanos, "SOURCE_POST_NOT_VISIBLE");
             fail(task, "post not found or not public visible");
             return;
         }
         if (!Objects.equals(post.getPostType(), Post.TYPE_INTERVIEW)) {
+            applyExtractionMetrics(task, QuestionExtractionResult.none(null), startedNanos, null);
             succeed(task, 0);
             return;
         }
         if (!Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)
                 || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)) {
             new TransactionTemplate(transactionManager).executeWithoutResult(status -> hidePostQuestions(post.getId()));
+            applyExtractionMetrics(task, QuestionExtractionResult.none(null), startedNanos, null);
             succeed(task, 0);
             return;
         }
+        QuestionExtractionResult extraction = QuestionExtractionResult.none(null);
         try {
-            List<ExtractedQuestion> extracted = extractQuestions(post);
-            Integer count = new TransactionTemplate(transactionManager).execute(status -> replacePostQuestions(post, extracted));
+            QuestionExtractionResult currentExtraction = extractQuestionsWithMetrics(post);
+            extraction = currentExtraction;
+            Integer count = new TransactionTemplate(transactionManager)
+                    .execute(status -> replacePostQuestions(post, currentExtraction.questions()));
+            applyExtractionMetrics(task, extraction, startedNanos, extraction.errorCode());
             succeed(task, count == null ? 0 : count);
             publishExtractionFinished(task, post, true, count == null ? 0 : count, null);
         } catch (Exception e) {
             log.warn("question extraction failed: postId={} taskId={}", post.getId(), task.getId(), e);
+            applyExtractionMetrics(task, extraction, startedNanos, "EXTRACT_EXCEPTION");
             fail(task, e.getMessage());
             publishExtractionFinished(task, post, false, 0, e.getMessage());
         }
@@ -163,8 +185,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
     public Map<String, Object> rebuildQuestions(int limit) {
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 500));
         List<Long> postIds = postMapper.selectRecentPublicInterviewPostIds(safeLimit);
-        postIds.forEach(postId -> extractPostQuestions(postId, true));
-        return Map.of("requested", safeLimit, "submitted", postIds.size());
+        List<Long> taskIds = postIds.stream()
+                .map(postId -> new TransactionTemplate(transactionManager)
+                        .execute(status -> extractPostQuestions(postId, true)))
+                .filter(Objects::nonNull)
+                .toList();
+        return Map.of("requested", safeLimit, "submitted", taskIds.size(), "taskIds", taskIds);
     }
 
     @Override
@@ -179,8 +205,14 @@ public class QuestionFacadeImpl implements QuestionFacade {
     }
 
     @Override
+    public AiTaskMetricsDTO getTaskMetrics(int limit) {
+        int safeLimit = Math.max(1, Math.min(limit <= 0 ? 100 : limit, 500));
+        return toTaskMetrics(taskMapper.listRecent(null, safeLimit));
+    }
+
+    @Override
     public AiTaskDetailDTO getTaskDetail(Long taskId) {
-        AiExtractTaskPO task = taskMapper.selectById(taskId);
+        AiExtractTaskPO task = selectTaskById(taskId);
         if (task == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
@@ -207,28 +239,70 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Override
     @Transactional
     public AiTaskDTO retryTask(Long taskId) {
-        AiExtractTaskPO task = taskMapper.selectById(taskId);
+        AiExtractTaskPO task = selectTaskById(taskId);
         if (task == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        taskMapper.markForRetry(taskId);
+        markTaskForRetry(taskId);
+        reviewQueuePublisher.resolve("AI_TASK_FAILED", taskId, "closed", "task retried", "AI task retry requested", null);
         events.publishEvent(QuestionExtractRequestedEvent.builder()
                 .taskId(taskId)
                 .postId(task.getPostId())
                 .manual(true)
                 .build());
-        return toTaskDto(taskMapper.selectById(taskId));
+        return toTaskDto(selectTaskById(taskId));
+    }
+
+    private AiExtractTaskPO selectTaskById(Long taskId) {
+        try {
+            return taskMapper.selectById(taskId);
+        } catch (RuntimeException e) {
+            log.warn("AI task metrics columns may be missing; fallback to compatible task detail query: taskId={}", taskId, e);
+            return taskMapper.selectByIdCompat(taskId);
+        }
+    }
+
+    private int markTaskForRetry(Long taskId) {
+        try {
+            return taskMapper.markForRetry(taskId);
+        } catch (RuntimeException e) {
+            log.warn("AI task metrics columns may be missing; fallback to compatible retry update: taskId={}", taskId, e);
+            return taskMapper.markForRetryCompat(taskId);
+        }
     }
 
     @Override
     public PostQuestionBlockDTO getPostQuestionBlock(Long postId, Long viewerUid, boolean admin) {
+        PostDTO sourcePost = postFacade.getPost(postId, viewerUid);
+        if (sourcePost == null) {
+            return PostQuestionBlockDTO.builder()
+                    .taskStatus("none")
+                    .questions(List.of())
+                    .extractedCount(0)
+                    .visibleCount(0)
+                    .pendingReviewCount(0)
+                    .reviewHint(null)
+                    .errorVisible(false)
+                    .errorMessage(null)
+                    .canRetry(false)
+                    .build();
+        }
         AiExtractTaskPO task = taskMapper.findLatest(postId, QuestionConstants.TASK_TYPE_QUESTION_EXTRACT);
         List<QuestionDTO> questions = toQuestionDtos(questionMapper.selectByPostId(postId, admin), viewerUid);
+        int approvedCount = questionMapper.countByPostIdAndStatus(postId, QuestionConstants.QUESTION_APPROVED);
+        int pendingReviewCount = questionMapper.countByPostIdAndStatus(postId, QuestionConstants.QUESTION_PENDING);
+        int extractedCount = Math.max(safeInt(task == null ? null : task.getQuestionCount(), 0),
+                approvedCount + pendingReviewCount);
+        int visibleCount = admin ? questions.size() : approvedCount;
         String status = task == null ? "none" : taskStatusName(task.getTaskStatus());
         boolean failed = task != null && Objects.equals(task.getTaskStatus(), QuestionConstants.TASK_FAILED);
         return PostQuestionBlockDTO.builder()
                 .taskStatus(status)
                 .questions(questions)
+                .extractedCount(extractedCount)
+                .visibleCount(visibleCount)
+                .pendingReviewCount(pendingReviewCount)
+                .reviewHint(postQuestionReviewHint(status, extractedCount, visibleCount, pendingReviewCount, admin))
                 .errorVisible(admin && failed)
                 .errorMessage(admin && failed ? task.getErrorMessage() : null)
                 .canRetry(admin)
@@ -271,6 +345,28 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Override
     public QuestionDetailDTO getQuestionDetail(Long questionId, Long viewerUid, boolean admin) {
         return loadQuestionDetail(questionId, viewerUid, admin);
+    }
+
+    @Override
+    public List<QuestionDTO> getVisibleQuestionsByIds(List<Long> questionIds, Long viewerUid) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = questionIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .collect(Collectors.toCollection(LinkedHashSet::new))
+                .stream()
+                .toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, InterviewQuestionPO> byId = questionMapper.selectVisibleByIds(ids, false).stream()
+                .collect(Collectors.toMap(InterviewQuestionPO::getId, row -> row, (a, b) -> a));
+        return toQuestionDtos(ids.stream()
+                .map(byId::get)
+                .filter(Objects::nonNull)
+                .toList(), viewerUid);
     }
 
     @Override
@@ -465,7 +561,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Override
     public List<QuestionDTO> listAdminQuestions(Integer status, int limit) {
         int safeLimit = Math.max(1, Math.min(limit <= 0 ? 30 : limit, 100));
-        return toQuestionDtos(questionMapper.selectAdminRecent(status, null, null, null, null, null, null, null, 0, safeLimit), null);
+        return toAdminQuestionDtos(questionMapper.selectAdminRecent(status, null, null, null, null, null, null, null, 0, safeLimit), null);
     }
 
     @Override
@@ -491,7 +587,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
             maxQuality = tmp;
         }
         int offset = (safePage - 1) * safePageSize;
-        List<QuestionDTO> items = toQuestionDtos(questionMapper.selectAdminRecent(
+        List<QuestionDTO> items = toAdminQuestionDtos(questionMapper.selectAdminRecent(
                 query == null ? null : query.getStatus(),
                 cleanToNull(query == null ? null : query.getKeyword()),
                 cleanToNull(query == null ? null : query.getCompany()),
@@ -559,6 +655,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Override
     @Transactional
     public QuestionDTO updateQuestionAdmin(Long questionId, QuestionAdminUpdateCmd cmd) {
+        if (questionId == null || questionId <= 0 || cmd == null || !cmd.hasEditableField()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
         List<InterviewQuestionPO> rows = questionMapper.selectVisibleByIds(List.of(questionId), true);
         if (rows.isEmpty()) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -598,8 +697,8 @@ public class QuestionFacadeImpl implements QuestionFacade {
         scoreBase.setSourceSnippet(update.getSourceSnippet() == null ? scoreBase.getSourceSnippet() : update.getSourceSnippet());
         update.setQualityScore(score(scoreBase));
         questionMapper.updateAdmin(update);
-        questionSearchIndexer.indexQuestion(questionId);
-        return toQuestionDtos(questionMapper.selectVisibleByIds(List.of(questionId), true), null).get(0);
+        afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index update:" + questionId);
+        return toAdminQuestionDtos(questionMapper.selectVisibleByIds(List.of(questionId), true), null).get(0);
     }
 
     @Override
@@ -611,7 +710,14 @@ public class QuestionFacadeImpl implements QuestionFacade {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         evictQuestionDetail(questionId);
-        questionSearchIndexer.indexQuestion(questionId);
+        afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index review:" + questionId);
+        if (status != QuestionConstants.QUESTION_PENDING) {
+            reviewQueuePublisher.resolve("QUESTION_PENDING", questionId,
+                    status == QuestionConstants.QUESTION_APPROVED ? "approved" : "rejected",
+                    status == QuestionConstants.QUESTION_APPROVED ? "question approved" : "question hidden",
+                    "question review status=" + status,
+                    null);
+        }
         return Map.of("questionId", questionId, "status", status);
     }
 
@@ -863,8 +969,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
         List<PostBriefDTO> sourcePosts = postFacade.batchGetPosts(List.of(question.getSourcePostId())).values().stream().toList();
         List<QuestionDTO> related = toQuestionDtos(questionMapper.selectRelated(question.getId(), question.getCanonicalId(),
                 question.getCompany(), question.getPosition(), 8), viewerUid);
+        List<QuestionDTO> questionDtos = toQuestionDtos(List.of(question), viewerUid);
+        if (questionDtos.isEmpty()) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         return QuestionDetailDTO.builder()
-                .question(toQuestionDtos(List.of(question), viewerUid).get(0))
+                .question(questionDtos.get(0))
                 .sourcePosts(sourcePosts)
                 .relatedQuestions(related)
                 .build();
@@ -910,13 +1020,22 @@ public class QuestionFacadeImpl implements QuestionFacade {
     }
 
     private List<ExtractedQuestion> extractQuestions(PostDTO post) {
-        return questionExtractor.extract(post).stream()
+        return normalizeExtractedQuestions(questionExtractor.extract(post));
+    }
+
+    private QuestionExtractionResult extractQuestionsWithMetrics(PostDTO post) {
+        QuestionExtractionResult result = questionExtractor.extractWithMetrics(post);
+        return result.withQuestions(normalizeExtractedQuestions(result.questions()));
+    }
+
+    private List<ExtractedQuestion> normalizeExtractedQuestions(List<ExtractedQuestion> extracted) {
+        return (extracted == null ? List.<ExtractedQuestion>of() : extracted).stream()
                 .filter(item -> clean(item.getQuestionText()).length() >= 4)
                 .collect(Collectors.collectingAndThen(Collectors.toMap(
                         item -> hash(normalizeQuestion(item.getQuestionText())),
                         item -> item,
                         (a, b) -> a,
-                        java.util.LinkedHashMap::new
+                        LinkedHashMap::new
                 ), map -> map.values().stream().limit(20).toList()));
     }
 
@@ -964,6 +1083,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
             po.setStatus(decision.status());
             po.setQualityReason(appendReviewReason(po.getQualityReason(), decision.reason()));
             questionMapper.insert(po);
+            if (po.getStatus() != null && po.getStatus() == QuestionConstants.QUESTION_PENDING) {
+                publishPendingQuestionQueueItem(po);
+            }
             changedHashes.add(normalizedHash);
             if (po.getCompany() != null && !po.getCompany().isBlank()) {
                 affectedCompanies.add(po.getCompany());
@@ -1069,6 +1191,48 @@ public class QuestionFacadeImpl implements QuestionFacade {
         task.setErrorMessage(limit(message, 1000));
         task.setUpdateTime(LocalDateTime.now());
         taskMapper.updateById(task);
+        publishFailedAiTaskQueueItem(task);
+    }
+
+    private void publishPendingQuestionQueueItem(InterviewQuestionPO question) {
+        if (question == null || question.getId() == null) {
+            return;
+        }
+        String title = "待审知识卡：" + limit(clean(question.getQuestionText()), 160);
+        String summary = String.join(" / ", List.of(
+                "来源帖子：" + question.getSourcePostId(),
+                "技术栈：" + clean(question.getCompany()),
+                "场景：" + clean(question.getPosition()),
+                "原因：" + clean(question.getQualityReason())
+        )).trim();
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "QUESTION_PENDING",
+                question.getId(),
+                title,
+                summary,
+                "medium",
+                question.getSourceAuthorUid(),
+                50,
+                "{\"postId\":" + question.getSourcePostId() + "}",
+                "question auto review pending"
+        ));
+    }
+
+    private void publishFailedAiTaskQueueItem(AiExtractTaskPO task) {
+        if (task == null || task.getId() == null) {
+            return;
+        }
+        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                "AI_TASK_FAILED",
+                task.getId(),
+                "AI 提取任务失败：" + task.getId(),
+                "帖子：" + task.getPostId() + " / 错误：" + limit(clean(task.getErrorMessage()), 240),
+                safeInt(task.getRetryCount(), 0) >= 3 ? "critical" : "high",
+                null,
+                safeInt(task.getRetryCount(), 0) >= 3 ? 95 : 85,
+                "{\"postId\":" + task.getPostId() + ",\"taskType\":\"" + clean(task.getTaskType()) + "\"}",
+                "AI extract task failed"
+        ));
     }
 
     private void publishExtractionFinished(AiExtractTaskPO task, PostDTO post, boolean success, int questionCount, String errorMessage) {
@@ -1088,12 +1252,23 @@ public class QuestionFacadeImpl implements QuestionFacade {
     }
 
     private List<QuestionDTO> toQuestionDtos(List<InterviewQuestionPO> rows, Long viewerUid) {
-        return toQuestionDtos(rows, viewerUid, Map.of());
+        return toQuestionDtos(rows, viewerUid, Map.of(), false);
+    }
+
+    private List<QuestionDTO> toAdminQuestionDtos(List<InterviewQuestionPO> rows, Long viewerUid) {
+        return toQuestionDtos(rows, viewerUid, Map.of(), true);
     }
 
     private List<QuestionDTO> toQuestionDtos(List<InterviewQuestionPO> rows,
                                              Long viewerUid,
                                              Map<Long, QuestionSearchIndexer.QuestionSearchHit> highlights) {
+        return toQuestionDtos(rows, viewerUid, highlights, false);
+    }
+
+    private List<QuestionDTO> toQuestionDtos(List<InterviewQuestionPO> rows,
+                                             Long viewerUid,
+                                             Map<Long, QuestionSearchIndexer.QuestionSearchHit> highlights,
+                                             boolean includeSynthetic) {
         if (rows == null || rows.isEmpty()) {
             return List.of();
         }
@@ -1101,7 +1276,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         Map<Long, List<QuestionTagDTO>> tags = tagsByQuestionIds(ids);
         Map<Long, UserQuestionProgressPO> progress = progressByQuestionIds(viewerUid, ids);
         Map<Long, QuestionSearchIndexer.QuestionSearchHit> highlightMap = highlights == null ? Map.of() : highlights;
-        return rows.stream().map(row -> {
+        return rows.stream().filter(row -> includeSynthetic || !isSyntheticQuestion(row, tags.getOrDefault(row.getId(), List.of()))).map(row -> {
             UserQuestionProgressPO p = progress.get(row.getId());
             QuestionSearchIndexer.QuestionSearchHit hit = highlightMap.get(row.getId());
             return QuestionDTO.builder()
@@ -1142,6 +1317,26 @@ public class QuestionFacadeImpl implements QuestionFacade {
                     .updateTime(row.getUpdateTime())
                     .build();
         }).toList();
+    }
+
+    private boolean isSyntheticQuestion(InterviewQuestionPO row, List<QuestionTagDTO> tags) {
+        if (row == null) {
+            return false;
+        }
+        if (PublicContentFilter.isSyntheticText(row.getQuestionText())
+                || PublicContentFilter.isSyntheticText(row.getAnswerHint())
+                || PublicContentFilter.isSyntheticText(row.getExamPoint())
+                || PublicContentFilter.isSyntheticText(row.getReferenceAnswer())
+                || PublicContentFilter.isSyntheticText(row.getSourceSnippet())
+                || PublicContentFilter.isSyntheticText(row.getQualityReason())
+                || PublicContentFilter.isSyntheticText(row.getCompany())
+                || PublicContentFilter.isSyntheticText(row.getPosition())
+                || PublicContentFilter.isSyntheticText(row.getInterviewRound())) {
+            return true;
+        }
+        return tags != null && tags.stream()
+                .map(QuestionTagDTO::getName)
+                .anyMatch(PublicContentFilter::isSyntheticText);
     }
 
     private record QuestionSearchResult(List<InterviewQuestionPO> rows,
@@ -1308,15 +1503,15 @@ public class QuestionFacadeImpl implements QuestionFacade {
             actions.add("优先清理 " + review + " 道待复习题，先把本周遗留问题收口");
         }
         if (focusTags != null && !focusTags.isEmpty()) {
-            actions.add("围绕 " + focusTags.get(0).getName() + " 做一轮专项模拟面试");
+            actions.add("围绕 " + focusTags.get(0).getName() + " 做一轮专项练习");
         }
         if (mistakes != null && !mistakes.isEmpty()) {
             actions.add("针对 " + mistakeReasonLabel(mistakes.get(0).getReason()) + " 错因补一张回答卡片");
         }
         if (mockCompleted <= 0) {
-            actions.add("安排至少 1 场模拟面试，补齐表达和限时输出反馈");
+            actions.add("安排至少 1 场专项练习，补齐表达和限时输出反馈");
         } else if (mockAverageScore > 0 && mockAverageScore < 70) {
-            actions.add("复盘本周模拟面试低分题，把 2 分以下答案加入待复习");
+            actions.add("复盘本周专项练习低分题，把 2 分以下答案加入待复习");
         }
         if (mastered <= 0) {
             actions.add("本周至少标记 3 道已掌握题，形成可见进度");
@@ -1468,7 +1663,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .normalizedHash(hash)
                 .sourcePostCount(sourcePostCount)
                 .questionCount(rows.size())
-                .questions(toQuestionDtos(rows, null))
+                .questions(toAdminQuestionDtos(rows, null))
                 .semanticCandidates(semanticDuplicateCandidates(questionId, rows, hash))
                 .build();
     }
@@ -1491,7 +1686,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .stream()
                 .filter(candidate -> !existingIds.contains(candidate.getId()))
                 .map(candidate -> QuestionDuplicateCandidateDTO.builder()
-                        .question(toQuestionDtos(List.of(candidate), null).get(0))
+                        .question(toAdminQuestionDtos(List.of(candidate), null).get(0))
                         .similarityScore(semanticSimilarityScore(base, candidate))
                         .reason(semanticSimilarityReason(base, candidate))
                         .build())
@@ -1763,6 +1958,81 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .toList();
     }
 
+    private void applyExtractionMetrics(AiExtractTaskPO task, QuestionExtractionResult result,
+                                        long startedNanos, String errorCode) {
+        QuestionExtractionResult safeResult = result == null ? QuestionExtractionResult.none(errorCode) : result;
+        task.setProvider(limit(blankToDefault(safeResult.provider(), "unknown"), 32));
+        task.setFallbackUsed(safeResult.fallbackUsed());
+        task.setDurationMs(Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L));
+        task.setPromptTokens(Math.max(0, safeResult.promptTokens()));
+        task.setCompletionTokens(Math.max(0, safeResult.completionTokens()));
+        task.setEstimatedCostMicros(Math.max(0L, safeResult.estimatedCostMicros()));
+        task.setErrorCode(limit(errorCode == null ? safeResult.errorCode() : errorCode, 64));
+    }
+
+    private AiTaskMetricsDTO toTaskMetrics(List<AiExtractTaskPO> tasks) {
+        List<AiExtractTaskPO> rows = tasks == null ? List.of() : tasks;
+        int total = rows.size();
+        int successCount = (int) rows.stream().filter(task -> Objects.equals(task.getTaskStatus(), QuestionConstants.TASK_SUCCEEDED)).count();
+        int failedCount = (int) rows.stream().filter(task -> Objects.equals(task.getTaskStatus(), QuestionConstants.TASK_FAILED)).count();
+        int runningCount = (int) rows.stream().filter(task -> Objects.equals(task.getTaskStatus(), QuestionConstants.TASK_RUNNING)).count();
+        int fallbackCount = (int) rows.stream().filter(task -> Boolean.TRUE.equals(task.getFallbackUsed())).count();
+        long totalPromptTokens = rows.stream().mapToLong(task -> safeInt(task.getPromptTokens(), 0)).sum();
+        long totalCompletionTokens = rows.stream().mapToLong(task -> safeInt(task.getCompletionTokens(), 0)).sum();
+        long estimatedCostMicros = rows.stream().mapToLong(task -> safeLong(task.getEstimatedCostMicros(), 0L)).sum();
+        List<Long> durations = rows.stream()
+                .map(task -> safeLong(task.getDurationMs(), 0L))
+                .filter(value -> value > 0)
+                .sorted()
+                .toList();
+        return AiTaskMetricsDTO.builder()
+                .totalTasks(total)
+                .successCount(successCount)
+                .failedCount(failedCount)
+                .runningCount(runningCount)
+                .fallbackCount(fallbackCount)
+                .fallbackRate(total == 0 ? 0.0 : fallbackCount * 1.0 / total)
+                .avgDurationMs(avgDuration(durations))
+                .p95DurationMs(percentile95(durations))
+                .totalPromptTokens(totalPromptTokens)
+                .totalCompletionTokens(totalCompletionTokens)
+                .totalTokens(totalPromptTokens + totalCompletionTokens)
+                .estimatedCostMicros(estimatedCostMicros)
+                .providerStats(toMetricBuckets(rows, false))
+                .errorStats(toMetricBuckets(rows, true))
+                .build();
+    }
+
+    private List<AiTaskMetricsDTO.BucketDTO> toMetricBuckets(List<AiExtractTaskPO> tasks, boolean errorsOnly) {
+        Map<String, List<AiExtractTaskPO>> buckets = new LinkedHashMap<>();
+        for (AiExtractTaskPO task : tasks) {
+            String name = errorsOnly ? clean(task.getErrorCode()) : blankToDefault(task.getProvider(), "unknown");
+            if (errorsOnly && name.isBlank()) {
+                continue;
+            }
+            buckets.computeIfAbsent(name, ignored -> new ArrayList<>()).add(task);
+        }
+        return buckets.entrySet().stream()
+                .map(entry -> toMetricBucket(entry.getKey(), entry.getValue()))
+                .toList();
+    }
+
+    private AiTaskMetricsDTO.BucketDTO toMetricBucket(String name, List<AiExtractTaskPO> tasks) {
+        List<Long> durations = tasks.stream()
+                .map(task -> safeLong(task.getDurationMs(), 0L))
+                .filter(value -> value > 0)
+                .sorted()
+                .toList();
+        return AiTaskMetricsDTO.BucketDTO.builder()
+                .name(name)
+                .count(tasks.size())
+                .fallbackCount((int) tasks.stream().filter(task -> Boolean.TRUE.equals(task.getFallbackUsed())).count())
+                .avgDurationMs(avgDuration(durations))
+                .totalTokens(tasks.stream().mapToLong(this::taskTokenCount).sum())
+                .estimatedCostMicros(tasks.stream().mapToLong(task -> safeLong(task.getEstimatedCostMicros(), 0L)).sum())
+                .build();
+    }
+
     private AiTaskDTO toTaskDto(AiExtractTaskPO task) {
         if (task == null) {
             return null;
@@ -1774,10 +2044,42 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .taskStatus(task.getTaskStatus())
                 .retryCount(task.getRetryCount())
                 .questionCount(task.getQuestionCount())
+                .provider(task.getProvider())
+                .fallbackUsed(Boolean.TRUE.equals(task.getFallbackUsed()))
+                .durationMs(safeLong(task.getDurationMs(), 0L))
+                .promptTokens(safeInt(task.getPromptTokens(), 0))
+                .completionTokens(safeInt(task.getCompletionTokens(), 0))
+                .totalTokens((int) taskTokenCount(task))
+                .estimatedCostMicros(safeLong(task.getEstimatedCostMicros(), 0L))
+                .errorCode(task.getErrorCode())
                 .errorMessage(task.getErrorMessage())
                 .createTime(task.getCreateTime())
                 .updateTime(task.getUpdateTime())
                 .build();
+    }
+
+    private long taskTokenCount(AiExtractTaskPO task) {
+        return (long) safeInt(task == null ? null : task.getPromptTokens(), 0)
+                + safeInt(task == null ? null : task.getCompletionTokens(), 0);
+    }
+
+    private long avgDuration(List<Long> durations) {
+        return durations == null || durations.isEmpty()
+                ? 0L
+                : Math.round(durations.stream().mapToLong(Long::longValue).average().orElse(0D));
+    }
+
+    private long percentile95(List<Long> sortedDurations) {
+        if (sortedDurations == null || sortedDurations.isEmpty()) {
+            return 0L;
+        }
+        int index = (int) Math.ceil(sortedDurations.size() * 0.95D) - 1;
+        return sortedDurations.get(Math.max(0, Math.min(index, sortedDurations.size() - 1)));
+    }
+
+    private String blankToDefault(String value, String fallback) {
+        String cleaned = clean(value);
+        return cleaned.isBlank() ? fallback : cleaned;
     }
 
     private List<Long> safeTagIds(List<Long> extractedTagIds, PostDTO post) {
@@ -1856,9 +2158,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
     private String interviewResultLabel(Object value) {
         int code = value instanceof Number number ? number.intValue() : safeParseInt(value);
         return switch (code) {
-            case 1 -> "已 offer";
-            case 2 -> "待结果";
-            case 3 -> "已挂";
+            case 1 -> "已通过";
+            case 2 -> "待反馈";
+            case 3 -> "未通过";
             default -> "未选择";
         };
     }
@@ -1884,6 +2186,25 @@ public class QuestionFacadeImpl implements QuestionFacade {
 
     private int safeInt(Integer value, int fallback) {
         return value == null ? fallback : value;
+    }
+
+    private long safeLong(Long value, long fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private String postQuestionReviewHint(String taskStatus, int extractedCount, int visibleCount,
+                                          int pendingReviewCount, boolean admin) {
+        if (pendingReviewCount > 0 && !admin) {
+            return "已提取 " + extractedCount + " 道题，其中 " + pendingReviewCount + " 道待审核发布；审核通过后会出现在题库、准备台和公司准备包。";
+        }
+        if ("succeeded".equals(taskStatus) && extractedCount > visibleCount && !admin) {
+            int hiddenCount = Math.max(0, extractedCount - visibleCount);
+            return "已提取 " + extractedCount + " 道题，其中 " + hiddenCount + " 道暂未公开；审核完成后会自动展示。";
+        }
+        if ("succeeded".equals(taskStatus) && extractedCount == 0) {
+            return "本次自动整理没有识别到明确题目，可以补充更清晰的问题列表后再次整理。";
+        }
+        return null;
     }
 
     private ReviewSchedule nextReviewSchedule(String status, UserQuestionProgressPO existing, LocalDateTime now) {

@@ -15,4 +15,5 @@ public class SearchAnalyticsDTO {
     private List<SearchAnalyticsItemDTO> hotKeywords;
     private List<SearchAnalyticsItemDTO> noResultKeywords;
     private List<SearchAnalyticsItemDTO> prepClicks;
+    private List<SearchAnalyticsItemDTO> recommendClicks;
 }

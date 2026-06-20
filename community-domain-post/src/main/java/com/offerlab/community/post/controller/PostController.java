@@ -10,15 +10,23 @@ import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.DomainModeratorDTO;
+import com.offerlab.community.post.api.dto.PostContentLimits;
+import com.offerlab.community.post.api.dto.PostContentTypeDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
+import com.offerlab.community.post.application.PostFeaturedService;
+import com.offerlab.community.post.application.PostKnowledgeReviewService;
 import com.offerlab.community.post.application.PostReportService;
+import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -46,20 +54,52 @@ public class PostController {
     private final PostFacade postFacade;
     private final PostApplicationService postService;
     private final PostReportService reportService;
+    private final PostFeaturedService featuredService;
+    private final PostKnowledgeReviewService knowledgeReviewService;
     private final PostDraftService draftService;
+    private final DomainModeratorService domainModeratorService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
+
+    private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
+            new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "技术文章", "文章",
+                    "沉淀架构设计、技术方案、源码阅读和工程实践。", "例如：Spring Cloud Gateway 鉴权链路实践", 40, false),
+            new PostContentTypeDTO(Post.TYPE_PROJECT_REVIEW, "PROJECT_REVIEW", "项目复盘", "复盘",
+                    "复盘项目背景、架构取舍、关键问题、结果和经验。", "例如：CodeCoachAI 从 0 到 1 的后端架构复盘", 80, false),
+            new PostContentTypeDTO(Post.TYPE_PITFALL, "PITFALL", "踩坑记录", "踩坑",
+                    "记录排查过程、根因、修复方案和防复发建议。", "例如：一次 Redis 缓存击穿的定位记录", 60, false),
+            new PostContentTypeDTO(Post.TYPE_COMMUNITY_QUESTION, "QUESTION", "问答求助", "问答",
+                    "提出具体技术问题，补充上下文和已尝试方案。", "例如：MyBatis 分页失效应该从哪里排查？", 30, false),
+            new PostContentTypeDTO(Post.TYPE_RESOURCE, "RESOURCE", "资源分享", "资源",
+                    "分享学习路线、工具、模板、开源项目和参考资料。", "例如：Java 后端工程化学习资源合集", 30, false),
+            new PostContentTypeDTO(Post.TYPE_NOTE, "NOTE", "经验笔记", "笔记",
+                    "记录小而有用的经验、命令、配置和处理手法。", "例如：一次慢 SQL 优化的复盘笔记", 30, false),
+            new PostContentTypeDTO(Post.TYPE_SYSTEM_DESIGN, "SYSTEM_DESIGN", "系统设计", "设计",
+                    "拆解架构目标、容量估算、模块边界、数据模型和取舍。", "例如：从 0 设计一个消息通知系统", 80, false),
+            new PostContentTypeDTO(Post.TYPE_INTERVIEW_RECAP, "INTERVIEW_RECAP", "面试复盘", "复盘",
+                    "沉淀面试问题、追问路径、表达卡点和后续补强计划。", "例如：某厂 Java 后端二面复盘", 80, false),
+            new PostContentTypeDTO(Post.TYPE_INTERVIEW, "LEGACY_INTERVIEW", "历史经验", "旧经验",
+                    "旧版经验类型，保留给历史数据和知识卡链路。", "例如：某主题 Java 后端复盘", 120, true),
+            new PostContentTypeDTO(Post.TYPE_BLOG, "LEGACY_BLOG", "技术博客", "博客",
+                    "旧版技术博客类型。", "例如：Spring 事务传播机制总结", 40, true),
+            new PostContentTypeDTO(Post.TYPE_SOLUTION, "LEGACY_SOLUTION", "题解", "题解",
+                    "旧版题解类型。", "例如：一道并发题的解法整理", 40, true),
+            new PostContentTypeDTO(Post.TYPE_QA, "LEGACY_QA", "历史问答", "问答",
+                    "旧版问答类型。", "例如：如何梳理一个技术问题的上下文？", 40, true)
+    );
 
     @PostMapping
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
     public Result<Map<String, Object>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
+        Integer domain = requireOptionalDomain(req.getDomain());
         contentModerationService.requireUserCanPublish(uid);
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
                 uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
         Long id = postFacade.publishPost(PostCreateCmd.builder()
                 .authorId(uid)
                 .postType(req.getPostType())
+                .domain(domain)
                 .title(req.getTitle())
                 .content(req.getContent())
                 .coverUrl(req.getCoverUrl())
@@ -67,6 +107,7 @@ public class PostController {
                 .extJson(req.getExtJson())
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
+                .anonymous(req.getAnonymous())
                 .reviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
@@ -80,6 +121,7 @@ public class PostController {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         Long uid = UserContext.require();
+        Integer domain = requireOptionalDomain(req.getDomain());
         contentModerationService.requireUserCanPublish(uid);
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
                 uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
@@ -89,11 +131,13 @@ public class PostController {
                 .operatorUid(uid)
                 .title(req.getTitle())
                 .content(req.getContent())
+                .domain(domain)
                 .coverUrl(req.getCoverUrl())
                 .visibility(req.getVisibility())
                 .extJson(req.getExtJson())
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
+                .anonymous(req.getAnonymous())
                 .reviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
@@ -111,10 +155,11 @@ public class PostController {
     @GetMapping("/{postId}")
     public Result<PostDTO> get(@PathVariable Long postId) {
         PostDTO p = postFacade.getPost(postId);
-        // 只有实际可见的帖子才计浏览，避免不存在或不可见内容污染计数。
-        if (p != null) {
-            postService.incrView(postId);
+        if (p == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
+        // 只有实际可见的帖子才计浏览，避免不存在或不可见内容污染计数。
+        postService.incrView(postId);
         return Result.ok(p);
     }
 
@@ -125,10 +170,20 @@ public class PostController {
 
                                                  @RequestParam(required = false, name = "tag") Long tag,
                                                  @RequestParam(required = false, name = "type") Integer type,
+                                                 @RequestParam(required = false) Boolean featured,
+                                                 @RequestParam(required = false) Integer domain,
+                                                 @RequestParam(defaultValue = "false") boolean includeTestData,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
         Long effectiveTagId = tagId != null ? tagId : tag;
-        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, cursor, size));
+        return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured,
+                requireOptionalDomain(domain), cursor, size, includeTestData));
+    }
+
+    @PublicApi
+    @GetMapping("/content-types")
+    public Result<List<PostContentTypeDTO>> contentTypes() {
+        return Result.ok(CONTENT_TYPES);
     }
 
     @GetMapping("/{postId}/versions")
@@ -149,34 +204,83 @@ public class PostController {
 
     @GetMapping("/admin/reports")
     public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
-                                                   @RequestParam(defaultValue = "20") int limit) {
-        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
-        return Result.ok(reportService.listRecent(status, limit));
+                                                   @RequestParam(required = false) Integer domain,
+                                                   @RequestParam(defaultValue = "20") int limit,
+                                                   @RequestParam(defaultValue = "false") boolean includeTestData) {
+        domainModeratorService.requireModerateDomain(UserContext.require(), domain);
+        return Result.ok(reportService.listRecent(status, domain, limit, includeTestData));
     }
 
     @PostMapping("/admin/reports/{reportId}/review")
     public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
-        adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
         return Result.ok(reportService.reviewReport(reportId, uid, req.resolveApproved(), req.getNote()));
+    }
+
+    @PostMapping("/admin/featured/{postId}")
+    public Result<Map<String, Object>> updateFeatured(@PathVariable Long postId,
+                                                      @Valid @RequestBody FeaturedReq req) {
+        Long uid = UserContext.require();
+        return Result.ok(featuredService.updateFeatured(postId, Boolean.TRUE.equals(req.getFeatured()), uid, req.getNote()));
+    }
+
+    @PostMapping("/admin/knowledge/{postId}/review")
+    public Result<Map<String, Object>> reviewKnowledge(@PathVariable Long postId,
+                                                       @Valid @RequestBody KnowledgeReviewReq req) {
+        Long uid = UserContext.require();
+        return Result.ok(knowledgeReviewService.applyReview(postId, uid,
+                new PostKnowledgeReviewService.KnowledgeReviewCmd(
+                        req.getSummary(),
+                        req.getFaqJson(),
+                        req.getKnowledgeCardJson(),
+                        req.getTechStacks(),
+                        req.getSuggestedTags(),
+                        req.getNote()
+                )));
+    }
+
+    @GetMapping("/admin/domain-moderators")
+    public Result<List<DomainModeratorDTO>> listDomainModerators(@RequestParam(required = false) Integer domain,
+                                                                 @RequestParam(required = false) Boolean enabled,
+                                                                 @RequestParam(defaultValue = "100") int limit) {
+        domainModeratorService.requireModerateDomain(UserContext.require(), domain);
+        return Result.ok(domainModeratorService.listModerators(domain, enabled, limit));
+    }
+
+    @PostMapping("/admin/domain-moderators")
+    public Result<DomainModeratorDTO> addDomainModerator(@Valid @RequestBody DomainModeratorReq req) {
+        Long uid = UserContext.require();
+        adminPermissionService.requireAdmin(uid);
+        return Result.ok(domainModeratorService.upsertModerator(req.getUid(), req.getDomain(), uid, req.getNote()));
+    }
+
+    @PostMapping("/admin/domain-moderators/{uid}/status")
+    public Result<DomainModeratorDTO> updateDomainModeratorStatus(@PathVariable Long uid,
+                                                                  @Valid @RequestBody DomainModeratorStatusReq req) {
+        Long operatorUid = UserContext.require();
+        adminPermissionService.requireAdmin(operatorUid);
+        return Result.ok(domainModeratorService.updateModeratorStatus(uid, req.getDomain(), req.getEnabled(), operatorUid, req.getNote()));
     }
 
     @Data
     public static class PublishReq {
         @NotNull
         private Integer postType;
+        /** 领域编码，1-技术 2-职场 3-阅读 4-生活 5-投资理财。为空时服务端默认 TECH */
+        private Integer domain;
         @NotBlank
         @Size(max = 255)
         private String title;
         @NotBlank
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
+        private Boolean anonymous;
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
@@ -192,13 +296,15 @@ public class PostController {
     public static class UpdateReq {
         @Size(max = 255)
         private String title;
-        @Size(max = 20000)
+        @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
         @Size(max = 512)
         private String coverUrl;
         private Integer visibility;
-        @Size(max = 20000)
+        private Integer domain;
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
+        private Boolean anonymous;
         private List<Long> tags;
         private List<Long> tagIds;
         private List<String> tagNames;
@@ -251,5 +357,59 @@ public class PostController {
             }
             return null;
         }
+    }
+
+    @Data
+    public static class FeaturedReq {
+        @NotNull
+        private Boolean featured;
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
+    public static class KnowledgeReviewReq {
+        @Size(max = 500)
+        private String summary;
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN / 2)
+        private String faqJson;
+        @Size(max = PostContentLimits.MAX_EXT_JSON_LEN / 2)
+        private String knowledgeCardJson;
+        @Size(max = 20)
+        private List<@Size(max = 64) String> techStacks;
+        @Size(max = 20)
+        private List<@Size(max = 64) String> suggestedTags;
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
+    public static class DomainModeratorReq {
+        @NotNull
+        private Long uid;
+        @NotNull
+        private Integer domain;
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
+    public static class DomainModeratorStatusReq {
+        @NotNull
+        private Integer domain;
+        @NotNull
+        private Boolean enabled;
+        @Size(max = 500)
+        private String note;
+    }
+
+    private static Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
     }
 }

@@ -21,6 +21,9 @@ public class UserIntentDTO {
     @JsonAlias("targetCity")
     private String expectedCity;
     private List<String> techStack;
+    private List<String> interestTopics;
+    private List<String> interestTags;
+    private List<String> contentPreferences;
     private SalaryRange expectedSalaryRange;
 
     @JsonProperty("targetCity")

@@ -5,6 +5,7 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -22,6 +23,7 @@ import java.util.Date;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class JwtService {
 
     private static final String DEFAULT_SECRET = "offerlab-default-secret-key-please-change-in-prod-1234567890";
@@ -66,6 +68,10 @@ public class JwtService {
      * 校验并返回 uid。token 无效或在黑名单中则返回 null
      */
     public Long parseUid(String token) {
+        return parse(token).uid();
+    }
+
+    public JwtAuthResult parse(String token) {
         try {
             Claims claims = Jwts.parser()
                     .verifyWith(key())
@@ -73,23 +79,27 @@ public class JwtService {
                     .parseSignedClaims(token)
                     .getPayload();
             String sub = claims.getSubject();
-            if (sub == null) return null;
-            // 黑名单校验
-            if (Boolean.TRUE.equals(redis.hasKey("auth:blacklist:" + token))) {
-                return null;
-            }
+            if (sub == null) return JwtAuthResult.invalid();
             Long uid = Long.parseLong(sub);
-            String revokedBefore = redis.opsForValue().get(revokedBeforeKey(uid));
-            Number issuedAtMillis = claims.get("iatMillis", Number.class);
-            long issuedAt = issuedAtMillis != null
-                    ? issuedAtMillis.longValue()
-                    : claims.getIssuedAt() == null ? 0L : claims.getIssuedAt().getTime();
-            if (revokedBefore != null && issuedAt <= Long.parseLong(revokedBefore)) {
-                return null;
+            try {
+                if (Boolean.TRUE.equals(redis.hasKey("auth:blacklist:" + token))) {
+                    return JwtAuthResult.invalid();
+                }
+                String revokedBefore = redis.opsForValue().get(revokedBeforeKey(uid));
+                Number issuedAtMillis = claims.get("iatMillis", Number.class);
+                long issuedAt = issuedAtMillis != null
+                        ? issuedAtMillis.longValue()
+                        : claims.getIssuedAt() == null ? 0L : claims.getIssuedAt().getTime();
+                if (revokedBefore != null && issuedAt <= Long.parseLong(revokedBefore)) {
+                    return JwtAuthResult.invalid();
+                }
+            } catch (Exception redisFailure) {
+                log.warn("jwt redis revocation check degraded: uid={} reason={}", uid, redisFailure.getMessage());
+                return JwtAuthResult.degraded(uid);
             }
-            return uid;
+            return JwtAuthResult.authenticated(uid);
         } catch (Exception e) {
-            return null;
+            return JwtAuthResult.invalid();
         }
     }
 
@@ -97,11 +107,19 @@ public class JwtService {
      * 主动失效（登出）
      */
     public void invalidate(String token) {
-        redis.opsForValue().set("auth:blacklist:" + token, "1", Duration.ofHours(ttlHours));
+        try {
+            redis.opsForValue().set("auth:blacklist:" + token, "1", Duration.ofHours(ttlHours));
+        } catch (Exception e) {
+            log.warn("jwt token invalidation degraded: reason={}", e.getMessage());
+        }
     }
 
     public void invalidateAll(Long uid) {
-        redis.opsForValue().set(revokedBeforeKey(uid), String.valueOf(System.currentTimeMillis()), Duration.ofHours(ttlHours));
+        try {
+            redis.opsForValue().set(revokedBeforeKey(uid), String.valueOf(System.currentTimeMillis()), Duration.ofHours(ttlHours));
+        } catch (Exception e) {
+            log.warn("jwt user revocation degraded: uid={} reason={}", uid, e.getMessage());
+        }
     }
 
     private static String revokedBeforeKey(Long uid) {

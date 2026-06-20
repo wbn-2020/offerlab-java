@@ -68,6 +68,8 @@ springdoc:
     enabled: false
 
 offerlab:
+  redis:
+    pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}
   jwt:
     secret: ${JWT_SECRET:offerlab-dev-secret-key-please-change-in-prod-1234567890abcdef}
     ttl-hours: 168
@@ -91,6 +93,6 @@ offerlab:
 logging:
   level:
     root: INFO
-    com.offerlab.community: DEBUG
+    com.offerlab.community: ${OFFERLAB_LOG_LEVEL:INFO}
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}] %logger{36} - %msg%n"

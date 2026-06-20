@@ -19,6 +19,7 @@ class PostSearchConsistencyGuardTest {
         String retryPo = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/po/SearchIndexRetryTaskPO.java");
         String opsController = read("src/main/java/com/offerlab/community/search/controller/OpsController.java");
         String facade = read("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java");
+        String taskService = read("src/main/java/com/offerlab/community/search/application/SearchIndexTaskService.java");
         String postService = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostApplicationService.java");
         String resolver = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/mq/producer/EventTopicResolver.java");
         String initSql = read("../db/init/02_post.sql");
@@ -26,6 +27,16 @@ class PostSearchConsistencyGuardTest {
 
         assertTrue(indexer.contains("deletePostDocument(postId)"), "indexer must delete ES docs when a post becomes non-indexable");
         assertTrue(indexer.contains("elasticsearch.deleteDocument"), "indexer must call ES deleteDocument for stale posts");
+        assertTrue(indexer.contains("boolean ensured = enabled && available && ensurePostIndex()"), "search status must actively recover stale indexReady state");
+        assertTrue(indexer.contains("status.put(\"diagnosticMessage\""), "search status must keep ops diagnostics separate from user-facing copy");
+        assertTrue(indexer.contains("List<Long> postIds = posts.stream()"), "post index rebuild must collect each page of post ids");
+        assertTrue(indexer.contains("extensionMapper.selectBatchIds(postIds)"), "post index rebuild must batch-load extensions instead of querying per document");
+        assertTrue(indexer.contains("counterMapper.selectBatchIds(postIds)"), "post index rebuild must batch-load counters instead of querying per document");
+        assertTrue(indexer.contains("selectTagsByPostIds(postIds)"), "post index rebuild must batch-load tags instead of querying per document");
+        assertTrue(indexer.contains("tags.getOrDefault(post.getId(), List.of())"), "post index rebuild must pass page-local tag groups into document construction");
+        assertTrue(indexer.contains("props.put(\"tags\", Map.of(\"type\", \"nested\", \"properties\", Map.of(")
+                        && indexer.contains("\"synonyms\", text"),
+                "post_idx mapping must keep tags as nested before adding tag synonym fields");
         assertTrue(listener.contains("PostDeletedEvent"), "search listener must consume post delete events");
         assertTrue(listener.contains("indexer.deletePost(event.getPostId())"), "delete event must remove the ES document");
         assertTrue(listener.contains("retryService.enqueueIndex"), "index failures must enqueue durable retry tasks");
@@ -37,6 +48,20 @@ class PostSearchConsistencyGuardTest {
         assertTrue(facade.contains("filterVisibleSearchResults"), "ES results must pass through a visibility filter");
         assertTrue(facade.contains("postFacade.batchGetPosts"), "search visibility fallback must use PostFacade current-state reads");
         assertTrue(facade.contains("stale elasticsearch post filtered"), "filtered stale ES hits must be observable in logs");
+        assertTrue(facade.contains("int scanLimit = elasticsearchScanLimit(limit)"), "ES search must over-fetch before applying visibility filters");
+        assertTrue(facade.contains("body.put(\"size\", scanLimit)"), "ES search request size must use the over-fetch limit");
+        assertTrue(facade.contains("boolean hasMore = visibleItems.size() > limit"), "ES hasMore must be calculated after visibility filtering");
+        assertTrue(facade.contains("visibleItems.subList(0, limit)"), "ES search must trim over-fetched visible results before returning the page");
+        assertTrue(facade.contains("isSparseAfterVisibilityFiltering"), "sparse ES pages must be detected after visibility filtering");
+        assertTrue(facade.contains("rawHitCount() >= esPage.scanLimit()"), "sparse detection must only trigger when ES exhausted the scan window");
+        assertTrue(facade.contains("shouldUseMysqlFallback"), "sparse ES pages must be eligible for MySQL compensation");
+        assertTrue(taskService.contains("REDIS_ACTIVE_REBUILD_KEY"), "post index rebuild task must use a distributed active gate");
+        assertTrue(taskService.contains("setIfAbsent"), "post index rebuild distributed gate must be claimed atomically");
+        assertTrue(taskService.contains("remoteActiveSnapshot"), "post index rebuild must return the active remote task instead of creating a duplicate");
+        assertTrue(taskService.contains("releaseDistributedActiveTask"), "post index rebuild must release its distributed gate after completion");
+        assertTrue(taskService.contains("ThreadPoolExecutor"), "post index rebuild must use a dedicated bounded executor");
+        assertTrue(taskService.contains("ArrayBlockingQueue<>(1)"), "post index rebuild executor must have a bounded queue");
+        assertTrue(!taskService.contains("ForkJoinPool.commonPool()"), "post index rebuild must not use the JVM common pool for blocking rebuild work");
 
         assertTrue(retryService.contains("@Scheduled(fixedDelay = 5000)"), "search retry service must periodically replay due tasks");
         assertTrue(retryService.contains("claimDue(owner, lockUntil, BATCH_SIZE)"), "search retry service must claim tasks before replaying");
@@ -59,7 +84,27 @@ class PostSearchConsistencyGuardTest {
         assertTrue(migration.contains("idx_search_index_retry_due"), "retry table must index due pending tasks");
     }
 
+    @Test
+    void mysqlFallbackMustPassThroughPostFacadeForAnonymousMasking() throws Exception {
+        String facade = read("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java");
+        String searchByMysql = methodBody(facade, "private PageResult<PostBriefDTO> searchByMysql");
+
+        assertTrue(searchByMysql.contains("filterVisibleSearchResults(items, includeTestData)"),
+                "MySQL fallback search must reuse PostFacade visibility/anonymous masking.");
+        assertTrue(!searchByMysql.contains("enrich(items)"),
+                "MySQL fallback search must not enrich authors directly from raw authorId.");
+    }
+
     private static String read(String path) throws Exception {
         return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+    }
+
+    private static String methodBody(String source, String signaturePrefix) {
+        int start = source.indexOf(signaturePrefix);
+        if (start < 0) {
+            return "";
+        }
+        int next = source.indexOf("\n    private ", start + signaturePrefix.length());
+        return next < 0 ? source.substring(start) : source.substring(start, next);
     }
 }

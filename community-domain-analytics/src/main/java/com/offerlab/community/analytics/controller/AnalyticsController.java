@@ -1,9 +1,12 @@
 package com.offerlab.community.analytics.controller;
 
 import com.offerlab.community.analytics.api.AnalyticsFacade;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.post.domain.model.PostDomain;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,12 +25,23 @@ public class AnalyticsController {
     @PublicApi
     @GetMapping("/trend")
     public Result<Map<String, Object>> trend(@RequestParam(defaultValue = "30d") String range,
-                                             @RequestParam(required = false) String period) {
-        return Result.ok(facade.getTrendDashboard(period == null ? range : period));
+                                             @RequestParam(required = false) String period,
+                                             @RequestParam(required = false) Integer domain) {
+        return Result.ok(facade.getTrendDashboard(period == null ? range : period, requireOptionalDomain(domain)));
     }
 
     @GetMapping("/me")
     public Result<Map<String, Object>> me() {
         return Result.ok(facade.getPersonalDashboard(UserContext.require()));
+    }
+
+    private Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
     }
 }

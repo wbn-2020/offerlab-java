@@ -9,6 +9,7 @@ import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
@@ -23,15 +24,20 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class FeedFacadeImpl implements FeedFacade {
+
+    private static final int MAX_DOMAIN_INBOX_SCAN_ROWS = 1000;
 
     private final FeedInboxRedis feedRedis;
     private final FeedFeedbackStore feedbackStore;
@@ -41,17 +47,21 @@ public class FeedFacadeImpl implements FeedFacade {
     private final ObjectMapper objectMapper;
 
     @Override
-    public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size) {
+    public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size, Integer domain) {
         double maxScore = parseCursorScore(cursor);
+        if (domain != null) {
+            return getDomainFollowingFeed(uid, maxScore, size, domain);
+        }
         Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readInboxWithScore(uid, maxScore, size);
         return assembleFromTuples(tuples, size, uid);
     }
 
     @Override
-    public PageResult<FeedItemVO> getRecommendFeed(Long uid, String cursor, int size) {
+    public PageResult<FeedItemVO> getRecommendFeed(Long uid, String cursor, int size, Integer domain) {
         long c = parseCursorAsEpoch(cursor);
-        int candidateSize = Math.min(Math.max(size * 3, size), 50);
-        var page = postFacade.getLatest(c, candidateSize);
+        var page = domain == null
+                ? postFacade.getLatest(c, size)
+                : postFacade.listPosts(null, null, null, null, domain, c, size);
         if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
             return PageResult.empty();
         }
@@ -67,22 +77,114 @@ public class FeedFacadeImpl implements FeedFacade {
     }
 
     @Override
-    public PageResult<FeedItemVO> getLatestFeed(Long viewerUid, String cursor, int size) {
-        double maxScore = parseCursorScore(cursor);
-        Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readGlobalLatest(maxScore, size);
+    public PageResult<FeedItemVO> getLatestFeed(Long viewerUid, String cursor, int size, Integer domain) {
+        if (domain != null) {
+            long c = parseCursorAsEpoch(cursor);
+            var page = postFacade.listPosts(null, null, null, null, domain, c, size);
+            if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+                return PageResult.empty();
+            }
+            return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+        }
+        PageResult<FeedItemVO> dbPage = fallbackLatestFromDb(viewerUid, cursor, size);
+        if (cursor == null || cursor.isBlank()) {
+            return mergeFirstPageLatestWithRedis(viewerUid, size, dbPage);
+        }
+        if (dbPage != null && dbPage.getItems() != null && !dbPage.getItems().isEmpty()) {
+            return dbPage;
+        }
+        Set<ZSetOperations.TypedTuple<String>> tuples = readGlobalLatestSafely(parseCursorScore(cursor), size);
         if (tuples == null || tuples.isEmpty()) {
-            // Redis 没数据时降级走 DB
-            return fallbackLatestFromDb(viewerUid, cursor, size);
+            return PageResult.empty();
         }
         return assembleFromTuples(tuples, size, viewerUid);
     }
 
+    private PageResult<FeedItemVO> mergeFirstPageLatestWithRedis(Long viewerUid,
+                                                                 int size,
+                                                                 PageResult<FeedItemVO> dbPage) {
+        Set<ZSetOperations.TypedTuple<String>> tuples = readGlobalLatestSafely(Double.MAX_VALUE, size);
+        boolean hasDbItems = dbPage != null && dbPage.getItems() != null && !dbPage.getItems().isEmpty();
+        boolean hasRedisItems = tuples != null && !tuples.isEmpty();
+        if (!hasDbItems && !hasRedisItems) {
+            return PageResult.empty();
+        }
+        if (!hasRedisItems) {
+            return dbPage;
+        }
+        Map<Long, Long> redisScores = tuples == null ? Map.of() : tuples.stream()
+                .map(this::toPostIdAndScore)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(pair -> pair[0], pair -> pair[1], (left, right) -> Math.max(left, right)));
+        PageResult<FeedItemVO> redisPage = assembleFromTuples(tuples, size, viewerUid);
+        Map<Long, FeedItemVO> deduped = new LinkedHashMap<>();
+        addFeedItems(deduped, redisPage == null ? null : redisPage.getItems());
+        addFeedItems(deduped, dbPage == null ? null : dbPage.getItems());
+        if (deduped.isEmpty()) {
+            return PageResult.empty();
+        }
+        List<FeedItemVO> merged = deduped.values().stream()
+                .sorted(Comparator.<FeedItemVO>comparingLong(item -> latestScore(item, redisScores)).reversed()
+                        .thenComparing(item -> item.getPost() == null ? null : item.getPost().getId(),
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+        boolean candidateHasMore = merged.size() > size;
+        List<FeedItemVO> items = candidateHasMore ? merged.subList(0, size) : merged;
+        boolean hasMore = candidateHasMore
+                || Boolean.TRUE.equals(dbPage == null ? null : dbPage.getHasMore())
+                || Boolean.TRUE.equals(redisPage == null ? null : redisPage.getHasMore());
+        String nextCursor = dbPage == null ? null : dbPage.getNextCursor();
+        if (nextCursor == null && redisPage != null) {
+            nextCursor = redisPage.getNextCursor();
+        }
+        return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private Set<ZSetOperations.TypedTuple<String>> readGlobalLatestSafely(double maxScore, int size) {
+        try {
+            return feedRedis.readGlobalLatest(maxScore, size);
+        } catch (Exception e) {
+            log.warn("feed redis global latest read failed, fallback to db page: {}", e.toString());
+            return Set.of();
+        }
+    }
+
+    private void addFeedItems(Map<Long, FeedItemVO> target, List<FeedItemVO> source) {
+        if (source == null || source.isEmpty()) {
+            return;
+        }
+        for (FeedItemVO item : source) {
+            if (item == null || item.getPost() == null || item.getPost().getId() == null) {
+                continue;
+            }
+            target.putIfAbsent(item.getPost().getId(), item);
+        }
+    }
+
+    private long latestScore(FeedItemVO item, Map<Long, Long> redisScores) {
+        if (item == null || item.getPost() == null) {
+            return 0L;
+        }
+        Long redisScore = redisScores.get(item.getPost().getId());
+        if (redisScore != null) {
+            return redisScore;
+        }
+        LocalDateTime createTime = item.getPost().getCreateTime();
+        return createTime == null ? 0L : createTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+    }
+
     @Override
-    public PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size) {
-        long c = parseCursorAsEpoch(cursor);
-        var page = postFacade.getHot(c, size);
+    public PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size, Integer domain) {
+        if (domain != null) {
+            var page = postFacade.getHot(cursor, size, domain);
+            if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+                return PageResult.empty();
+            }
+            return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
+        }
+        var page = postFacade.getHot(cursor, size);
         if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
-            return getLatestFeed(viewerUid, cursor, size);
+            return getLatestFeed(viewerUid, cursor, size, null);
         }
         return assembleFromPosts(page.getItems(), viewerUid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()));
     }
@@ -96,12 +198,13 @@ public class FeedFacadeImpl implements FeedFacade {
                                                       int size,
                                                       Long viewerUid) {
         if (tuples == null || tuples.isEmpty()) return PageResult.empty();
-        List<long[]> idsAndScores = tuples.stream()
-                .map(t -> new long[]{Long.parseLong(t.getValue()), t.getScore() == null ? 0L : t.getScore().longValue()})
-                .toList();
+        List<long[]> idsAndScores = idsAndScores(tuples);
+        if (idsAndScores.isEmpty()) {
+            return PageResult.empty();
+        }
 
         List<Long> postIds = idsAndScores.stream().map(a -> a[0]).toList();
-        var posts = postFacade.batchGetPosts(postIds);
+        var posts = postFacade.batchGetPosts(postIds, viewerUid);
         var counters = postFacade.batchGetCounters(postIds);
         Set<Long> authorIds = posts.values().stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet());
         var authors = userFacade.batchGetUserBriefs(authorIds);
@@ -110,7 +213,7 @@ public class FeedFacadeImpl implements FeedFacade {
         for (long[] pair : idsAndScores) {
             PostBriefDTO p = posts.get(pair[0]);
             if (p == null) continue;
-            UserBriefDTO author = authors.get(p.getAuthorId());
+            UserBriefDTO author = feedAuthor(p, authors);
             PostCounterDTO counter = counters.get(p.getId());
             FeedItemVO.MyInteraction my = null;
             if (viewerUid != null) {
@@ -126,13 +229,100 @@ public class FeedFacadeImpl implements FeedFacade {
                     .myInteraction(my)
                     .build());
         }
-        boolean hasMore = items.size() == size;
+        boolean hasMore = idsAndScores.size() == size;
         String next = null;
         if (hasMore) {
             long lastScore = idsAndScores.get(idsAndScores.size() - 1)[1];
             next = String.valueOf(lastScore);
         }
         return PageResult.of(items, next, hasMore);
+    }
+
+    private PageResult<FeedItemVO> getDomainFollowingFeed(Long uid, double maxScore, int size, Integer domain) {
+        int pageSize = Math.max(1, size);
+        int fetchSize = overFetchSize(pageSize);
+        List<FeedItemVO> matches = new ArrayList<>(pageSize + 1);
+        List<Long> matchScores = new ArrayList<>(pageSize + 1);
+        double scanMaxScore = maxScore;
+        Long lastRawScore = null;
+        boolean sourceHasMore = false;
+        int scannedRows = 0;
+
+        while (matches.size() <= pageSize && scannedRows < MAX_DOMAIN_INBOX_SCAN_ROWS) {
+            int remainingScanRows = MAX_DOMAIN_INBOX_SCAN_ROWS - scannedRows;
+            int currentFetchSize = Math.min(fetchSize, remainingScanRows);
+            Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readInboxWithScore(uid, scanMaxScore, currentFetchSize);
+            List<long[]> idsAndScores = idsAndScores(tuples);
+            if (idsAndScores.isEmpty()) {
+                sourceHasMore = false;
+                break;
+            }
+
+            scannedRows += idsAndScores.size();
+            lastRawScore = idsAndScores.get(idsAndScores.size() - 1)[1];
+            sourceHasMore = idsAndScores.size() == currentFetchSize;
+
+            PageResult<FeedItemVO> rawPage = assembleFromTuples(tuples, currentFetchSize, uid);
+            Map<Long, FeedItemVO> itemByPostId = rawPage.getItems().stream()
+                    .filter(item -> item != null && item.getPost() != null && item.getPost().getId() != null)
+                    .collect(Collectors.toMap(item -> item.getPost().getId(), item -> item, (left, right) -> left));
+            for (long[] pair : idsAndScores) {
+                FeedItemVO item = itemByPostId.get(pair[0]);
+                if (matchesDomain(item, domain)) {
+                    matches.add(item);
+                    matchScores.add(pair[1]);
+                    if (matches.size() > pageSize) {
+                        break;
+                    }
+                }
+            }
+
+            if (!sourceHasMore || matches.size() > pageSize) {
+                break;
+            }
+            double nextScanMaxScore = lastRawScore - 1D;
+            if (nextScanMaxScore >= scanMaxScore) {
+                break;
+            }
+            scanMaxScore = nextScanMaxScore;
+        }
+
+        if (matches.isEmpty()) {
+            if (sourceHasMore && lastRawScore != null) {
+                return PageResult.<FeedItemVO>empty()
+                        .withDiagnostic("domainInboxScanRows", scannedRows)
+                        .withDiagnostic("domainInboxScanLimited", scannedRows >= MAX_DOMAIN_INBOX_SCAN_ROWS);
+            }
+            return PageResult.<FeedItemVO>empty().withDiagnostic("domainInboxScanRows", scannedRows);
+        }
+
+        boolean hasMore = matches.size() > pageSize || sourceHasMore;
+        List<FeedItemVO> items = matches.size() > pageSize ? matches.subList(0, pageSize) : matches;
+        String nextCursor = hasMore ? String.valueOf(matchScores.get(items.size() - 1)) : null;
+        return PageResult.of(items, nextCursor, hasMore)
+                .withDiagnostic("domainInboxScanRows", scannedRows);
+    }
+
+    private long[] toPostIdAndScore(ZSetOperations.TypedTuple<String> tuple) {
+        if (tuple == null || tuple.getValue() == null) {
+            return null;
+        }
+        try {
+            return new long[]{Long.parseLong(tuple.getValue()), tuple.getScore() == null ? 0L : tuple.getScore().longValue()};
+        } catch (NumberFormatException e) {
+            log.warn("feed redis tuple skipped: invalid postId={}", tuple.getValue());
+            return null;
+        }
+    }
+
+    private List<long[]> idsAndScores(Set<ZSetOperations.TypedTuple<String>> tuples) {
+        if (tuples == null || tuples.isEmpty()) {
+            return List.of();
+        }
+        return tuples.stream()
+                .map(this::toPostIdAndScore)
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     private PageResult<FeedItemVO> fallbackLatestFromDb(Long viewerUid, String cursor, int size) {
@@ -155,7 +345,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .collect(Collectors.toSet()));
         List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
-                .author(authors.get(p.getAuthorId()))
+                .author(feedAuthor(p, authors))
                 .counter(counters.get(p.getId()))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
                         .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
@@ -163,6 +353,13 @@ public class FeedFacadeImpl implements FeedFacade {
                         .build())
                 .build()).toList();
         return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private UserBriefDTO feedAuthor(PostBriefDTO post, Map<Long, UserBriefDTO> authors) {
+        if (post == null) {
+            return null;
+        }
+        return post.getAuthor() != null ? post.getAuthor() : authors.get(post.getAuthorId());
     }
 
     private PageResult<FeedItemVO> assembleRecommendPosts(List<PostBriefDTO> posts,
@@ -211,18 +408,21 @@ public class FeedFacadeImpl implements FeedFacade {
             return 0D;
         }
         JsonNode ext = parseExt(post.getExtJson());
-        String company = clean(ext.path("company").asText(""));
-        String position = clean(ext.path("position").asText(""));
-        String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
+        String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
+        String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
+        String content = searchableText(post, ext);
         double score = 0D;
-        if (matchesAny(company, intent.getTargetCompanies())) {
+        if (matchesAny(engineeringArea, intent.getTargetCompanies())) {
             score += 28D;
         }
-        if (matchesAny(position, intent.getTargetPositions())) {
+        if (matchesAny(technicalScenario, intent.getTargetPositions())) {
             score += 22D;
         }
         if (matchesAny(content, intent.getTechStack())) {
             score += 14D;
+        }
+        if (!firstMatchedInterest(content, interestCandidates(intent)).isBlank()) {
+            score += 72D;
         }
         return score;
     }
@@ -230,27 +430,31 @@ public class FeedFacadeImpl implements FeedFacade {
     private List<String> recommendationReasons(PostBriefDTO post, PostCounterDTO counter, UserIntentDTO intent) {
         List<String> reasons = new ArrayList<>();
         JsonNode ext = parseExt(post.getExtJson());
-        String company = clean(ext.path("company").asText(""));
-        String position = clean(ext.path("position").asText(""));
-        String content = clean((post.getTitle() == null ? "" : post.getTitle()) + " " + (post.getSummary() == null ? "" : post.getSummary()));
-        if (intent != null && matchesAny(company, intent.getTargetCompanies())) {
-            reasons.add("匹配你的目标公司：" + company);
+        String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
+        String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
+        String content = searchableText(post, ext);
+        String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
+        if (!matchedInterest.isBlank()) {
+            reasons.add("匹配你的兴趣：" + matchedInterest);
         }
-        if (intent != null && matchesAny(position, intent.getTargetPositions())) {
-            reasons.add("匹配你的目标岗位：" + position);
+        if (intent != null && matchesAny(engineeringArea, intent.getTargetCompanies())) {
+            reasons.add("覆盖你关注的工程场景：" + engineeringArea);
+        }
+        if (intent != null && matchesAny(technicalScenario, intent.getTargetPositions())) {
+            reasons.add("关联你关注的技术主题：" + technicalScenario);
         }
         if (intent != null && matchesAny(content, intent.getTechStack())) {
             reasons.add("包含你关注的技术栈");
         }
         long heat = counter == null ? 0L : safe(counter.getLikeCount()) + safe(counter.getFavoriteCount()) + safe(counter.getCommentCount());
         if (heat >= 3) {
-            reasons.add("近期互动热度较高");
+            reasons.add("近期社区互动热度较高");
         }
         if (post.getCreateTime() != null && Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours() <= 24) {
             reasons.add("24 小时内新发布");
         }
         if ((post.getTags() == null ? 0 : post.getTags().size()) >= 2) {
-            reasons.add("标签信息完整，便于快速判断");
+            reasons.add("技术标签完整，便于快速判断主题");
         }
         if (reasons.isEmpty()) {
             reasons.add("根据近期内容质量和活跃度推荐");
@@ -267,6 +471,84 @@ public class FeedFacadeImpl implements FeedFacade {
         } catch (Exception e) {
             return objectMapper.createObjectNode();
         }
+    }
+
+    private static String searchableText(PostBriefDTO post, JsonNode ext) {
+        if (post == null) {
+            return "";
+        }
+        String tags = post.getTags() == null ? "" : post.getTags().stream()
+                .filter(Objects::nonNull)
+                .flatMap(tag -> Stream.of(tag.getName(), tag.getSlug(), tag.getCategory()))
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining(" "));
+        String extText = Stream.of(
+                        ext.path("contentType").asText(""),
+                        ext.path("topic").asText(""),
+                        ext.path("category").asText(""),
+                        ext.path("scenario").asText(""),
+                        ext.path("position").asText(""),
+                        ext.path("company").asText(""),
+                        firstArrayValue(ext, "techStacks"),
+                        firstArrayValue(ext, "topics"),
+                        firstArrayValue(ext, "tags"))
+                .collect(Collectors.joining(" "));
+        return clean(String.join(" ",
+                post.getTitle() == null ? "" : post.getTitle(),
+                post.getSummary() == null ? "" : post.getSummary(),
+                tags,
+                extText));
+    }
+
+    private static List<String> interestCandidates(UserIntentDTO intent) {
+        if (intent == null) {
+            return List.of();
+        }
+        return Stream.of(
+                        intent.getInterestTopics(),
+                        intent.getInterestTags(),
+                        intent.getContentPreferences())
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .filter(item -> item != null && !item.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    private static String firstMatchedInterest(String source, List<String> candidates) {
+        String text = clean(source).toLowerCase();
+        if (text.isBlank() || candidates == null || candidates.isEmpty()) {
+            return "";
+        }
+        return candidates.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .map(String::trim)
+                .filter(item -> text.contains(item.toLowerCase()))
+                .findFirst()
+                .orElse("");
+    }
+
+    private static String firstArrayValue(JsonNode ext, String field) {
+        JsonNode node = ext.path(field);
+        if (!node.isArray()) {
+            return "";
+        }
+        for (JsonNode item : node) {
+            String value = clean(item.asText(""));
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String firstNonBlank(String first, String fallback) {
+        String normalized = clean(first);
+        if (!normalized.isBlank()) {
+            return normalized;
+        }
+        return clean(fallback);
     }
 
     private static boolean matchesAny(String source, List<String> candidates) {
@@ -286,6 +568,19 @@ public class FeedFacadeImpl implements FeedFacade {
 
     private static long safe(Long value) {
         return value == null ? 0L : value;
+    }
+
+    private int overFetchSize(int size) {
+        return Math.min(Math.max(size * 5, size), 100);
+    }
+
+    private boolean matchesDomain(FeedItemVO item, Integer domain) {
+        if (item == null || item.getPost() == null) {
+            return false;
+        }
+        Integer postDomain = item.getPost().getDomain();
+        int effectiveDomain = postDomain == null ? Post.DOMAIN_TECH : postDomain;
+        return effectiveDomain == domain;
     }
 
     /** 当 cursor 表示 score (timestamp ms) 时；空则视为 +∞（从最新开始） */

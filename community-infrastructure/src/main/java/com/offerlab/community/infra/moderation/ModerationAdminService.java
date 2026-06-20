@@ -112,12 +112,13 @@ public class ModerationAdminService {
     }
 
     @Transactional
-    public UserModerationState clearUserMute(Long uid, Long operatorUid) {
+    public UserModerationState clearUserMute(Long uid, Long operatorUid, String reason) {
         ensureTable("t_user_moderation_state");
         if (uid == null || uid <= 0) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
-        if (mapper.clearMute(uid, "解除禁言", operatorUid) == 0) {
+        String normalizedReason = fallbackReason(reason, "解除禁言");
+        if (mapper.clearMute(uid, normalizedReason, operatorUid) == 0) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         UserModerationState state = mapper.findUserState(uid);
@@ -129,12 +130,13 @@ public class ModerationAdminService {
     }
 
     @Transactional
-    public UserModerationState clearUserBan(Long uid, Long operatorUid) {
+    public UserModerationState clearUserBan(Long uid, Long operatorUid, String reason) {
         ensureTable("t_user_moderation_state");
         if (uid == null || uid <= 0) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
-        if (mapper.clearBan(uid, "解除封禁", operatorUid) == 0) {
+        String normalizedReason = fallbackReason(reason, "解除封禁");
+        if (mapper.clearBan(uid, normalizedReason, operatorUid) == 0) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         UserModerationState state = mapper.findUserState(uid);
@@ -211,5 +213,10 @@ public class ModerationAdminService {
         }
         String trimmed = value.trim();
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
+    }
+
+    private String fallbackReason(String reason, String fallback) {
+        String value = limit(reason, 500);
+        return StringUtils.hasText(value) ? value : fallback;
     }
 }

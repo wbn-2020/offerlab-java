@@ -6,6 +6,7 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.user.application.UserApplicationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -28,21 +29,21 @@ public class AuthController {
     private final UserApplicationService userService;
 
     @PostMapping("/register")
-    @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600)
+    @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600, failOpen = false)
     public Result<Map<String, Long>> register(@Valid @RequestBody RegisterReq req, HttpServletRequest http) {
         Long uid = userService.register(req.getEmail(), req.getPassword(), req.getNickname());
         return Result.ok(Map.of("uid", uid));
     }
 
     @PostMapping("/login")
-    @RateLimit(key = "'auth:login:' + #http.remoteAddr", rate = 20, per = 300)
+    @RateLimit(key = "'auth:login:' + #http.remoteAddr", rate = 20, per = 300, failOpen = false)
     public Result<Map<String, Object>> login(@Valid @RequestBody LoginReq req, HttpServletRequest http) {
-        String token = userService.login(req.getEmail(), req.getPassword(), http.getRemoteAddr());
+        String token = userService.login(req.accountValue(), req.getPassword(), http.getRemoteAddr());
         return Result.ok(Map.of("token", token));
     }
 
     @PostMapping("/logout")
-    public Result<Void> logout(@RequestHeader("Authorization") String auth) {
+    public Result<Void> logout(@RequestHeader(value = "Authorization", required = false) String auth) {
         if (auth != null && auth.startsWith("Bearer ")) {
             userService.logout(auth.substring(7));
         }
@@ -64,9 +65,23 @@ public class AuthController {
 
     @Data
     public static class LoginReq {
-        @NotBlank
+        @Size(max = 128)
+        private String account;
+        @Size(max = 128)
         private String email;
         @NotBlank
         private String password;
+
+        public String accountValue() {
+            if (account != null && !account.isBlank()) {
+                return account.trim();
+            }
+            return email == null ? "" : email.trim();
+        }
+
+        @AssertTrue(message = "account must not be blank")
+        public boolean isAccountPresent() {
+            return (account != null && !account.isBlank()) || (email != null && !email.isBlank());
+        }
     }
 }

@@ -2,6 +2,7 @@ package com.offerlab.community.infra.redis.lock;
 
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.TimeUnit;
@@ -10,6 +11,7 @@ import java.util.concurrent.TimeUnit;
  * 分布式锁 - 基于 Redisson
  */
 @Component
+@ConditionalOnBean(RedissonClient.class)
 public class DistributedLock {
     private final RedissonClient redissonClient;
 

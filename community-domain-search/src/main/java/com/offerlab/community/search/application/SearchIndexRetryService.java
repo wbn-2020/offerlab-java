@@ -1,6 +1,7 @@
 package com.offerlab.community.search.application;
 
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRetryTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRetryTaskPO;
 import lombok.RequiredArgsConstructor;
@@ -47,11 +48,36 @@ public class SearchIndexRetryService {
         return taskMapper.listRecent(status, clampLimit(limit));
     }
 
+    public PageResult<SearchIndexRetryTaskPO> pageRecent(Integer status, int page, int pageSize) {
+        if (!tableReady()) {
+            return PageResult.empty();
+        }
+        int safePageSize = clampLimit(pageSize);
+        int safePage = Math.max(1, page);
+        int offset = (safePage - 1) * safePageSize;
+        long total = taskMapper.countPage(status);
+        List<SearchIndexRetryTaskPO> items = total <= offset
+                ? List.of()
+                : taskMapper.pageRecent(status, safePageSize, offset);
+        return PageResult.<SearchIndexRetryTaskPO>builder()
+                .items(items)
+                .hasMore(offset + items.size() < total)
+                .total(total)
+                .build();
+    }
+
     public SearchIndexRetryTaskPO findById(Long id) {
         if (!tableReady()) {
             return null;
         }
         return id == null || id <= 0 ? null : taskMapper.findById(id);
+    }
+
+    public SearchIndexRetryTaskPO findLatestByPostId(Long postId) {
+        if (!tableReady()) {
+            return null;
+        }
+        return postId == null || postId <= 0 ? null : taskMapper.findLatestByPostId(postId);
     }
 
     public Map<String, Object> status() {
@@ -66,9 +92,20 @@ public class SearchIndexRetryService {
         for (Map<String, Object> row : taskMapper.countByStatus()) {
             byStatus.put(statusName(row.get("status")), asLong(row.get("count")));
         }
+        long duePending = taskMapper.countDuePending();
+        long failed = byStatus.getOrDefault("failed", 0L);
+        boolean attentionRequired = failed > 0 || duePending > 0;
         Map<String, Object> status = new LinkedHashMap<>();
+        status.put("status", attentionRequired ? "DEGRADED" : "UP");
+        status.put("available", true);
         status.put("byStatus", byStatus);
-        status.put("duePending", taskMapper.countDuePending());
+        status.put("duePending", duePending);
+        status.put("attentionRequired", attentionRequired);
+        if (attentionRequired) {
+            status.put("message", "Search index retry queue has failed or due tasks");
+            status.put("action", "Review failed search index retry tasks in Ops and replay after Elasticsearch is healthy.");
+            status.put("diagnostics", diagnostics(failed, duePending));
+        }
         return status;
     }
 
@@ -191,9 +228,59 @@ public class SearchIndexRetryService {
         byStatus.put("failed", 0L);
         byStatus.put("running", 0L);
         Map<String, Object> status = new LinkedHashMap<>();
+        status.put("status", "DOWN");
+        status.put("available", false);
+        status.put("attentionRequired", true);
+        status.put("message", "search index retry table unavailable");
+        status.put("action", "Apply the search index retry migration before relying on async index repair.");
         status.put("byStatus", byStatus);
         status.put("duePending", 0L);
         return status;
+    }
+
+    private Map<String, Object> diagnostics(long failed, long duePending) {
+        SearchIndexRetryTaskPO failedSample = failed > 0 ? firstTask(SearchIndexRetryTaskMapper.STATUS_FAILED) : null;
+        SearchIndexRetryTaskPO pendingSample = duePending > 0 ? firstTask(SearchIndexRetryTaskMapper.STATUS_PENDING) : null;
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        diagnostics.put("failedSample", summarize(failedSample));
+        diagnostics.put("pendingSample", summarize(pendingSample));
+        diagnostics.put("latestError", firstText(errorOf(failedSample), errorOf(pendingSample)));
+        diagnostics.put("recommendedAction", "Open /api/v1/ops/search-index-retry-tasks?status=2, confirm Elasticsearch readiness, then replay failed test records first.");
+        return diagnostics;
+    }
+
+    private SearchIndexRetryTaskPO firstTask(int status) {
+        try {
+            List<SearchIndexRetryTaskPO> rows = taskMapper.listRecent(status, 1);
+            return rows == null || rows.isEmpty() ? null : rows.get(0);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Map<String, Object> summarize(SearchIndexRetryTaskPO task) {
+        if (task == null) {
+            return null;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", task.getId());
+        data.put("operation", task.getOperation());
+        data.put("postId", task.getPostId());
+        data.put("retryCount", task.getRetryCount());
+        data.put("nextRetryTime", task.getNextRetryTime() == null ? null : task.getNextRetryTime().toString());
+        data.put("lastError", task.getLastError());
+        return data;
+    }
+
+    private static String errorOf(SearchIndexRetryTaskPO task) {
+        return task == null ? null : task.getLastError();
+    }
+
+    private static String firstText(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second == null || second.isBlank() ? null : second;
     }
 
     private static String statusName(Object status) {

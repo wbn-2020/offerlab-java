@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
@@ -12,6 +13,7 @@ import com.offerlab.community.post.api.event.PostDeletedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PostUpdatedEvent;
 import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostTagRefMapper;
@@ -28,8 +30,13 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 @Slf4j
 @Service
@@ -46,14 +53,19 @@ public class PostApplicationService {
     private final PostVersionHistoryService versionHistoryService;
     private final PostPublishQualityValidator qualityValidator;
     private final AfterCommitExecutor afterCommit;
+    private final CommunityTopicService communityTopicService;
+    private final MigrationCheckService migrationCheckService;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
+        Integer domain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), Post.DOMAIN_TECH);
         PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
                 cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
         long id = idGen.nextId();
         List<Long> resolvedTagIds = resolveTagIds(input.tagIds(), input.tagNames());
         requireResolvedTagCount(input.postType(), resolvedTagIds);
+        String enrichedExtJson = mergeAnonymousToExtJson(
+                mergeDomainToExtJson(input.extJson(), domain), domain, cmd.getAnonymous());
         boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired());
         Post post = Post.builder()
                 .id(id)
@@ -64,8 +76,9 @@ public class PostApplicationService {
                 .coverUrl(cmd.getCoverUrl())
                 .visibility(cmd.getVisibility() == null ? Post.VIS_PUBLIC : cmd.getVisibility())
                 .postStatus(reviewRequired ? Post.STATUS_REVIEWING : Post.STATUS_PUBLISHED)
-                .extJson(input.extJson())
+                .extJson(enrichedExtJson)
                 .tagIds(resolvedTagIds)
+                .domain(domain)
                 .build();
         postRepo.save(post);
         counterMapper.initIfAbsent(id);
@@ -77,7 +90,11 @@ public class PostApplicationService {
                     .authorId(cmd.getAuthorId())
                     .title(input.title())
                     .content(input.content())
+                    .visibility(post.getVisibility())
+                    .postStatus(post.getPostStatus())
                     .timestamp(Instant.now().toEpochMilli())
+                    .tagIds(resolvedTagIds)
+                    .topicNotificationTargets(communityTopicService.notificationTargetsForPost(resolvedTagIds, cmd.getAuthorId()))
                     .build());
         }
         return id;
@@ -90,6 +107,7 @@ public class PostApplicationService {
         if (!post.getAuthorId().equals(cmd.getOperatorUid())) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
+        Integer nextDomain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), post.getDomain());
         boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
         List<Long> existingTagIds = currentTagIds(post.getId());
         List<Long> validationTagIds = tagsProvided ? cmd.getTagIds() : existingTagIds;
@@ -105,13 +123,16 @@ public class PostApplicationService {
         if (tagsProvided) {
             requireResolvedTagCount(input.postType(), resolvedTagIds);
         }
+        String enrichedExtJson = mergeAnonymousToExtJson(
+                mergeDomainToExtJson(input.extJson(), nextDomain), nextDomain, cmd.getAnonymous());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
         versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
-                input.title(), input.content(), nextCoverUrl, nextVisibility, input.extJson(), resolvedTagIds, tagsProvided);
+                input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided);
 
         post.setVisibility(nextVisibility);
-        post.setExtJson(input.extJson());
+        post.setExtJson(enrichedExtJson);
+        post.setDomain(nextDomain);
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
@@ -127,6 +148,8 @@ public class PostApplicationService {
                 .authorId(post.getAuthorId())
                 .title(post.getTitle())
                 .content(post.getContent())
+                .visibility(post.getVisibility())
+                .postStatus(post.getPostStatus())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
     }
@@ -155,6 +178,97 @@ public class PostApplicationService {
         afterCommit.execute(() -> postCounterRedis.incrView(postId, 1), "post view counter:" + postId);
     }
 
+    private String mergeDomainToExtJson(String extJson, Integer domain) {
+        if (domain == null) return extJson;
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root;
+            if (extJson != null && !extJson.isBlank()) {
+                root = mapper.readTree(extJson);
+                if (root instanceof ObjectNode obj) {
+                    obj.put("domain", domain);
+                    return mapper.writeValueAsString(obj);
+                }
+            }
+            // No existing extJson, create new
+            ObjectNode obj = mapper.createObjectNode();
+            obj.put("domain", domain);
+            return mapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            // If can't parse, return original
+            return extJson;
+        }
+    }
+
+    private String mergeAnonymousToExtJson(String extJson, Integer domain, Boolean anonymous) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode object = readObjectExtJson(mapper, extJson);
+            Integer effectiveDomain = domain != null ? domain : readDomain(object);
+            boolean hasAnonymous = object.has("anonymous");
+            if (anonymous == null && !hasAnonymous) {
+                return extJson;
+            }
+            boolean enabled = Objects.equals(effectiveDomain, Post.DOMAIN_CAREER) && Boolean.TRUE.equals(
+                    anonymous == null ? object.path("anonymous").asBoolean(false) : anonymous);
+            object.put("anonymous", enabled);
+            return mapper.writeValueAsString(object);
+        } catch (Exception e) {
+            return extJson;
+        }
+    }
+
+    private ObjectNode readObjectExtJson(ObjectMapper mapper, String extJson) throws Exception {
+        if (extJson != null && !extJson.isBlank()) {
+            JsonNode root = mapper.readTree(extJson);
+            if (root instanceof ObjectNode obj) {
+                return obj;
+            }
+        }
+        return mapper.createObjectNode();
+    }
+
+    private Integer readDomain(ObjectNode object) {
+        if (object != null && object.has("domain") && object.get("domain").canConvertToInt()) {
+            return object.get("domain").asInt();
+        }
+        return null;
+    }
+
+    private Integer resolveRequestedDomain(Integer explicitDomain, String extJson, Integer fallbackDomain) {
+        if (explicitDomain != null) {
+            return requireDomain(explicitDomain);
+        }
+        Integer extDomain = readDomainFromExtJson(extJson);
+        if (PostDomain.isValid(extDomain)) {
+            return extDomain;
+        }
+        return defaultDomain(fallbackDomain);
+    }
+
+    private Integer readDomainFromExtJson(String extJson) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            return readDomain(readObjectExtJson(mapper, extJson));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Integer defaultDomain(Integer domain) {
+        if (domain == null) {
+            return Post.DOMAIN_TECH;
+        }
+        return requireDomain(domain);
+    }
+
+    private Integer requireDomain(Integer domain) {
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw PostPublishQualityValidator.fieldError("domain", "领域不存在或已下线");
+    }
+
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {
         Set<Long> ids = new LinkedHashSet<>();
         if (tagIds != null) {
@@ -163,12 +277,13 @@ public class PostApplicationService {
                     .limit(20)
                     .toList();
             if (!requestedIds.isEmpty()) {
-                Set<Long> existingIds = tagMapper.selectBatchIds(requestedIds).stream()
+                Set<Long> existingIds = selectTagsByIds(requestedIds).stream()
+                        .filter(tag -> !java.util.Objects.equals(tag.getTagStatus(), 0))
                         .map(TagPO::getId)
                         .collect(Collectors.toCollection(HashSet::new));
                 for (Long id : requestedIds) {
                     if (!existingIds.contains(id)) {
-                        throw PostPublishQualityValidator.fieldError("tags", "标签不存在或已被删除");
+                        throw PostPublishQualityValidator.fieldError("tags", "标签不存在、已删除或已被禁用");
                     }
                     ids.add(id);
                 }
@@ -182,16 +297,16 @@ public class PostApplicationService {
                     .limit(20)
                     .toList();
             if (!names.isEmpty()) {
-                Set<String> existingNames = tagMapper.selectByNames(names).stream()
+                Set<String> existingNames = selectTagsByNames(names).stream()
                         .map(TagPO::getTagName)
                         .map(String::toLowerCase)
                         .collect(Collectors.toSet());
                 for (String name : names) {
                     if (!existingNames.contains(name.toLowerCase())) {
-                        tagMapper.insertIgnoreName(idGen.nextId(), name, 4);
+                        insertIgnoreName(idGen.nextId(), name, 4);
                     }
                 }
-                tagMapper.selectByNames(names).stream()
+                selectTagsByNames(names).stream()
                         .map(TagPO::getId)
                         .forEach(ids::add);
             }
@@ -203,16 +318,16 @@ public class PostApplicationService {
     }
 
     private void requireResolvedTagCount(Integer postType, List<Long> tagIds) {
-        int min = Post.TYPE_INTERVIEW == (postType == null ? 0 : postType) ? 2 : 1;
+        int min = Post.isInterviewType(postType) ? 2 : 1;
         if (tagIds == null || tagIds.size() < min) {
-            throw PostPublishQualityValidator.fieldError("tags", Post.TYPE_INTERVIEW == (postType == null ? 0 : postType)
-                    ? "面经至少需要 2 个有效技术标签"
+            throw PostPublishQualityValidator.fieldError("tags", Post.isInterviewType(postType)
+                    ? "历史经验至少需要 2 个有效技术标签"
                     : "至少需要 1 个有效标签");
         }
     }
 
     private List<Long> currentTagIds(Long postId) {
-        return tagMapper.selectTagsByPostIds(List.of(postId)).stream()
+        return selectTagsByPostIds(List.of(postId)).stream()
                 .map(PostTagView::getId)
                 .filter(id -> id != null && id > 0)
                 .distinct()
@@ -223,7 +338,7 @@ public class PostApplicationService {
         if (tagIds == null || tagIds.isEmpty()) {
             return List.of();
         }
-        Map<Long, TagPO> tags = tagMapper.selectBatchIds(tagIds).stream()
+        Map<Long, TagPO> tags = selectTagsByIds(tagIds).stream()
                 .collect(Collectors.toMap(TagPO::getId, tag -> tag));
         return tagIds.stream()
                 .map(tags::get)
@@ -239,15 +354,54 @@ public class PostApplicationService {
     }
 
     private void syncTags(Long postId, List<Long> tagIds) {
+        Set<Long> oldIds = new LinkedHashSet<>(currentTagIds(postId));
+        Set<Long> newIds = tagIds == null ? Set.of() : tagIds.stream()
+                .filter(id -> id != null && id > 0)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         postTagRefMapper.deleteByPostId(postId);
-        if (tagIds == null || tagIds.isEmpty()) {
-            return;
-        }
-        for (Long tagId : tagIds) {
+        oldIds.stream()
+                .filter(id -> !newIds.contains(id))
+                .forEach(postTagRefMapper::decrUseCount);
+        for (Long tagId : newIds) {
             int inserted = postTagRefMapper.insertIgnore(idGen.nextId(), postId, tagId);
-            if (inserted > 0) {
+            if (inserted > 0 && !oldIds.contains(tagId)) {
                 postTagRefMapper.incrUseCount(tagId);
             }
+        }
+    }
+
+    private List<TagPO> selectTagsByIds(List<Long> tagIds) {
+        if (tagIds == null || tagIds.isEmpty()) {
+            return List.of();
+        }
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectByIds(tagIds)
+                : tagMapper.selectByIdsCompat(tagIds);
+    }
+
+    private List<PostTagView> selectTagsByPostIds(List<Long> postIds) {
+        if (postIds == null || postIds.isEmpty()) {
+            return List.of();
+        }
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectTagsByPostIds(postIds)
+                : tagMapper.selectTagsByPostIdsCompat(postIds);
+    }
+
+    private List<TagPO> selectTagsByNames(List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return List.of();
+        }
+        return migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectByNames(names)
+                : tagMapper.selectByNamesCompat(names);
+    }
+
+    private void insertIgnoreName(Long id, String name, int tagType) {
+        if (migrationCheckService.tagGovernanceReady()) {
+            tagMapper.insertIgnoreName(id, name, tagType);
+        } else {
+            tagMapper.insertIgnoreNameCompat(id, name, tagType);
         }
     }
 }

@@ -19,6 +19,8 @@ public class PostUpdateCmd {
     private String coverUrl;
     private Integer visibility;
     private String extJson;
+    private Integer domain;
+    private Boolean anonymous;
     private List<Long> tagIds;
     private List<String> tagNames;
     private Boolean reviewRequired;

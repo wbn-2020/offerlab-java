@@ -2,12 +2,17 @@ package com.offerlab.community.post.application;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostDraftCmd;
 import com.offerlab.community.post.api.dto.PostDraftDTO;
+import com.offerlab.community.post.domain.model.Post;
+import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostDraftMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostDraftPO;
 import lombok.RequiredArgsConstructor;
@@ -89,7 +94,7 @@ public class PostDraftService {
         if (id == null) {
             id = idGen.nextId();
         }
-        PostDraftPO po = toPo(cmd, id);
+        PostDraftPO po = toPo(cmd, id, existing);
         if (existing == null) {
             draftMapper.insert(po);
         } else {
@@ -117,23 +122,30 @@ public class PostDraftService {
         }
     }
 
-    private PostDraftPO toPo(PostDraftCmd cmd, Long id) {
+    private PostDraftPO toPo(PostDraftCmd cmd, Long id, PostDraftPO existing) {
+        String baseExtJson = StringUtils.hasText(cmd.getExtJson())
+                ? cmd.getExtJson()
+                : existing == null ? null : existing.getExtJson();
+        Integer domain = draftDomain(cmd.getDomain(), baseExtJson);
+        Boolean anonymous = draftAnonymous(cmd.getAnonymous(), baseExtJson, domain);
         PostDraftPO po = new PostDraftPO();
         po.setId(id);
         po.setUid(cmd.getUid());
         po.setSourcePostId(cmd.getSourcePostId());
         po.setPostType(cmd.getPostType() == null ? 1 : cmd.getPostType());
         po.setTitle(limit(cmd.getTitle(), 255));
-        po.setContent(limit(cmd.getContent(), 20000));
+        po.setContent(limit(cmd.getContent(), PostContentLimits.MAX_CONTENT_LEN));
         po.setCoverUrl(limit(cmd.getCoverUrl(), 512));
         po.setVisibility(cmd.getVisibility() == null ? 1 : cmd.getVisibility());
-        po.setExtJson(StringUtils.hasText(cmd.getExtJson()) ? limit(cmd.getExtJson(), 20000) : null);
+        po.setExtJson(limit(normalizeDraftExtJson(baseExtJson, domain, anonymous), PostContentLimits.MAX_EXT_JSON_LEN));
         po.setTagIdsJson(writeJson(cmd.getTagIds()));
         po.setTagNamesJson(writeJson(normalizeTagNames(cmd.getTagNames())));
         return po;
     }
 
     private PostDraftDTO toDto(PostDraftPO po) {
+        Integer domain = draftDomain(null, po.getExtJson());
+        Boolean anonymous = draftAnonymous(null, po.getExtJson(), domain);
         return PostDraftDTO.builder()
                 .id(po.getId())
                 .uid(po.getUid())
@@ -143,6 +155,8 @@ public class PostDraftService {
                 .content(po.getContent())
                 .coverUrl(po.getCoverUrl())
                 .visibility(po.getVisibility())
+                .domain(domain)
+                .anonymous(anonymous)
                 .extJson(po.getExtJson())
                 .tagIds(readJson(po.getTagIdsJson(), LONG_LIST_TYPE))
                 .tagNames(readJson(po.getTagNamesJson(), STRING_LIST_TYPE))
@@ -189,6 +203,66 @@ public class PostDraftService {
         }
         String normalized = value.trim();
         return normalized.length() <= max ? normalized : normalized.substring(0, max);
+    }
+
+    private String normalizeDraftExtJson(String extJson, Integer domain, Boolean anonymous) {
+        try {
+            ObjectNode object = readObjectExtJson(extJson);
+            object.put("domain", draftDomain(domain, extJson));
+            object.put("anonymous", Boolean.TRUE.equals(anonymous) && draftDomain(domain, extJson) == Post.DOMAIN_CAREER);
+            return objectMapper.writeValueAsString(object);
+        } catch (Exception e) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+    }
+
+    private Integer draftDomain(Integer explicitDomain, String extJson) {
+        if (explicitDomain != null) {
+            return requireDomain(explicitDomain);
+        }
+        Integer legacyDomain = readDomain(extJson);
+        return PostDomain.fromCode(legacyDomain).getCode();
+    }
+
+    private Boolean draftAnonymous(Boolean explicitAnonymous, String extJson, Integer domain) {
+        boolean requested = explicitAnonymous == null ? readAnonymous(extJson) : explicitAnonymous;
+        return domain != null && domain == Post.DOMAIN_CAREER && requested;
+    }
+
+    private Integer requireDomain(Integer domain) {
+        if (PostDomain.isValid(domain)) {
+            return domain;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private Integer readDomain(String extJson) {
+        try {
+            ObjectNode object = readObjectExtJson(extJson);
+            JsonNode node = object.get("domain");
+            return node != null && node.canConvertToInt() ? node.asInt() : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private boolean readAnonymous(String extJson) {
+        try {
+            ObjectNode object = readObjectExtJson(extJson);
+            return object.path("anonymous").asBoolean(false);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private ObjectNode readObjectExtJson(String extJson) throws Exception {
+        if (StringUtils.hasText(extJson)) {
+            JsonNode root = objectMapper.readTree(extJson);
+            if (root instanceof ObjectNode object) {
+                return object;
+            }
+        }
+        return objectMapper.createObjectNode();
     }
 
     private boolean tableReady() {

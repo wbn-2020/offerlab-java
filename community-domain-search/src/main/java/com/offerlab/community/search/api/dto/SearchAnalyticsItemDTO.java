@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 public class SearchAnalyticsItemDTO {
     private String keyword;
     private String company;
+    private String target;
     private Long count;
     private Long noResultCount;
     private Long lastResultCount;

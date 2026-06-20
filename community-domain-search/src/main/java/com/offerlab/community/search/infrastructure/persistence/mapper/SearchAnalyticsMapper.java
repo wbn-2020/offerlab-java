@@ -41,11 +41,34 @@ public interface SearchAnalyticsMapper extends BaseMapper<SearchAnalyticsEventPO
               AND keyword IS NOT NULL
               AND keyword <> ''
               AND create_time >= DATE_SUB(NOW(3), INTERVAL #{days} DAY)
+              AND (
+                #{includeTestData} = TRUE
+                OR (
+                  UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  AND (company IS NULL OR (
+                    UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  ))
+                  AND (position IS NULL OR (
+                    UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  ))
+                )
+              )
             GROUP BY keyword
             ORDER BY count DESC, lastSearchedAt DESC
             LIMIT #{limit}
             """)
-    List<Map<String, Object>> topSearchKeywords(@Param("days") int days, @Param("limit") int limit);
+    List<Map<String, Object>> topSearchKeywords(@Param("days") int days,
+                                                @Param("limit") int limit,
+                                                @Param("includeTestData") boolean includeTestData);
 
     @Select("""
             SELECT keyword,
@@ -59,11 +82,34 @@ public interface SearchAnalyticsMapper extends BaseMapper<SearchAnalyticsEventPO
               AND keyword IS NOT NULL
               AND keyword <> ''
               AND create_time >= DATE_SUB(NOW(3), INTERVAL #{days} DAY)
+              AND (
+                #{includeTestData} = TRUE
+                OR (
+                  UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  AND (company IS NULL OR (
+                    UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  ))
+                  AND (position IS NULL OR (
+                    UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(position, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  ))
+                )
+              )
             GROUP BY keyword
             ORDER BY noResultCount DESC, lastSearchedAt DESC
             LIMIT #{limit}
             """)
-    List<Map<String, Object>> topNoResultKeywords(@Param("days") int days, @Param("limit") int limit);
+    List<Map<String, Object>> topNoResultKeywords(@Param("days") int days,
+                                                  @Param("limit") int limit,
+                                                  @Param("includeTestData") boolean includeTestData);
 
     @Select("""
             SELECT company,
@@ -74,9 +120,53 @@ public interface SearchAnalyticsMapper extends BaseMapper<SearchAnalyticsEventPO
               AND company IS NOT NULL
               AND company <> ''
               AND create_time >= DATE_SUB(NOW(3), INTERVAL #{days} DAY)
+              AND (
+                #{includeTestData} = TRUE
+                OR (
+                  UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                )
+              )
             GROUP BY company
             ORDER BY count DESC, lastSearchedAt DESC
             LIMIT #{limit}
             """)
-    List<Map<String, Object>> topPrepClicks(@Param("days") int days, @Param("limit") int limit);
+    List<Map<String, Object>> topPrepClicks(@Param("days") int days,
+                                            @Param("limit") int limit,
+                                            @Param("includeTestData") boolean includeTestData);
+
+    @Select("""
+            SELECT company,
+                   MAX(keyword) AS keyword,
+                   COUNT(*) AS count,
+                   MAX(create_time) AS lastSearchedAt
+            FROM t_search_analytics_event
+            WHERE event_type IN ('COMMUNITY_RECOMMEND_CLICK', 'PREP_CLICK')
+              AND company IS NOT NULL
+              AND company <> ''
+              AND create_time >= DATE_SUB(NOW(3), INTERVAL #{days} DAY)
+              AND (
+                #{includeTestData} = TRUE
+                OR (
+                  UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                  AND UPPER(REPLACE(REPLACE(REPLACE(company, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  AND (keyword IS NULL OR (
+                    UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%E2E%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%SMOKE%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%CODEX%'
+                    AND UPPER(REPLACE(REPLACE(REPLACE(keyword, '-', ''), '_', ''), ' ', '')) NOT LIKE '%TESTDATA%'
+                  ))
+                )
+              )
+            GROUP BY company
+            ORDER BY count DESC, lastSearchedAt DESC
+            LIMIT #{limit}
+            """)
+    List<Map<String, Object>> topRecommendationClicks(@Param("days") int days,
+                                                      @Param("limit") int limit,
+                                                      @Param("includeTestData") boolean includeTestData);
 }

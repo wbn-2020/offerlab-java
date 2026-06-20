@@ -1,5 +1,6 @@
 package com.offerlab.community.question.api.dto;
 
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 @Data
@@ -15,4 +16,22 @@ public class QuestionAdminUpdateCmd {
     private String interviewRound;
     private String difficulty;
     private Integer status;
+    @Size(max = 500)
+    private String remark;
+    @Size(max = 32)
+    private String confirmationPhrase;
+
+    public boolean hasEditableField() {
+        return questionText != null
+                || answerHint != null
+                || examPoint != null
+                || referenceAnswer != null
+                || sourceSnippet != null
+                || qualityReason != null
+                || company != null
+                || position != null
+                || interviewRound != null
+                || difficulty != null
+                || status != null;
+    }
 }

@@ -44,17 +44,17 @@ public class QuestionPrepAssembler {
         String prepAction = "/companies/" + urlEncode(company) + "/prep";
         boolean personalTargetDone = viewerUid != null && targetAdded;
         return List.of(
-                checklistItem("target", "加入我的目标", "把公司加入准备台，后续推荐会优先匹配这家公司。", personalTargetDone,
+                checklistItem("target", "加入我的目标", "把这个主题加入学习空间，后续推荐会优先匹配相关内容。", personalTargetDone,
                         personalTargetDone ? 1 : 0, 1, viewerUid == null ? "/login?redirect=" + urlEncode(prepAction) : "/me/prep"),
-                checklistItem("questions", "覆盖高频题", "至少沉淀 5 道公司相关高频题，方便面试前集中刷。", questionCount >= 5,
+                checklistItem("questions", "覆盖高频知识卡", "至少沉淀 5 张相关高频知识卡，方便集中学习。", questionCount >= 5,
                         questionCount, 5, "/questions?company=" + urlEncode(company)),
-                checklistItem("posts", "阅读近期面经", "至少阅读 3 篇近期面经，了解轮次和问题风格。", postCount >= 3,
+                checklistItem("posts", "阅读近期内容", "至少阅读 3 篇近期相关内容，了解真实场景和问题风格。", postCount >= 3,
                         postCount, 3, "/search?q=" + urlEncode(company)),
                 checklistItem("progress", "掌握核心问题", "至少掌握 3 道高频题，形成自己的答题模板。", mastered >= 3,
                         mastered, 3, "/questions?company=" + urlEncode(company)),
-                checklistItem("focus", "锁定岗位和标签", "准备包需要有岗位和技术标签，便于拆分复习方向。", positionCount > 0 && tagCount >= 3,
+                checklistItem("focus", "锁定场景和标签", "主题包需要有场景和技术标签，便于拆分学习方向。", positionCount > 0 && tagCount >= 3,
                         Math.min(positionCount + tagCount, 6), 6, "/questions?company=" + urlEncode(company)),
-                checklistItem("activity", "保持复习动作", "收藏、学习中或待复习题越多，说明这家公司正在进入你的备考节奏。", active >= 3,
+                checklistItem("activity", "保持学习动作", "收藏、学习中或待复习知识卡越多，说明这个主题正在进入你的学习节奏。", active >= 3,
                         active, 3, "/questions?company=" + urlEncode(company))
         );
     }

@@ -24,6 +24,8 @@ public class PostDTO {
     private Integer visibility;
     private Integer postStatus;
     private String extJson;
+    private Integer domain;
+    private Boolean anonymous;
     private List<TagDTO> tags;
     private PostCounterDTO counter;
     private LocalDateTime createTime;

@@ -26,11 +26,20 @@ public class MockInterviewAnswerDTO {
     private String selfReview;
     private Integer score;
     private Boolean aiReviewed;
+    private String aiReviewStatus;
+    private String aiReviewError;
     private Integer aiScore;
     private String aiCompleteness;
     private String aiProjectExpression;
     private String aiFollowUpSuggestion;
     private String aiReviewProvider;
+    private String aiReviewTaskId;
+    private Boolean aiReviewFallbackUsed;
+    private Long aiReviewDurationMs;
+    private Integer aiReviewPromptTokens;
+    private Integer aiReviewCompletionTokens;
+    private Long aiReviewEstimatedCostMicros;
+    private String aiReviewErrorCode;
     private LocalDateTime createTime;
     private QuestionDTO question;
 }

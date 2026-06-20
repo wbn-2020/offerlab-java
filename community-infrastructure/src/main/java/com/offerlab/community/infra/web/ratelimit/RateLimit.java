@@ -25,4 +25,9 @@ public @interface RateLimit {
      * 时间窗口（秒）
      */
     int per() default 60;
+
+    /**
+     * Redis 限流不可用时是否允许请求继续。
+     */
+    boolean failOpen() default true;
 }

@@ -10,4 +10,5 @@ public class ModerationKeywordAdminCmd {
     private String scope;
     private Integer enabled;
     private String remark;
+    private String auditRemark;
 }

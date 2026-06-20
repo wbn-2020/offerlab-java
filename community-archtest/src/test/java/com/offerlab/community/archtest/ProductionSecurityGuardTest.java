@@ -11,7 +11,9 @@ import com.offerlab.community.feed.controller.FeedController;
 import com.offerlab.community.interaction.controller.InteractionController;
 import com.offerlab.community.notification.controller.NotificationController;
 import com.offerlab.community.post.controller.PostController;
+import com.offerlab.community.question.controller.QuestionAdminController;
 import com.offerlab.community.question.controller.QuestionController;
+import com.offerlab.community.search.controller.SearchAdminController;
 import com.offerlab.community.user.controller.AuthController;
 import com.offerlab.community.user.controller.UserController;
 import org.junit.jupiter.api.Test;
@@ -71,6 +73,12 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
+    void riskyAdminRebuildEndpointsAreRateLimitedFailClosed() throws Exception {
+        assertRateLimitedFailClosed(SearchAdminController.class, "rebuildPostIndex", SearchAdminController.RebuildRequest.class);
+        assertRateLimitedFailClosed(QuestionAdminController.class, "rebuildQuestionIndexTask", QuestionAdminController.RemarkRequest.class);
+    }
+
+    @Test
     void prodProfileRejectsLocalCorsOrigins() throws Exception {
         WebMvcConfig config = new WebMvcConfig(null, prodEnvironment());
         setField(config, "allowedOrigins", "http://localhost:5173,http://127.0.0.1:5174");
@@ -122,6 +130,15 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
+    void stagingProfileDoesNotAllowLocalOpenAdminMode() {
+        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), profiles("staging"));
+
+        assertFalse(service.isLocalOpenMode());
+        assertEquals("LOCKED", service.mode());
+        assertThrows(BizException.class, () -> service.requireAdmin(10001L));
+    }
+
+    @Test
     void prodConfigMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
         String prodConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
         String baseConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
@@ -135,7 +152,25 @@ class ProductionSecurityGuardTest {
         assertTrue(prodConfig.contains("swagger-ui:\n    enabled: false") || prodConfig.contains("swagger-ui:\r\n    enabled: false"), "prod must disable Swagger UI");
         assertFalse(prodConfig.contains("local-open-enabled: true"), "prod must not enable local-open admin bootstrap");
         assertTrue(prodConfig.contains("secret: ${JWT_SECRET}"), "prod must require an external JWT secret");
+        assertTrue(prodConfig.contains("password: ${REDIS_PASSWORD}"), "prod must require an external Redis password without an empty default");
+        assertTrue(prodConfig.contains("bootstrap-servers: ${KAFKA_BROKERS}"), "prod must require explicit Kafka brokers");
+        assertTrue(prodConfig.contains("url: ${ELASTICSEARCH_URL}"), "prod must require an explicit Elasticsearch URL");
         assertTrue(prodConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "prod must require explicit CORS origins");
+        assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfiguration"),
+                "dev profile must exclude Redisson auto configuration so Redis outages do not block local startup");
+        assertTrue(devConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}"),
+                "dev profile must disable Redis Pub/Sub by default and opt in through OFFERLAB_REDIS_PUBSUB_ENABLED");
+        assertTrue(baseConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}"),
+                "base profile must keep Redis Pub/Sub enabled by default unless explicitly overridden");
+    }
+
+    @Test
+    void dockerComposeMustBeClearlyLocalOnly() throws Exception {
+        String compose = Files.readString(Path.of("../docker-compose.yml"), StandardCharsets.UTF_8);
+
+        assertTrue(compose.contains("LOCAL DEVELOPMENT ONLY"), "docker-compose must warn that it is not production configuration");
+        assertTrue(compose.contains("PLAINTEXT") && compose.contains("xpack.security.enabled: \"false\""),
+                "local-only warning must cover intentionally insecure Kafka/Elasticsearch defaults");
     }
 
     @Test
@@ -243,6 +278,14 @@ class ProductionSecurityGuardTest {
         RateLimit rateLimit = method.getAnnotation(RateLimit.class);
         org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, controllerClass.getSimpleName() + "." + methodName + " must be rate limited");
         org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), controllerClass.getSimpleName() + "." + methodName + " rate limit key must not be blank");
+    }
+
+    private static void assertRateLimitedFailClosed(Class<?> controllerClass, String methodName, Class<?>... parameterTypes) throws Exception {
+        Method method = controllerClass.getDeclaredMethod(methodName, parameterTypes);
+        RateLimit rateLimit = method.getAnnotation(RateLimit.class);
+        org.junit.jupiter.api.Assertions.assertNotNull(rateLimit, controllerClass.getSimpleName() + "." + methodName + " must be rate limited");
+        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.key().isBlank(), controllerClass.getSimpleName() + "." + methodName + " rate limit key must not be blank");
+        org.junit.jupiter.api.Assertions.assertFalse(rateLimit.failOpen(), controllerClass.getSimpleName() + "." + methodName + " rate limit must fail closed");
     }
 
     private static void invokeValidateCorsOrigins(WebMvcConfig config) throws Exception {

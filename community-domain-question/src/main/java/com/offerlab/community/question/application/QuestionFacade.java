@@ -3,6 +3,7 @@ package com.offerlab.community.question.application;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.question.api.dto.AiTaskDetailDTO;
 import com.offerlab.community.question.api.dto.AiTaskDTO;
+import com.offerlab.community.question.api.dto.AiTaskMetricsDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasCmd;
 import com.offerlab.community.question.api.dto.CompanyAliasCandidateDTO;
 import com.offerlab.community.question.api.dto.CompanyAliasDTO;
@@ -35,6 +36,8 @@ public interface QuestionFacade {
 
     List<AiTaskDTO> listTasks(Integer status, int limit);
 
+    AiTaskMetricsDTO getTaskMetrics(int limit);
+
     AiTaskDetailDTO getTaskDetail(Long taskId);
 
     AiTaskDTO retryTask(Long taskId);
@@ -44,6 +47,8 @@ public interface QuestionFacade {
     PageResult<QuestionDTO> searchQuestions(QuestionQuery query, Long viewerUid);
 
     QuestionDetailDTO getQuestionDetail(Long questionId, Long viewerUid, boolean admin);
+
+    List<QuestionDTO> getVisibleQuestionsByIds(List<Long> questionIds, Long viewerUid);
 
     List<PostBriefDTO> getRelatedPosts(Long questionId);
 

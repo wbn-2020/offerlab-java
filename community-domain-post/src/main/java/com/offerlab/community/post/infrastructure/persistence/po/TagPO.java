@@ -17,7 +17,12 @@ public class TagPO {
     private Integer tagType;
     private Long useCount;
     private Integer isOfficial;
+    private Integer tagStatus;
+    private Integer recommended;
+    private String synonyms;
+    private Long mergeTargetId;
     private LocalDateTime createTime;
+    private LocalDateTime updateTime;
     @TableLogic
     private Integer isDeleted;
 }

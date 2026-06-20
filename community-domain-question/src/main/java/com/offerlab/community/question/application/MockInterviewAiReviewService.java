@@ -36,6 +36,10 @@ public class MockInterviewAiReviewService {
     private String allowedHosts;
     @Value("${offerlab.ai.deepseek.review-max-answer-chars:" + DeepseekSafety.DEFAULT_MAX_ANSWER_CHARS + "}")
     private int maxAnswerChars;
+    @Value("${offerlab.ai.deepseek.prompt-cost-micros-per-1k:0}")
+    private long promptCostMicrosPer1k;
+    @Value("${offerlab.ai.deepseek.completion-cost-micros-per-1k:0}")
+    private long completionCostMicrosPer1k;
 
     public ReviewResult review(MockInterviewAnswerPO answer) {
         if (answer == null || answer.getQuestionId() == null || !hasText(answer.getAnswerText())) {
@@ -47,9 +51,10 @@ public class MockInterviewAiReviewService {
             } catch (Exception e) {
                 log.warn("mock interview AI review failed, fallback to rules: sessionId={} questionId={} error={}",
                         answer.getSessionId(), answer.getQuestionId(), e.getMessage());
+                return ruleReview(answer, true, normalizeErrorCode(e));
             }
         }
-        return ruleReview(answer);
+        return ruleReview(answer, false, null);
     }
 
     private ReviewResult callDeepseek(MockInterviewAnswerPO answer) throws Exception {
@@ -80,6 +85,9 @@ public class MockInterviewAiReviewService {
             throw new IllegalStateException("Deepseek HTTP " + response.statusCode());
         }
         JsonNode root = objectMapper.readTree(response.body());
+        JsonNode usage = root.path("usage");
+        int promptTokens = Math.max(0, usage.path("prompt_tokens").asInt(0));
+        int completionTokens = Math.max(0, usage.path("completion_tokens").asInt(0));
         String content = root.path("choices").path(0).path("message").path("content").asText("");
         JsonNode parsed = objectMapper.readTree(content);
         return new ReviewResult(
@@ -87,17 +95,27 @@ public class MockInterviewAiReviewService {
                 limit(defaultText(parsed.path("completeness").asText(null), ruleCompleteness(answer)), 300),
                 limit(defaultText(parsed.path("projectExpression").asText(null), ruleProjectExpression(answer)), 300),
                 limit(defaultText(parsed.path("followUpSuggestion").asText(null), ruleFollowUpSuggestion(answer)), 300),
-                "deepseek"
+                "deepseek",
+                false,
+                promptTokens,
+                completionTokens,
+                estimateCostMicros(promptTokens, completionTokens),
+                null
         );
     }
 
-    private ReviewResult ruleReview(MockInterviewAnswerPO answer) {
+    private ReviewResult ruleReview(MockInterviewAnswerPO answer, boolean fallbackUsed, String errorCode) {
         return new ReviewResult(
                 ruleScore(answer),
                 ruleCompleteness(answer),
                 ruleProjectExpression(answer),
                 ruleFollowUpSuggestion(answer),
-                "rules"
+                "rules",
+                fallbackUsed,
+                0,
+                0,
+                0L,
+                errorCode
         );
     }
 
@@ -142,7 +160,7 @@ public class MockInterviewAiReviewService {
         if (!containsAny(text, "项目", "业务", "线上", "系统")) {
             return "下一轮用一个项目例子复述这题，按背景、动作、结果三段讲。";
         }
-        return hasText(question) ? "下一轮请准备一个面试官可能继续追问的反例或极端场景。" : "下一轮把答案压缩成 2 分钟版本，保留核心论点。";
+        return hasText(question) ? "下一轮请准备一个可能继续追问的反例或极端场景。" : "下一轮把答案压缩成 2 分钟版本，保留核心论点。";
     }
 
     private String prompt(MockInterviewAnswerPO answer) {
@@ -168,6 +186,26 @@ public class MockInterviewAiReviewService {
         return Math.max(0, Math.min(score, 5));
     }
 
+    private long estimateCostMicros(int promptTokens, int completionTokens) {
+        long promptCost = (Math.max(0L, promptTokens) * Math.max(0L, promptCostMicrosPer1k)) / 1000L;
+        long completionCost = (Math.max(0L, completionTokens) * Math.max(0L, completionCostMicrosPer1k)) / 1000L;
+        return promptCost + completionCost;
+    }
+
+    private String normalizeErrorCode(Exception e) {
+        String message = e == null ? "" : e.getMessage();
+        if (message != null && message.startsWith("Deepseek HTTP ")) {
+            return limit("DEEPSEEK_HTTP_" + message.substring("Deepseek HTTP ".length()).trim(), 64);
+        }
+        if (e instanceof java.net.http.HttpTimeoutException || message != null && message.toLowerCase().contains("timeout")) {
+            return "DEEPSEEK_TIMEOUT";
+        }
+        if (message != null && message.toLowerCase().contains("not allowed")) {
+            return "DEEPSEEK_CONFIG_BLOCKED";
+        }
+        return "DEEPSEEK_REVIEW_FAILED";
+    }
+
     private String clean(String value) {
         return value == null ? "" : value.trim();
     }
@@ -185,6 +223,11 @@ public class MockInterviewAiReviewService {
                                String completeness,
                                String projectExpression,
                                String followUpSuggestion,
-                               String provider) {
+                               String provider,
+                               boolean fallbackUsed,
+                               int promptTokens,
+                               int completionTokens,
+                               long estimatedCostMicros,
+                               String errorCode) {
     }
 }

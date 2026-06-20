@@ -136,6 +136,14 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
     List<InterviewQuestionPO> selectByPostId(@Param("postId") Long postId, @Param("admin") boolean admin);
 
     @Select("""
+            SELECT COUNT(*)
+            FROM t_interview_question
+            WHERE source_post_id = #{postId}
+              AND status = #{status}
+            """)
+    int countByPostIdAndStatus(@Param("postId") Long postId, @Param("status") int status);
+
+    @Select("""
             <script>
             SELECT q.*
             FROM t_interview_question q
@@ -473,6 +481,19 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             LIMIT #{limit}
             """)
     List<InterviewQuestionPO> selectAllIndexable(@Param("limit") int limit);
+
+    @Select("""
+            SELECT q.*
+            FROM t_interview_question q
+            JOIN t_post_main p ON p.id = q.source_post_id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (#{cursorId} IS NULL OR q.id > #{cursorId})
+            ORDER BY q.id ASC
+            LIMIT #{limit}
+            """)
+    List<InterviewQuestionPO> selectAllIndexableAfter(@Param("cursorId") Long cursorId, @Param("limit") int limit);
 
     @Select("""
             <script>

@@ -12,7 +12,7 @@ public interface AnalyticsFacade {
 
     List<Map<String, Object>> getHotPosts(int size);
 
-    Map<String, Object> getTrendDashboard(String range);
+    Map<String, Object> getTrendDashboard(String range, Integer domain);
 
     Map<String, Object> getPersonalDashboard(Long uid);
 }

@@ -46,40 +46,35 @@ public class PostCounterRedis {
      * 增加浏览数
      */
     public void incrView(Long postId, long delta) {
-        String key = getKey(postId);
-        redisTemplate.opsForHash().increment(key, FIELD_VIEW, delta);
+        increment(postId, FIELD_VIEW, delta);
     }
 
     /**
      * 增加点赞数
      */
     public void incrLike(Long postId, long delta) {
-        String key = getKey(postId);
-        redisTemplate.opsForHash().increment(key, FIELD_LIKE, delta);
+        increment(postId, FIELD_LIKE, delta);
     }
 
     /**
      * 增加评论数
      */
     public void incrComment(Long postId, long delta) {
-        String key = getKey(postId);
-        redisTemplate.opsForHash().increment(key, FIELD_COMMENT, delta);
+        increment(postId, FIELD_COMMENT, delta);
     }
 
     /**
      * 增加收藏数
      */
     public void incrFavorite(Long postId, long delta) {
-        String key = getKey(postId);
-        redisTemplate.opsForHash().increment(key, FIELD_FAVORITE, delta);
+        increment(postId, FIELD_FAVORITE, delta);
     }
 
     /**
      * 增加分享数
      */
     public void incrShare(Long postId, long delta) {
-        String key = getKey(postId);
-        redisTemplate.opsForHash().increment(key, FIELD_SHARE, delta);
+        increment(postId, FIELD_SHARE, delta);
     }
 
     /**
@@ -88,21 +83,26 @@ public class PostCounterRedis {
      */
     public CounterValue get(Long postId) {
         String key = getKey(postId);
-        HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
+        try {
+            HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
 
-        Map<String, String> entries = hashOps.entries(key);
-        if (entries.isEmpty()) {
+            Map<String, String> entries = hashOps.entries(key);
+            if (entries.isEmpty()) {
+                return null;
+            }
+
+            return new CounterValue(
+                    postId,
+                    parseLong(entries.get(FIELD_VIEW)),
+                    parseLong(entries.get(FIELD_LIKE)),
+                    parseLong(entries.get(FIELD_COMMENT)),
+                    parseLong(entries.get(FIELD_FAVORITE)),
+                    parseLong(entries.get(FIELD_SHARE))
+            );
+        } catch (Exception e) {
+            log.warn("post counter redis read degraded, postId={} reason={}", postId, e.getMessage());
             return null;
         }
-
-        return new CounterValue(
-                postId,
-                parseLong(entries.get(FIELD_VIEW)),
-                parseLong(entries.get(FIELD_LIKE)),
-                parseLong(entries.get(FIELD_COMMENT)),
-                parseLong(entries.get(FIELD_FAVORITE)),
-                parseLong(entries.get(FIELD_SHARE))
-        );
     }
 
     /**
@@ -128,12 +128,16 @@ public class PostCounterRedis {
      */
     public void init(Long postId) {
         String key = getKey(postId);
-        HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
-        hashOps.putIfAbsent(key, FIELD_VIEW, "0");
-        hashOps.putIfAbsent(key, FIELD_LIKE, "0");
-        hashOps.putIfAbsent(key, FIELD_COMMENT, "0");
-        hashOps.putIfAbsent(key, FIELD_FAVORITE, "0");
-        hashOps.putIfAbsent(key, FIELD_SHARE, "0");
+        try {
+            HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
+            hashOps.putIfAbsent(key, FIELD_VIEW, "0");
+            hashOps.putIfAbsent(key, FIELD_LIKE, "0");
+            hashOps.putIfAbsent(key, FIELD_COMMENT, "0");
+            hashOps.putIfAbsent(key, FIELD_FAVORITE, "0");
+            hashOps.putIfAbsent(key, FIELD_SHARE, "0");
+        } catch (Exception e) {
+            log.warn("post counter redis init degraded, postId={} reason={}", postId, e.getMessage());
+        }
     }
 
     /**
@@ -142,14 +146,28 @@ public class PostCounterRedis {
     public void fillFromDb(Long postId, long viewCount, long likeCount, long commentCount,
                            long favoriteCount, long shareCount) {
         String key = getKey(postId);
-        HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
         Map<String, String> map = new HashMap<>();
         map.put(FIELD_VIEW, String.valueOf(viewCount));
         map.put(FIELD_LIKE, String.valueOf(likeCount));
         map.put(FIELD_COMMENT, String.valueOf(commentCount));
         map.put(FIELD_FAVORITE, String.valueOf(favoriteCount));
         map.put(FIELD_SHARE, String.valueOf(shareCount));
-        hashOps.putAll(key, map);
+        try {
+            HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
+            hashOps.putAll(key, map);
+        } catch (Exception e) {
+            log.warn("post counter redis fill degraded, postId={} reason={}", postId, e.getMessage());
+        }
+    }
+
+    private void increment(Long postId, String field, long delta) {
+        String key = getKey(postId);
+        try {
+            redisTemplate.opsForHash().increment(key, field, delta);
+        } catch (Exception e) {
+            log.warn("post counter redis increment degraded, postId={} field={} delta={} reason={}",
+                    postId, field, delta, e.getMessage());
+        }
     }
 
     private String getKey(Long postId) {
