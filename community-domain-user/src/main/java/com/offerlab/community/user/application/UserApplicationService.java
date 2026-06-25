@@ -12,6 +12,7 @@ import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.user.api.event.UserFollowedEvent;
+import com.offerlab.community.user.api.event.UserRegisteredEvent;
 import com.offerlab.community.user.domain.model.User;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
@@ -72,6 +73,10 @@ public class UserApplicationService {
                 .accountStatus(User.STATUS_NORMAL)
                 .build();
         userRepo.register(user);
+        eventPublisher.publish(UserRegisteredEvent.builder()
+                .uid(uid)
+                .timestamp(Instant.now().toEpochMilli())
+                .build());
         log.info("user registered: uid={} email={}", uid, maskEmail(email));
         return uid;
     }

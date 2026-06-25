@@ -65,6 +65,10 @@ public class EventTopicResolver {
         }
 
         // 未识别的事件类型，用类名小写作为 topic
+        if ("UserRegisteredEvent".equals(className)) {
+            return new TopicMapping("user.registered", readLong(event, "getUid"), "USER_REGISTERED");
+        }
+
         String topic = className.replaceAll("([A-Z])", "_$1").toLowerCase().replaceFirst("^_", "");
         log.warn("Unknown event type: {}, using topic: {}", className, topic);
         return new TopicMapping(topic, 0L, className);

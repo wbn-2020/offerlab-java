@@ -158,6 +158,23 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
+    public Map<Long, Long> batchCountPublicPublishedPostsByAuthors(Collection<Long> authorIds) {
+        List<Long> normalizedIds = normalizeBatchIds(authorIds, MAX_BATCH_LOOKUP_IDS);
+        if (normalizedIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> result = new HashMap<>(normalizedIds.size());
+        for (Map<String, Object> row : postMapper.countPublicPublishedPostsByAuthors(normalizedIds)) {
+            Long authorId = asLong(row.get("authorId"));
+            Long postCount = asLong(row.get("postCount"));
+            if (authorId != null && authorId > 0 && postCount != null) {
+                result.put(authorId, Math.max(postCount, 0L));
+            }
+        }
+        return result;
+    }
+
+    @Override
     public Long publishPost(PostCreateCmd cmd) {
         return postService.publish(cmd);
     }
@@ -720,6 +737,20 @@ public class PostFacadeImpl implements PostFacade {
         }
         String slug = name.trim().toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
         return slug.isBlank() ? String.valueOf(id) : slug;
+    }
+
+    private static Long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static String summary(String content) {

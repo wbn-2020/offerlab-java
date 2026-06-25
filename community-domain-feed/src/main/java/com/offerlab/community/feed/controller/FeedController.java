@@ -10,7 +10,7 @@ import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
-import com.offerlab.community.post.domain.model.PostDomain;
+import com.offerlab.community.post.domain.model.Post;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -79,9 +79,17 @@ public class FeedController {
         if (domain == null) {
             return null;
         }
-        if (PostDomain.isValid(domain)) {
+        if (isValidDomain(domain)) {
             return domain;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private boolean isValidDomain(Integer domain) {
+        return domain != null && (domain == Post.DOMAIN_TECH
+                || domain == Post.DOMAIN_CAREER
+                || domain == Post.DOMAIN_READING
+                || domain == Post.DOMAIN_LIFESTYLE
+                || domain == Post.DOMAIN_INVESTMENT);
     }
 }

@@ -31,6 +31,8 @@ public interface PostFacade {
 
     Map<Long, PostCounterDTO> batchGetCounters(Collection<Long> postIds);
 
+    Map<Long, Long> batchCountPublicPublishedPostsByAuthors(Collection<Long> authorIds);
+
     Long publishPost(PostCreateCmd cmd);
 
     void updatePost(PostUpdateCmd cmd);

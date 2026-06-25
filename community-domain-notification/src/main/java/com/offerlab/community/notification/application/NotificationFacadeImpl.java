@@ -18,9 +18,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +35,7 @@ import java.util.stream.Collectors;
 public class NotificationFacadeImpl implements NotificationFacade {
 
     private static final int REALTIME_POLL_INTERVAL_SECONDS = 20;
+    private static final long AGGREGATION_WINDOW_MINUTES = 30L;
 
     private static final int TYPE_LIKE = 1;
     private static final int TYPE_COMMENT = 2;
@@ -70,9 +73,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .filter(id -> id != null && id > 0)
                 .collect(Collectors.toSet());
         Map<Long, UserBriefDTO> senders = userFacade.batchGetUserBriefs(senderIds);
-        List<Map<String, Object>> items = rows.stream()
-                .map(row -> toItem(row, senders.get(row.getSenderUid())))
-                .toList();
+        List<Map<String, Object>> items = aggregateItems(rows, senders);
         boolean hasMore = rows.size() == limit;
         String next = hasMore && rows.get(rows.size() - 1).getCreateTime() != null
                 ? String.valueOf(rows.get(rows.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -275,6 +276,71 @@ public class NotificationFacadeImpl implements NotificationFacade {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    private List<Map<String, Object>> aggregateItems(List<NotificationMessagePO> rows, Map<Long, UserBriefDTO> senders) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        List<NotificationMessagePO> group = new ArrayList<>();
+        for (NotificationMessagePO row : rows) {
+            if (group.isEmpty() || canAggregate(group.get(0), row)) {
+                group.add(row);
+                continue;
+            }
+            items.add(toGroupedItem(group, senders));
+            group = new ArrayList<>();
+            group.add(row);
+        }
+        if (!group.isEmpty()) {
+            items.add(toGroupedItem(group, senders));
+        }
+        return items;
+    }
+
+    private boolean canAggregate(NotificationMessagePO head, NotificationMessagePO candidate) {
+        if (head == null || candidate == null) {
+            return false;
+        }
+        if (!isAggregatableType(head.getNotifType()) || !isAggregatableType(candidate.getNotifType())) {
+            return false;
+        }
+        if (!java.util.Objects.equals(head.getNotifType(), candidate.getNotifType())) {
+            return false;
+        }
+        if (!java.util.Objects.equals(head.getTargetType(), candidate.getTargetType())) {
+            return false;
+        }
+        if (!java.util.Objects.equals(head.getTargetId(), candidate.getTargetId())) {
+            return false;
+        }
+        if (head.getCreateTime() == null || candidate.getCreateTime() == null) {
+            return false;
+        }
+        return Duration.between(candidate.getCreateTime(), head.getCreateTime()).toMinutes() <= AGGREGATION_WINDOW_MINUTES;
+    }
+
+    private boolean isAggregatableType(Integer notifType) {
+        return notifType != null && (notifType == TYPE_LIKE || notifType == TYPE_FAVORITE);
+    }
+
+    private Map<String, Object> toGroupedItem(List<NotificationMessagePO> group, Map<Long, UserBriefDTO> senders) {
+        NotificationMessagePO head = group.get(0);
+        if (group.size() == 1) {
+            return toItem(head, senders.get(head.getSenderUid()));
+        }
+        Map<String, Object> item = toItem(head, senders.get(head.getSenderUid()));
+        int unreadCount = (int) group.stream()
+                .filter(row -> row.getIsRead() == null || row.getIsRead() == 0)
+                .count();
+        Map<String, Object> content = new LinkedHashMap<>(parseContent(head.getContentJson()));
+        content.put("aggregateCount", group.size());
+        content.put("unreadCount", unreadCount);
+        content.put("aggregated", true);
+        item.put("content", content);
+        item.put("notificationIds", group.stream().map(NotificationMessagePO::getId).toList());
+        item.put("aggregateCount", group.size());
+        item.put("unreadCount", unreadCount);
+        item.put("isRead", unreadCount == 0);
+        return item;
     }
 
     private Map<String, Object> toItem(NotificationMessagePO po, UserBriefDTO sender) {

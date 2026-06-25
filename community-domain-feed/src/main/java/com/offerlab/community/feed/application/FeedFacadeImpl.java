@@ -2,6 +2,7 @@ package com.offerlab.community.feed.application;
 
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.feed.api.FeedFacade;
+import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
@@ -38,6 +39,10 @@ import java.util.stream.Stream;
 public class FeedFacadeImpl implements FeedFacade {
 
     private static final int MAX_DOMAIN_INBOX_SCAN_ROWS = 1000;
+    private static final int MAX_CROSS_DOMAIN_CANDIDATE_FETCH_SIZE = 20;
+    private static final long NEW_CREATOR_MAX_PUBLIC_POSTS = 3L;
+    private static final double NEW_CREATOR_BOOST_SCORE = 12D;
+    private static final String NEW_CREATOR_SUPPORT_REASON = "新作者前 3 篇内容扶持";
 
     private final FeedInboxRedis feedRedis;
     private final FeedFeedbackStore feedbackStore;
@@ -45,6 +50,7 @@ public class FeedFacadeImpl implements FeedFacade {
     private final UserFacade userFacade;
     private final InteractionFacade interactionFacade;
     private final ObjectMapper objectMapper;
+    private final RecommendFeedNewCreatorSupportRecorder recommendFeedNewCreatorSupportRecorder;
 
     @Override
     public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size, Integer domain) {
@@ -67,13 +73,78 @@ public class FeedFacadeImpl implements FeedFacade {
         }
         UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
         Set<Long> hiddenPostIds = feedbackStore.hiddenPostIds(uid);
-        List<PostBriefDTO> ranked = page.getItems().stream()
+        List<PostBriefDTO> visibleCandidates = page.getItems().stream()
                 .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
-                .sorted(Comparator.<PostBriefDTO>comparingDouble(post -> recommendScore(post, intent)).reversed()
+                .toList();
+        Map<Long, Long> publicPostCountByAuthor = postFacade.batchCountPublicPublishedPostsByAuthors(visibleCandidates.stream()
+                .map(PostBriefDTO::getAuthorId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet()));
+        List<PostBriefDTO> ranked = visibleCandidates.stream()
+                .sorted(Comparator.<PostBriefDTO>comparingDouble(post -> recommendScore(post, intent, publicPostCountByAuthor)).reversed()
                         .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(size)
                 .toList();
-        return assembleRecommendPosts(ranked, uid, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()), intent);
+        PageResult<FeedItemVO> result = assembleRecommendPosts(
+                ranked,
+                uid,
+                page.getNextCursor(),
+                Boolean.TRUE.equals(page.getHasMore()),
+                intent,
+                publicPostCountByAuthor);
+        recordRecommendFeedNewCreatorSupportStatsSafely(uid, domain, ranked, publicPostCountByAuthor);
+        return result;
+    }
+
+    @Override
+    public PageResult<CrossDomainRecommendationVO> getCrossDomainRecommendations(Long uid, String cursor, int size) {
+        int pageSize = Math.max(1, size);
+        UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
+        int sourceDomain = inferCrossDomainSource(intent);
+        Set<Long> hiddenPostIds = uid == null ? Set.of() : feedbackStore.hiddenPostIds(uid);
+        List<PostBriefDTO> candidates = new ArrayList<>();
+        List<String> failedDomains = new ArrayList<>();
+        long c = parseCursorAsEpoch(cursor);
+        int fetchSize = crossDomainCandidateFetchSize(pageSize);
+        for (Integer targetDomain : crossDomainTargetDomains(sourceDomain)) {
+            try {
+                PageResult<PostBriefDTO> page = postFacade.listPosts(null, null, null, null, targetDomain, c, fetchSize);
+                if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+                    continue;
+                }
+                page.getItems().stream()
+                        .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
+                        .forEach(candidates::add);
+            } catch (RuntimeException e) {
+                failedDomains.add(domainName(targetDomain));
+                log.warn("cross-domain recommendation candidate load failed, viewerUid={}, targetDomain={}", uid, targetDomain, e);
+            }
+        }
+        if (!candidates.isEmpty()) {
+            Map<Long, Long> publicPostCountByAuthor = postFacade.batchCountPublicPublishedPostsByAuthors(candidates.stream()
+                    .map(PostBriefDTO::getAuthorId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet()));
+            List<PostBriefDTO> ranked = candidates.stream()
+                    .sorted(Comparator.<PostBriefDTO>comparingDouble(post -> crossDomainScore(post, intent, publicPostCountByAuthor, sourceDomain)).reversed()
+                            .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .limit(pageSize)
+                    .toList();
+            String fallbackReason = failedDomains.isEmpty()
+                    ? null
+                    : "部分跨领域候选拉取失败：" + String.join("、", failedDomains);
+            return assembleCrossDomainPage(
+                    ranked,
+                    uid,
+                    sourceDomain,
+                    intent,
+                    publicPostCountByAuthor,
+                    ranked.size() >= pageSize && candidates.size() > ranked.size(),
+                    failedDomains.isEmpty() ? "cross-domain" : "cross-domain-partial",
+                    !failedDomains.isEmpty(),
+                    fallbackReason);
+        }
+        return fallbackCrossDomainRecommendations(uid, cursor, pageSize, sourceDomain);
     }
 
     @Override
@@ -362,11 +433,60 @@ public class FeedFacadeImpl implements FeedFacade {
         return post.getAuthor() != null ? post.getAuthor() : authors.get(post.getAuthorId());
     }
 
+    private PageResult<CrossDomainRecommendationVO> assembleCrossDomainPage(List<PostBriefDTO> posts,
+                                                                            Long viewerUid,
+                                                                            Integer sourceDomain,
+                                                                            UserIntentDTO intent,
+                                                                            Map<Long, Long> publicPostCountByAuthor,
+                                                                            boolean hasMore,
+                                                                            String source,
+                                                                            boolean degraded,
+                                                                            String fallbackReason) {
+        if (posts == null || posts.isEmpty()) {
+            return PageResult.<CrossDomainRecommendationVO>empty()
+                    .withMetadata(source, degraded, fallbackReason, null);
+        }
+        List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
+        var counters = postFacade.batchGetCounters(postIds);
+        var authors = userFacade.batchGetUserBriefs(posts.stream()
+                .map(PostBriefDTO::getAuthorId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet()));
+        List<CrossDomainRecommendationVO> items = posts.stream().map(post -> {
+            PostCounterDTO counter = counters.get(post.getId());
+            List<String> reasons = recommendationReasons(post, counter, intent, publicPostCountByAuthor);
+            Integer targetDomain = effectiveDomain(post.getDomain());
+            FeedItemVO feedItem = FeedItemVO.builder()
+                    .post(post)
+                    .author(feedAuthor(post, authors))
+                    .counter(counter)
+                    .recommendationReasons(reasons)
+                    .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
+                            .liked(interactionFacade.hasLiked(viewerUid, post.getId()))
+                            .favorited(interactionFacade.hasFavorited(viewerUid, post.getId()))
+                            .build())
+                    .build();
+            return CrossDomainRecommendationVO.builder()
+                    .item(feedItem)
+                    .sourceDomain(sourceDomain)
+                    .sourceDomainName(domainName(sourceDomain))
+                    .targetDomain(targetDomain)
+                    .targetDomainName(domainName(targetDomain))
+                    .recommendationReason(crossDomainReason(post, sourceDomain, targetDomain, reasons, null, intent))
+                    .degraded(degraded)
+                    .build();
+        }).toList();
+        String nextCursor = hasMore ? crossDomainNextCursor(posts) : null;
+        return PageResult.of(items, nextCursor, hasMore)
+                .withMetadata(source, degraded, fallbackReason, null);
+    }
+
     private PageResult<FeedItemVO> assembleRecommendPosts(List<PostBriefDTO> posts,
                                                           Long viewerUid,
                                                           String nextCursor,
                                                           boolean hasMore,
-                                                          UserIntentDTO intent) {
+                                                          UserIntentDTO intent,
+                                                          Map<Long, Long> publicPostCountByAuthor) {
         if (posts == null || posts.isEmpty()) return PageResult.empty();
         List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
         var counters = postFacade.batchGetCounters(postIds);
@@ -378,7 +498,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .post(p)
                 .author(authors.get(p.getAuthorId()))
                 .counter(counters.get(p.getId()))
-                .recommendationReasons(recommendationReasons(p, counters.get(p.getId()), intent))
+                .recommendationReasons(recommendationReasons(p, counters.get(p.getId()), intent, publicPostCountByAuthor))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
                         .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
                         .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
@@ -387,7 +507,50 @@ public class FeedFacadeImpl implements FeedFacade {
         return PageResult.of(items, nextCursor, hasMore);
     }
 
-    private double recommendScore(PostBriefDTO post, UserIntentDTO intent) {
+    private PageResult<CrossDomainRecommendationVO> fallbackCrossDomainRecommendations(Long uid,
+                                                                                       String cursor,
+                                                                                       int size,
+                                                                                       Integer sourceDomain) {
+        PageResult<FeedItemVO> hotPage = getHotFeed(uid, cursor, size, null);
+        if (hotPage != null && hotPage.getItems() != null && !hotPage.getItems().isEmpty()) {
+            return wrapFallbackCrossDomainPage(hotPage, sourceDomain, "hot", "跨领域候选不足，已回退到热门内容");
+        }
+        PageResult<FeedItemVO> latestPage = getLatestFeed(uid, cursor, size, null);
+        if (latestPage != null && latestPage.getItems() != null && !latestPage.getItems().isEmpty()) {
+            return wrapFallbackCrossDomainPage(latestPage, sourceDomain, "latest", "跨领域候选不足，已回退到最新内容");
+        }
+        return PageResult.<CrossDomainRecommendationVO>empty()
+                .withMetadata("cross-domain-empty", true, "跨领域候选不足，且无可用回退内容", null);
+    }
+
+    private PageResult<CrossDomainRecommendationVO> wrapFallbackCrossDomainPage(PageResult<FeedItemVO> page,
+                                                                                 Integer sourceDomain,
+                                                                                 String source,
+                                                                                 String fallbackReason) {
+        if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+            return PageResult.<CrossDomainRecommendationVO>empty()
+                    .withMetadata(source, true, fallbackReason, null);
+        }
+        List<CrossDomainRecommendationVO> items = page.getItems().stream()
+                .filter(Objects::nonNull)
+                .map(item -> {
+                    Integer targetDomain = effectiveDomain(item.getPost() == null ? null : item.getPost().getDomain());
+                    return CrossDomainRecommendationVO.builder()
+                            .item(item)
+                            .sourceDomain(sourceDomain)
+                            .sourceDomainName(domainName(sourceDomain))
+                            .targetDomain(targetDomain)
+                            .targetDomainName(domainName(targetDomain))
+                            .recommendationReason(fallbackReason)
+                            .degraded(true)
+                            .build();
+                })
+                .toList();
+        return PageResult.of(items, page.getNextCursor(), Boolean.TRUE.equals(page.getHasMore()))
+                .withMetadata(source, true, fallbackReason, null);
+    }
+
+    private double recommendScore(PostBriefDTO post, UserIntentDTO intent, Map<Long, Long> publicPostCountByAuthor) {
         PostCounterDTO counter = post.getCounter();
         double heat = 0D;
         if (counter != null) {
@@ -400,7 +563,15 @@ public class FeedFacadeImpl implements FeedFacade {
                 ? 0D
                 : Math.max(0D, 72D - Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
         double tagBonus = post.getTags() == null ? 0D : Math.min(post.getTags().size(), 3) * 1.5D;
-        return heat + recency + tagBonus + intentScore(post, intent);
+        return heat + recency + tagBonus + intentScore(post, intent) + newCreatorBoost(post, publicPostCountByAuthor);
+    }
+
+    private double crossDomainScore(PostBriefDTO post,
+                                    UserIntentDTO intent,
+                                    Map<Long, Long> publicPostCountByAuthor,
+                                    Integer sourceDomain) {
+        return recommendScore(post, intent, publicPostCountByAuthor)
+                + crossDomainBridgeBoost(post, sourceDomain, effectiveDomain(post == null ? null : post.getDomain()), intent);
     }
 
     private double intentScore(PostBriefDTO post, UserIntentDTO intent) {
@@ -427,8 +598,14 @@ public class FeedFacadeImpl implements FeedFacade {
         return score;
     }
 
-    private List<String> recommendationReasons(PostBriefDTO post, PostCounterDTO counter, UserIntentDTO intent) {
+    private List<String> recommendationReasons(PostBriefDTO post,
+                                               PostCounterDTO counter,
+                                               UserIntentDTO intent,
+                                               Map<Long, Long> publicPostCountByAuthor) {
         List<String> reasons = new ArrayList<>();
+        if (isNewCreator(post, publicPostCountByAuthor)) {
+            reasons.add(NEW_CREATOR_SUPPORT_REASON);
+        }
         JsonNode ext = parseExt(post.getExtJson());
         String engineeringArea = firstNonBlank(firstArrayValue(ext, "techStacks"), ext.path("company").asText(""));
         String technicalScenario = firstNonBlank(ext.path("scenario").asText(""), ext.path("position").asText(""));
@@ -460,6 +637,41 @@ public class FeedFacadeImpl implements FeedFacade {
             reasons.add("根据近期内容质量和活跃度推荐");
         }
         return reasons.stream().limit(3).toList();
+    }
+
+    private double newCreatorBoost(PostBriefDTO post, Map<Long, Long> publicPostCountByAuthor) {
+        return isNewCreator(post, publicPostCountByAuthor) ? NEW_CREATOR_BOOST_SCORE : 0D;
+    }
+
+    private boolean isNewCreator(PostBriefDTO post, Map<Long, Long> publicPostCountByAuthor) {
+        if (post == null || post.getAuthorId() == null || publicPostCountByAuthor == null || publicPostCountByAuthor.isEmpty()) {
+            return false;
+        }
+        Long publicPostCount = publicPostCountByAuthor.get(post.getAuthorId());
+        return publicPostCount != null && publicPostCount > 0 && publicPostCount <= NEW_CREATOR_MAX_PUBLIC_POSTS;
+    }
+
+    private void recordRecommendFeedNewCreatorSupportStatsSafely(Long viewerUid,
+                                                                 Integer domain,
+                                                                 List<PostBriefDTO> deliveredPosts,
+                                                                 Map<Long, Long> publicPostCountByAuthor) {
+        if (deliveredPosts == null || deliveredPosts.isEmpty()) {
+            return;
+        }
+        int deliveredItemCount = deliveredPosts.size();
+        int supportHitItemCount = (int) deliveredPosts.stream()
+                .filter(post -> isNewCreator(post, publicPostCountByAuthor))
+                .count();
+        try {
+            recommendFeedNewCreatorSupportRecorder.recordRecommendFeedResponse(
+                    viewerUid,
+                    domain,
+                    deliveredItemCount,
+                    supportHitItemCount);
+        } catch (RuntimeException e) {
+            log.warn("recommend feed new creator support stats skipped, viewerUid={}, domain={}, deliveredItemCount={}, supportHitItemCount={}",
+                    viewerUid, domain, deliveredItemCount, supportHitItemCount, e);
+        }
     }
 
     private JsonNode parseExt(String extJson) {
@@ -562,6 +774,61 @@ public class FeedFacadeImpl implements FeedFacade {
                 .anyMatch(item -> text.contains(item) || item.contains(text));
     }
 
+    private String crossDomainReason(PostBriefDTO post,
+                                     Integer sourceDomain,
+                                     Integer targetDomain,
+                                     List<String> baseReasons,
+                                     String fallbackReason,
+                                     UserIntentDTO intent) {
+        if (fallbackReason != null && !fallbackReason.isBlank()) {
+            return fallbackReason;
+        }
+        JsonNode ext = parseExt(post == null ? null : post.getExtJson());
+        String content = searchableText(post, ext);
+        String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
+        String topic = firstNonBlank(ext.path("topic").asText(""), ext.path("category").asText(""));
+        if (!matchedInterest.isBlank()) {
+            return "从" + domainName(sourceDomain) + "延伸到" + domainName(targetDomain) + "，匹配你关注的" + matchedInterest;
+        }
+        if (!topic.isBlank()) {
+            return "从" + domainName(sourceDomain) + "延伸到" + domainName(targetDomain) + "，覆盖话题：" + topic;
+        }
+        if (baseReasons != null && !baseReasons.isEmpty()) {
+            return baseReasons.get(0);
+        }
+        return "来自" + domainName(targetDomain) + "领域的延伸内容";
+    }
+
+    private double crossDomainBridgeBoost(PostBriefDTO post,
+                                          Integer sourceDomain,
+                                          Integer targetDomain,
+                                          UserIntentDTO intent) {
+        if (post == null || intent == null) {
+            return 0D;
+        }
+        JsonNode ext = parseExt(post.getExtJson());
+        String content = searchableText(post, ext);
+        double score = 0D;
+        if (Objects.equals(sourceDomain, Post.DOMAIN_TECH) && Objects.equals(targetDomain, Post.DOMAIN_CAREER)) {
+            if (matchesAny(content, intent.getTargetPositions()) || matchesAny(content, intent.getTargetCompanies())) {
+                score += 10D;
+            }
+        }
+        if (Objects.equals(sourceDomain, Post.DOMAIN_CAREER) && Objects.equals(targetDomain, Post.DOMAIN_TECH)) {
+            if (matchesAny(content, intent.getTechStack())) {
+                score += 10D;
+            }
+        }
+        if (Objects.equals(targetDomain, Post.DOMAIN_READING)
+                || Objects.equals(targetDomain, Post.DOMAIN_LIFESTYLE)
+                || Objects.equals(targetDomain, Post.DOMAIN_INVESTMENT)) {
+            if (!firstMatchedInterest(content, interestCandidates(intent)).isBlank()) {
+                score += 8D;
+            }
+        }
+        return score;
+    }
+
     private static String clean(String value) {
         return value == null ? "" : value.trim();
     }
@@ -574,13 +841,94 @@ public class FeedFacadeImpl implements FeedFacade {
         return Math.min(Math.max(size * 5, size), 100);
     }
 
+    private int crossDomainCandidateFetchSize(int size) {
+        return Math.min(Math.max(size * 2, size), MAX_CROSS_DOMAIN_CANDIDATE_FETCH_SIZE);
+    }
+
+    private List<Integer> crossDomainTargetDomains(Integer sourceDomain) {
+        return Stream.of(
+                        Post.DOMAIN_TECH,
+                        Post.DOMAIN_CAREER,
+                        Post.DOMAIN_READING,
+                        Post.DOMAIN_LIFESTYLE,
+                        Post.DOMAIN_INVESTMENT)
+                .filter(code -> !Objects.equals(code, sourceDomain))
+                .toList();
+    }
+
+    private int inferCrossDomainSource(UserIntentDTO intent) {
+        if (intent == null) {
+            return Post.DOMAIN_TECH;
+        }
+        if (hasAnyValue(intent.getTargetPositions()) || !clean(intent.getExpectedCity()).isBlank() || intent.getExpectedSalaryRange() != null) {
+            return Post.DOMAIN_CAREER;
+        }
+        if (intentKeywords(intent, List.of("阅读", "读书", "书单", "拆书"))) {
+            return Post.DOMAIN_READING;
+        }
+        if (intentKeywords(intent, List.of("生活", "租房", "通勤", "健身", "旅行"))) {
+            return Post.DOMAIN_LIFESTYLE;
+        }
+        if (intentKeywords(intent, List.of("投资", "理财", "基金", "股票"))) {
+            return Post.DOMAIN_INVESTMENT;
+        }
+        if (hasAnyValue(intent.getTechStack()) || hasAnyValue(intent.getTargetCompanies())) {
+            return Post.DOMAIN_TECH;
+        }
+        return Post.DOMAIN_TECH;
+    }
+
+    private boolean intentKeywords(UserIntentDTO intent, List<String> keywords) {
+        if (intent == null || keywords == null || keywords.isEmpty()) {
+            return false;
+        }
+        String text = Stream.of(
+                        intent.getInterestTopics(),
+                        intent.getInterestTags(),
+                        intent.getContentPreferences(),
+                        intent.getTechStack(),
+                        intent.getTargetCompanies(),
+                        intent.getTargetPositions())
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining(" "));
+        String normalized = clean(text);
+        return keywords.stream().anyMatch(keyword -> normalized.contains(keyword));
+    }
+
+    private boolean hasAnyValue(List<String> items) {
+        return items != null && items.stream().anyMatch(item -> item != null && !item.isBlank());
+    }
+
+    private Integer effectiveDomain(Integer domain) {
+        return domain == null ? Post.DOMAIN_TECH : domain;
+    }
+
+    private String domainName(Integer domain) {
+        return switch (effectiveDomain(domain)) {
+            case Post.DOMAIN_CAREER -> "职场";
+            case Post.DOMAIN_READING -> "阅读";
+            case Post.DOMAIN_LIFESTYLE -> "生活";
+            case Post.DOMAIN_INVESTMENT -> "投资理财";
+            default -> "技术";
+        };
+    }
+
+    private String crossDomainNextCursor(List<PostBriefDTO> posts) {
+        return posts.stream()
+                .map(PostBriefDTO::getCreateTime)
+                .filter(Objects::nonNull)
+                .min(LocalDateTime::compareTo)
+                .map(time -> String.valueOf(time.toInstant(java.time.ZoneOffset.UTC).toEpochMilli()))
+                .orElse(null);
+    }
+
     private boolean matchesDomain(FeedItemVO item, Integer domain) {
         if (item == null || item.getPost() == null) {
             return false;
         }
-        Integer postDomain = item.getPost().getDomain();
-        int effectiveDomain = postDomain == null ? Post.DOMAIN_TECH : postDomain;
-        return effectiveDomain == domain;
+        return effectiveDomain(item.getPost().getDomain()) == domain;
     }
 
     /** 当 cursor 表示 score (timestamp ms) 时；空则视为 +∞（从最新开始） */

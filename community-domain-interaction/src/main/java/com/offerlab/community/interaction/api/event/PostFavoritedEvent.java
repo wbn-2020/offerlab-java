@@ -13,5 +13,6 @@ public class PostFavoritedEvent {
     private Long uid;
     private Long postId;
     private Long postAuthorId;
+    private Integer domain;
     private Long timestamp;
 }

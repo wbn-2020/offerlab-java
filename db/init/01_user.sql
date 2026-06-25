@@ -71,3 +71,22 @@ CREATE TABLE t_user_counter (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     version         INT          NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户级计数器';
+
+-- ----------------------------
+-- 用户任务状态
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS t_user_task_state (
+    id                   BIGINT       NOT NULL PRIMARY KEY COMMENT '任务状态ID（雪花）',
+    uid                  BIGINT       NOT NULL COMMENT '用户ID',
+    task_type            VARCHAR(16)  NOT NULL COMMENT '任务类型：ONBOARDING / DAILY',
+    task_code            VARCHAR(64)  NOT NULL COMMENT '固定任务编码',
+    task_date            DATE         NOT NULL COMMENT '任务日期桶，onboarding 用锚点日期',
+    completed            TINYINT      NOT NULL DEFAULT 0 COMMENT '0未完成 1已完成',
+    complete_source      VARCHAR(64)  NULL COMMENT '完成来源',
+    complete_ref_id      BIGINT       NULL COMMENT '完成关联对象ID',
+    first_completed_time DATETIME(3)  NULL COMMENT '首次完成时间',
+    create_time          DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    update_time          DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uk_user_task_scope_code_day (uid, task_type, task_code, task_date),
+    KEY idx_user_task_scope_date (uid, task_type, task_date, completed)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户任务状态';

@@ -29,9 +29,10 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -47,12 +48,21 @@ class FeedFacadeVisibilityTest {
     private UserFacade userFacade;
     @Mock
     private InteractionFacade interactionFacade;
+    @Mock
+    private RecommendFeedNewCreatorSupportRecorder recommendFeedNewCreatorSupportRecorder;
 
     private FeedFacadeImpl facade;
 
     @BeforeEach
     void setUp() {
-        facade = new FeedFacadeImpl(feedRedis, feedbackStore, postFacade, userFacade, interactionFacade, new ObjectMapper());
+        facade = new FeedFacadeImpl(
+                feedRedis,
+                feedbackStore,
+                postFacade,
+                userFacade,
+                interactionFacade,
+                new ObjectMapper(),
+                recommendFeedNewCreatorSupportRecorder);
     }
 
     @Test
@@ -323,6 +333,156 @@ class FeedFacadeVisibilityTest {
         String reasons = String.join(" ", page.getItems().get(0).getRecommendationReasons());
         assertTrue(reasons.contains("兴趣"));
         assertTrue(reasons.contains("租房生活") || reasons.contains("城市生活") || reasons.contains("图文笔记"));
+    }
+
+    @Test
+    void recommendFeedBoostsNewCreatorWithinFirstThreePublishedPosts() {
+        LocalDateTime now = LocalDateTime.now();
+        PostBriefDTO establishedCreatorPost = PostBriefDTO.builder()
+                .id(701L)
+                .authorId(71L)
+                .title("established creator")
+                .summary("established creator")
+                .counter(PostCounterDTO.builder()
+                        .postId(701L)
+                        .viewCount(10L)
+                        .likeCount(1L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(now.minusHours(2))
+                .build();
+        PostBriefDTO newCreatorPost = PostBriefDTO.builder()
+                .id(702L)
+                .authorId(72L)
+                .title("new creator")
+                .summary("new creator")
+                .counter(PostCounterDTO.builder()
+                        .postId(702L)
+                        .viewCount(0L)
+                        .likeCount(0L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(now.minusHours(6))
+                .build();
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(establishedCreatorPost, newCreatorPost), null, false));
+        when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder().build());
+        when(feedbackStore.hiddenPostIds(7L)).thenReturn(Set.of());
+        when(postFacade.batchCountPublicPublishedPostsByAuthors(Set.of(71L, 72L))).thenReturn(Map.of(
+                71L, 4L,
+                72L, 3L));
+        when(postFacade.batchGetCounters(anyCollection())).thenReturn(Map.of(
+                701L, PostCounterDTO.builder().postId(701L).viewCount(10L).likeCount(1L).commentCount(0L).favoriteCount(0L).build(),
+                702L, PostCounterDTO.builder().postId(702L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(71L, 72L))).thenReturn(Map.of(
+                71L, UserBriefDTO.builder().uid(71L).nickname("established").build(),
+                72L, UserBriefDTO.builder().uid(72L).nickname("new").build()));
+        when(interactionFacade.hasLiked(7L, 701L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 701L)).thenReturn(false);
+        when(interactionFacade.hasLiked(7L, 702L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 702L)).thenReturn(false);
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 2, null);
+
+        assertEquals(2, page.getItems().size());
+        assertEquals(702L, page.getItems().get(0).getPost().getId());
+        assertTrue(page.getItems().get(0).getRecommendationReasons().contains("新作者前 3 篇内容扶持"));
+        assertFalse(page.getItems().get(1).getRecommendationReasons().contains("新作者前 3 篇内容扶持"));
+        verify(postFacade).batchCountPublicPublishedPostsByAuthors(Set.of(71L, 72L));
+    }
+
+    @Test
+    void recommendFeedRecordsDeliveredAndSupportHitCountsFromReturnedPage() {
+        LocalDateTime now = LocalDateTime.now();
+        PostBriefDTO establishedCreatorPost = PostBriefDTO.builder()
+                .id(801L)
+                .authorId(81L)
+                .title("established creator")
+                .summary("established creator")
+                .counter(PostCounterDTO.builder()
+                        .postId(801L)
+                        .viewCount(3L)
+                        .likeCount(1L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(now.minusHours(1))
+                .build();
+        PostBriefDTO newCreatorPost = PostBriefDTO.builder()
+                .id(802L)
+                .authorId(82L)
+                .title("new creator")
+                .summary("new creator")
+                .counter(PostCounterDTO.builder()
+                        .postId(802L)
+                        .viewCount(0L)
+                        .likeCount(0L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(now.minusHours(4))
+                .build();
+        when(postFacade.getLatest(0L, 2)).thenReturn(PageResult.of(List.of(establishedCreatorPost, newCreatorPost), null, false));
+        when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder().build());
+        when(feedbackStore.hiddenPostIds(7L)).thenReturn(Set.of());
+        when(postFacade.batchCountPublicPublishedPostsByAuthors(Set.of(81L, 82L))).thenReturn(Map.of(
+                81L, 6L,
+                82L, 2L));
+        when(postFacade.batchGetCounters(anyCollection())).thenReturn(Map.of(
+                801L, PostCounterDTO.builder().postId(801L).viewCount(3L).likeCount(1L).commentCount(0L).favoriteCount(0L).build(),
+                802L, PostCounterDTO.builder().postId(802L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(81L, 82L))).thenReturn(Map.of(
+                81L, UserBriefDTO.builder().uid(81L).nickname("established").build(),
+                82L, UserBriefDTO.builder().uid(82L).nickname("new").build()));
+        when(interactionFacade.hasLiked(7L, 801L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 801L)).thenReturn(false);
+        when(interactionFacade.hasLiked(7L, 802L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 802L)).thenReturn(false);
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 2, null);
+
+        assertEquals(List.of(802L, 801L), page.getItems().stream().map(item -> item.getPost().getId()).toList());
+        assertTrue(page.getItems().get(0).getRecommendationReasons().contains("新作者前 3 篇内容扶持"));
+        verify(recommendFeedNewCreatorSupportRecorder).recordRecommendFeedResponse(7L, null, 2, 1);
+    }
+
+    @Test
+    void recommendFeedStatsFailureDoesNotBlockFeedResponse() {
+        LocalDateTime now = LocalDateTime.now();
+        PostBriefDTO newCreatorPost = PostBriefDTO.builder()
+                .id(901L)
+                .authorId(91L)
+                .title("new creator")
+                .summary("new creator")
+                .counter(PostCounterDTO.builder()
+                        .postId(901L)
+                        .viewCount(0L)
+                        .likeCount(0L)
+                        .commentCount(0L)
+                        .favoriteCount(0L)
+                        .build())
+                .createTime(now.minusHours(2))
+                .build();
+        when(postFacade.getLatest(0L, 1)).thenReturn(PageResult.of(List.of(newCreatorPost), null, false));
+        when(userFacade.getUserIntent(7L)).thenReturn(UserIntentDTO.builder().build());
+        when(feedbackStore.hiddenPostIds(7L)).thenReturn(Set.of());
+        when(postFacade.batchCountPublicPublishedPostsByAuthors(Set.of(91L))).thenReturn(Map.of(91L, 1L));
+        when(postFacade.batchGetCounters(List.of(901L))).thenReturn(Map.of(
+                901L, PostCounterDTO.builder().postId(901L).viewCount(0L).likeCount(0L).commentCount(0L).favoriteCount(0L).build()));
+        when(userFacade.batchGetUserBriefs(Set.of(91L))).thenReturn(Map.of(
+                91L, UserBriefDTO.builder().uid(91L).nickname("new").build()));
+        when(interactionFacade.hasLiked(7L, 901L)).thenReturn(false);
+        when(interactionFacade.hasFavorited(7L, 901L)).thenReturn(false);
+        doThrow(new RuntimeException("stats write failed"))
+                .when(recommendFeedNewCreatorSupportRecorder)
+                .recordRecommendFeedResponse(7L, null, 1, 1);
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 1, null);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(901L, page.getItems().get(0).getPost().getId());
+        assertTrue(page.getItems().get(0).getRecommendationReasons().contains("新作者前 3 篇内容扶持"));
     }
 
     @SuppressWarnings("unchecked")
