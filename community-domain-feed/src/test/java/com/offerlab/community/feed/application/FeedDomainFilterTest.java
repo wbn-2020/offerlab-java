@@ -46,7 +46,8 @@ class FeedDomainFilterTest {
                 new FakePostFacade(PageResult.of(List.of(legacyTechPost, careerPost), null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
-                new ObjectMapper());
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
 
         PageResult<FeedItemVO> techPage = facade.getLatestFeed(null, null, 3, Post.DOMAIN_TECH);
         PageResult<FeedItemVO> careerPage = facade.getLatestFeed(null, null, 3, Post.DOMAIN_CAREER);
@@ -71,7 +72,8 @@ class FeedDomainFilterTest {
                 new FakePostFacade(PageResult.of(List.of(anonymousPost), null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
-                new ObjectMapper());
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
 
         PageResult<FeedItemVO> page = facade.getLatestFeed(7L, null, 1, Post.DOMAIN_CAREER);
 
@@ -99,7 +101,8 @@ class FeedDomainFilterTest {
                 new FakePostFacade(PageResult.of(posts, null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
-                new ObjectMapper());
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, Post.DOMAIN_CAREER);
 
@@ -124,7 +127,8 @@ class FeedDomainFilterTest {
                 new FakePostFacade(PageResult.of(posts, null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
-                new ObjectMapper());
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, Post.DOMAIN_CAREER);
 
@@ -214,6 +218,15 @@ class FeedDomainFilterTest {
                             .commentCount(0L)
                             .favoriteCount(0L)
                             .build()));
+        }
+
+        @Override
+        public Map<Long, Long> batchCountPublicPublishedPostsByAuthors(Collection<Long> authorIds) {
+            return latestPage.getItems().stream()
+                    .filter(post -> post.getAuthorId() != null && authorIds.contains(post.getAuthorId()))
+                    .collect(java.util.stream.Collectors.groupingBy(
+                            PostBriefDTO::getAuthorId,
+                            java.util.stream.Collectors.counting()));
         }
 
         @Override public PostDTO getPost(Long postId) { throw unsupported(); }

@@ -191,6 +191,29 @@ public interface PostMapper extends BaseMapper<PostPO> {
     Map<String, Object> aggregatePublicContributionByAuthor(@Param("authorId") Long authorId);
 
     @Select("""
+            <script>
+            SELECT
+              p.author_id AS authorId,
+              COUNT(*) AS postCount
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.author_id IN
+              <foreach collection="authorIds" item="authorId" open="(" separator="," close=")">
+                #{authorId}
+              </foreach>
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+            GROUP BY p.author_id
+            </script>
+            """)
+    List<Map<String, Object>> countPublicPublishedPostsByAuthors(@Param("authorIds") Collection<Long> authorIds);
+
+    @Select("""
             SELECT p.*
             FROM t_post_main p
             LEFT JOIN t_post_counter c ON c.post_id = p.id
@@ -373,6 +396,19 @@ public interface PostMapper extends BaseMapper<PostPO> {
             """)
     List<PostPO> selectPublicPostsForIndexAfterId(@Param("lastId") Long lastId,
                                                   @Param("limit") int limit);
+
+    @Select("""
+            SELECT p.*
+            FROM t_post_main p
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.id > #{lastId}
+            ORDER BY p.id ASC
+            LIMIT #{limit}
+            """)
+    List<PostPO> selectPublicSeoPosts(@Param("lastId") Long lastId,
+                                      @Param("limit") int limit);
 
     @Select("""
             <script>

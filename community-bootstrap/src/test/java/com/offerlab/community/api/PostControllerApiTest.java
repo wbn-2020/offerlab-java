@@ -7,24 +7,31 @@ import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.event.PublicPostViewedEvent;
 import com.offerlab.community.post.application.PostApplicationService;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostFeaturedService;
 import com.offerlab.community.post.application.PostKnowledgeReviewService;
 import com.offerlab.community.post.application.PostReportService;
-import com.offerlab.community.post.application.DomainModeratorService;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.controller.PostController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -55,6 +62,8 @@ class PostControllerApiTest {
     private ContentModerationService contentModerationService;
     @Mock
     private JwtService jwtService;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     private MockMvc mvc;
 
@@ -62,21 +71,69 @@ class PostControllerApiTest {
     void setUp() {
         mvc = ApiTestSupport.mvc(
                 new PostController(postFacade, postService, reportService, featuredService, knowledgeReviewService,
-                        draftService, domainModeratorService, adminPermissionService, contentModerationService),
+                        draftService, domainModeratorService, adminPermissionService, contentModerationService,
+                        applicationEventPublisher),
                 jwtService);
     }
 
     @Test
     void missingPostDetailReturns404InsteadOfSuccessNullData() throws Exception {
-        when(postFacade.getPost(99L)).thenReturn(null);
+        when(postFacade.getPost(99L, null)).thenReturn(null);
 
         mvc.perform(get("/api/v1/posts/99"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(ErrorCode.POST_NOT_FOUND.getCode()))
                 .andExpect(jsonPath("$.message").value(ErrorCode.POST_NOT_FOUND.getMessage()));
 
-        verify(postFacade).getPost(99L);
+        verify(postFacade).getPost(99L, null);
         verifyNoInteractions(postService);
+    }
+
+    @Test
+    void authenticatedPostDetailUsesViewerContextAndIncrementsViewOnlyWhenVisible() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(postFacade.getPost(101L, 7L)).thenReturn(PostDTO.builder()
+                .id(101L)
+                .title("visible detail")
+                .domain(2)
+                .visibility(Post.VIS_PUBLIC)
+                .build());
+
+        mvc.perform(get("/api/v1/posts/101")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.id").value(101));
+
+        verify(postFacade).getPost(101L, 7L);
+        verify(postService).incrView(101L);
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
+        PublicPostViewedEvent event = assertInstanceOf(PublicPostViewedEvent.class, eventCaptor.getValue());
+        assertEquals(101L, event.getPostId());
+        assertEquals(7L, event.getViewerUid());
+        assertEquals(2, event.getDomain());
+    }
+
+    @Test
+    void followerOnlyDetailDoesNotPublishTrustedPublicViewEvent() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(postFacade.getPost(102L, 7L)).thenReturn(PostDTO.builder()
+                .id(102L)
+                .title("follower detail")
+                .domain(1)
+                .visibility(Post.VIS_FOLLOWER)
+                .build());
+
+        mvc.perform(get("/api/v1/posts/102")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.id").value(102));
+
+        verify(postFacade).getPost(102L, 7L);
+        verify(postService).incrView(102L);
+        verifyNoInteractions(applicationEventPublisher);
     }
 
     @Test

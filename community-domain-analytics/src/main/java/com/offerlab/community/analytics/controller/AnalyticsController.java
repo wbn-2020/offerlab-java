@@ -1,9 +1,13 @@
 package com.offerlab.community.analytics.controller;
 
 import com.offerlab.community.analytics.api.AnalyticsFacade;
+import com.offerlab.community.analytics.api.dto.GrowthFunnelDTO;
+import com.offerlab.community.analytics.api.dto.GrowthEventSummaryDTO;
+import com.offerlab.community.analytics.application.GrowthEventService;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.post.domain.model.PostDomain;
@@ -21,6 +25,8 @@ import java.util.Map;
 public class AnalyticsController {
 
     private final AnalyticsFacade facade;
+    private final GrowthEventService growthEventService;
+    private final AdminPermissionService adminPermissionService;
 
     @PublicApi
     @GetMapping("/trend")
@@ -33,6 +39,20 @@ public class AnalyticsController {
     @GetMapping("/me")
     public Result<Map<String, Object>> me() {
         return Result.ok(facade.getPersonalDashboard(UserContext.require()));
+    }
+
+    @GetMapping("/growth")
+    public Result<GrowthEventSummaryDTO> growth(@RequestParam(defaultValue = "30") int days,
+                                                @RequestParam(required = false) Integer domain) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(growthEventService.summary(days, requireOptionalDomain(domain)));
+    }
+
+    @GetMapping("/growth/funnel")
+    public Result<GrowthFunnelDTO> growthFunnel(@RequestParam(defaultValue = "30") int days,
+                                                @RequestParam(required = false) Integer domain) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(growthEventService.funnel(days, requireOptionalDomain(domain)));
     }
 
     private Integer requireOptionalDomain(Integer domain) {

@@ -19,6 +19,7 @@ import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.api.event.PublicPostViewedEvent;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
@@ -33,6 +34,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -60,6 +62,7 @@ public class PostController {
     private final DomainModeratorService domainModeratorService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
             new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "技术文章", "文章",
@@ -154,12 +157,20 @@ public class PostController {
     @PublicApi
     @GetMapping("/{postId}")
     public Result<PostDTO> get(@PathVariable Long postId) {
-        PostDTO p = postFacade.getPost(postId);
+        Long viewerUid = UserContext.get();
+        PostDTO p = postFacade.getPost(postId, viewerUid);
         if (p == null) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
         // 只有实际可见的帖子才计浏览，避免不存在或不可见内容污染计数。
         postService.incrView(postId);
+        if (isPublicPost(p)) {
+            applicationEventPublisher.publishEvent(PublicPostViewedEvent.builder()
+                    .postId(postId)
+                    .viewerUid(viewerUid)
+                    .domain(p.getDomain())
+                    .build());
+        }
         return Result.ok(p);
     }
 
@@ -411,5 +422,9 @@ public class PostController {
             return domain;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static boolean isPublicPost(PostDTO post) {
+        return post != null && (post.getVisibility() == null || post.getVisibility() == Post.VIS_PUBLIC);
     }
 }

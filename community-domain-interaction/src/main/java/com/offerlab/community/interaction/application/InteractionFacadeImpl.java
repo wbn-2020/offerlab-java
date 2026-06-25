@@ -96,7 +96,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         postCounterMapper.incrLike(postId, 1);
         afterCommit.execute(() -> postCounterRedis.incrLike(postId, 1), "post like counter:" + postId);
         events.publish(PostLikedEvent.builder()
-                .uid(uid).postId(postId).postAuthorId(post.getAuthorId())
+                .uid(uid).postId(postId).postAuthorId(post.getAuthorId()).domain(post.getDomain())
                 .timestamp(Instant.now().toEpochMilli()).build());
     }
 
@@ -229,7 +229,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         postCounterMapper.incrFavorite(postId, 1);
         afterCommit.execute(() -> postCounterRedis.incrFavorite(postId, 1), "post favorite counter:" + postId);
         events.publish(PostFavoritedEvent.builder()
-                .uid(uid).postId(postId).postAuthorId(post.getAuthorId())
+                .uid(uid).postId(postId).postAuthorId(post.getAuthorId()).domain(post.getDomain())
                 .timestamp(Instant.now().toEpochMilli()).build());
     }
 
@@ -294,6 +294,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                     .parentId(po.getParentId())
                     .replyToUid(po.getReplyToUid())
                     .content(cmd.getContent())
+                    .domain(post.getDomain())
                     .timestamp(Instant.now().toEpochMilli())
                     .build());
         }

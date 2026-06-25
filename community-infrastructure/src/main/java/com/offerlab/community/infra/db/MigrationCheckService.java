@@ -33,7 +33,15 @@ public class MigrationCheckService {
                 "t_mock_interview_answer",
                 "t_ai_extract_task",
                 "t_domain_moderator",
-                "t_post_extension"
+                "t_domain_config",
+                "t_growth_event",
+                "t_post_extension",
+                "t_user_task_state",
+                "t_content_assist_record",
+                "t_content_series",
+                "t_content_series_post",
+                "t_feed_recommend_support_stat",
+                "t_expert_cert_application"
         )) {
             tables.put(table, tableExists(table));
         }
@@ -80,7 +88,132 @@ public class MigrationCheckService {
         )) {
             columns.put("t_domain_moderator." + column, columnExists("t_domain_moderator", column));
         }
+        for (String column : List.of(
+                "domain",
+                "domain_name",
+                "domain_slug",
+                "description",
+                "sort_order",
+                "enabled",
+                "risk_level",
+                "posting_notice",
+                "browse_notice",
+                "interaction_notice",
+                "created_by",
+                "updated_by",
+                "create_time",
+                "update_time"
+        )) {
+            columns.put("t_domain_config." + column, columnExists("t_domain_config", column));
+        }
+        for (String column : List.of(
+                "id",
+                "event_type",
+                "uid",
+                "domain",
+                "content_id",
+                "target_type",
+                "target_value",
+                "source_page",
+                "ext_json",
+                "create_time"
+        )) {
+            columns.put("t_growth_event." + column, columnExists("t_growth_event", column));
+        }
         columns.put("t_post_extension.domain", columnExists("t_post_extension", "domain"));
+        for (String column : List.of(
+                "id",
+                "uid",
+                "task_type",
+                "task_code",
+                "task_date",
+                "completed",
+                "complete_source",
+                "complete_ref_id",
+                "first_completed_time",
+                "create_time",
+                "update_time"
+        )) {
+            columns.put("t_user_task_state." + column, columnExists("t_user_task_state", column));
+        }
+        for (String column : List.of(
+                "id",
+                "uid",
+                "scene",
+                "provider",
+                "assist_status",
+                "domain",
+                "content_length",
+                "content_hash",
+                "prompt_tokens",
+                "completion_tokens",
+                "estimated_cost_micros",
+                "error_code",
+                "create_time",
+                "update_time"
+        )) {
+            columns.put("t_content_assist_record." + column, columnExists("t_content_assist_record", column));
+        }
+        for (String column : List.of(
+                "id",
+                "creator_uid",
+                "title",
+                "description",
+                "domain",
+                "cover_url",
+                "create_time",
+                "update_time",
+                "is_deleted"
+        )) {
+            columns.put("t_content_series." + column, columnExists("t_content_series", column));
+        }
+        for (String column : List.of(
+                "id",
+                "series_id",
+                "post_id",
+                "sort_order",
+                "create_time",
+                "update_time",
+                "is_deleted"
+        )) {
+            columns.put("t_content_series_post." + column, columnExists("t_content_series_post", column));
+        }
+        for (String column : List.of(
+                "id",
+                "viewer_uid",
+                "domain",
+                "delivered_item_count",
+                "support_hit_item_count",
+                "create_time",
+                "update_time"
+        )) {
+            columns.put("t_feed_recommend_support_stat." + column, columnExists("t_feed_recommend_support_stat", column));
+        }
+        for (String column : List.of(
+                "id",
+                "applicant_uid",
+                "domain",
+                "status",
+                "evidence_summary",
+                "evidence_links_json",
+                "eligibility_passed",
+                "eligibility_summary",
+                "eligibility_snapshot_json",
+                "risk_acknowledged",
+                "risk_warning",
+                "reviewer_uid",
+                "review_note",
+                "review_time",
+                "revoked_by",
+                "revoke_note",
+                "revoked_time",
+                "create_time",
+                "update_time",
+                "is_deleted",
+                "active_guard"
+        )) {
+            columns.put("t_expert_cert_application." + column, columnExists("t_expert_cert_application", column));
+        }
         Map<String, Boolean> indexes = new LinkedHashMap<>();
         indexes.put("t_post_report.idx_post_reporter_status", indexExists("t_post_report", "idx_post_reporter_status"));
         indexes.put("t_comment_report.idx_comment_reporter_status", indexExists("t_comment_report", "idx_comment_reporter_status"));
@@ -104,9 +237,41 @@ public class MigrationCheckService {
         indexes.put("t_domain_moderator.uk_domain_moderator_uid_domain", indexExists("t_domain_moderator", "uk_domain_moderator_uid_domain"));
         indexes.put("t_domain_moderator.idx_domain_moderator_domain_enabled", indexExists("t_domain_moderator", "idx_domain_moderator_domain_enabled"));
         indexes.put("t_domain_moderator.idx_domain_moderator_uid_enabled", indexExists("t_domain_moderator", "idx_domain_moderator_uid_enabled"));
+        indexes.put("t_domain_config.uk_domain_config_slug", indexExists("t_domain_config", "uk_domain_config_slug"));
+        indexes.put("t_domain_config.idx_domain_config_enabled_sort", indexExists("t_domain_config", "idx_domain_config_enabled_sort"));
+        indexes.put("t_domain_config.idx_domain_config_risk_enabled", indexExists("t_domain_config", "idx_domain_config_risk_enabled"));
+        indexes.put("t_growth_event.idx_growth_event_type_time", indexExists("t_growth_event", "idx_growth_event_type_time"));
+        indexes.put("t_growth_event.idx_growth_event_domain_time", indexExists("t_growth_event", "idx_growth_event_domain_time"));
+        indexes.put("t_growth_event.idx_growth_event_uid_time", indexExists("t_growth_event", "idx_growth_event_uid_time"));
+        indexes.put("t_growth_event.idx_growth_event_content_time", indexExists("t_growth_event", "idx_growth_event_content_time"));
         indexes.put("t_post_extension.idx_post_extension_domain_post", indexExists("t_post_extension", "idx_post_extension_domain_post"));
+        indexes.put("t_user_task_state.uk_user_task_scope_code_day", indexExists("t_user_task_state", "uk_user_task_scope_code_day"));
+        indexes.put("t_user_task_state.idx_user_task_scope_date", indexExists("t_user_task_state", "idx_user_task_scope_date"));
+        indexes.put("t_content_assist_record.idx_content_assist_scene_time", indexExists("t_content_assist_record", "idx_content_assist_scene_time"));
+        indexes.put("t_content_assist_record.idx_content_assist_status_time", indexExists("t_content_assist_record", "idx_content_assist_status_time"));
+        indexes.put("t_content_assist_record.idx_content_assist_provider_time", indexExists("t_content_assist_record", "idx_content_assist_provider_time"));
+        indexes.put("t_content_assist_record.idx_content_assist_uid_time", indexExists("t_content_assist_record", "idx_content_assist_uid_time"));
+        indexes.put("t_content_series.idx_content_series_creator_update", indexExists("t_content_series", "idx_content_series_creator_update"));
+        indexes.put("t_content_series.idx_content_series_domain_update", indexExists("t_content_series", "idx_content_series_domain_update"));
+        indexes.put("t_content_series_post.uk_content_series_post", indexExists("t_content_series_post", "uk_content_series_post"));
+        indexes.put("t_content_series_post.idx_content_series_post_series_sort", indexExists("t_content_series_post", "idx_content_series_post_series_sort"));
+        indexes.put("t_content_series_post.idx_content_series_post_post", indexExists("t_content_series_post", "idx_content_series_post_post"));
+        indexes.put("t_feed_recommend_support_stat.idx_feed_recommend_support_stat_create_time", indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_create_time"));
+        indexes.put("t_feed_recommend_support_stat.idx_feed_recommend_support_stat_domain_create_time", indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_domain_create_time"));
+        indexes.put("t_feed_recommend_support_stat.idx_feed_recommend_support_stat_viewer_create_time", indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_viewer_create_time"));
+        indexes.put("t_expert_cert_application.uk_expert_cert_active_guard", indexExists("t_expert_cert_application", "uk_expert_cert_active_guard"));
+        indexes.put("t_expert_cert_application.idx_expert_cert_applicant_domain", indexExists("t_expert_cert_application", "idx_expert_cert_applicant_domain"));
+        indexes.put("t_expert_cert_application.idx_expert_cert_review_queue", indexExists("t_expert_cert_application", "idx_expert_cert_review_queue"));
         Map<String, Boolean> constraints = new LinkedHashMap<>();
         constraints.put("t_domain_moderator.PRIMARY(id)", primaryKeyExists("t_domain_moderator", "id"));
+        constraints.put("t_domain_config.PRIMARY(domain)", primaryKeyExists("t_domain_config", "domain"));
+        constraints.put("t_growth_event.PRIMARY(id)", primaryKeyExists("t_growth_event", "id"));
+        constraints.put("t_user_task_state.PRIMARY(id)", primaryKeyExists("t_user_task_state", "id"));
+        constraints.put("t_content_assist_record.PRIMARY(id)", primaryKeyExists("t_content_assist_record", "id"));
+        constraints.put("t_content_series.PRIMARY(id)", primaryKeyExists("t_content_series", "id"));
+        constraints.put("t_content_series_post.PRIMARY(id)", primaryKeyExists("t_content_series_post", "id"));
+        constraints.put("t_feed_recommend_support_stat.PRIMARY(id)", primaryKeyExists("t_feed_recommend_support_stat", "id"));
+        constraints.put("t_expert_cert_application.PRIMARY(id)", primaryKeyExists("t_expert_cert_application", "id"));
         boolean ready = tables.values().stream().allMatch(Boolean::booleanValue)
                 && columns.values().stream().allMatch(Boolean::booleanValue)
                 && indexes.values().stream().allMatch(Boolean::booleanValue)
@@ -120,7 +285,7 @@ public class MigrationCheckService {
         status.put("indexes", indexes);
         status.put("constraints", constraints);
         status.put("missing", missing);
-        status.put("migration", "db/migration/20260608_tag_governance.sql");
+        status.put("migration", "See status.migrations for the required schema files.");
         status.put("migrations", List.of(
                 "db/migration/20260608_tag_governance.sql",
                 "db/migration/20260605_ai_extract_task_metrics.sql",
@@ -128,10 +293,17 @@ public class MigrationCheckService {
                 "db/migration/20260608_review_queue.sql",
                 "db/migration/20260608_mock_interview_ai_review_transparency.sql",
                 "db/migration/20260617_domain_moderators.sql",
-                "db/migration/20260618_post_extension_domain_index.sql"
+                "db/migration/20260623_domain_config.sql",
+                "db/migration/20260623_growth_event.sql",
+                "db/migration/20260623_user_task_state.sql",
+                "db/migration/20260618_post_extension_domain_index.sql",
+                "db/migration/20260624_content_assist_ai.sql",
+                "db/migration/20260624_content_series.sql",
+                "db/migration/20260624_new_creator_support_stats.sql",
+                "db/migration/20260624_expert_certification.sql"
         ));
         if (!ready) {
-            status.put("message", "数据库迁移未补齐，标签治理、社区专题、审核队列、发布和搜索会降级或被阻断");
+            status.put("message", "数据库迁移未补齐，治理、领域配置、增长埋点、内容助手、系列能力和专家认证试点会降级或被阻断。");
         }
         return status;
     }
@@ -205,6 +377,102 @@ public class MigrationCheckService {
                 && indexExists("t_domain_moderator", "uk_domain_moderator_uid_domain")
                 && indexExists("t_domain_moderator", "idx_domain_moderator_domain_enabled")
                 && indexExists("t_domain_moderator", "idx_domain_moderator_uid_enabled");
+    }
+
+    public boolean domainConfigReady() {
+        return tableExists("t_domain_config")
+                && columnExists("t_domain_config", "domain")
+                && columnExists("t_domain_config", "domain_name")
+                && columnExists("t_domain_config", "domain_slug")
+                && columnExists("t_domain_config", "description")
+                && columnExists("t_domain_config", "sort_order")
+                && columnExists("t_domain_config", "enabled")
+                && columnExists("t_domain_config", "risk_level")
+                && columnExists("t_domain_config", "posting_notice")
+                && columnExists("t_domain_config", "browse_notice")
+                && columnExists("t_domain_config", "interaction_notice")
+                && columnExists("t_domain_config", "created_by")
+                && columnExists("t_domain_config", "updated_by")
+                && columnExists("t_domain_config", "create_time")
+                && columnExists("t_domain_config", "update_time")
+                && primaryKeyExists("t_domain_config", "domain")
+                && indexExists("t_domain_config", "uk_domain_config_slug")
+                && indexExists("t_domain_config", "idx_domain_config_enabled_sort")
+                && indexExists("t_domain_config", "idx_domain_config_risk_enabled");
+    }
+
+    public boolean growthEventReady() {
+        return tableExists("t_growth_event")
+                && columnExists("t_growth_event", "id")
+                && columnExists("t_growth_event", "event_type")
+                && columnExists("t_growth_event", "uid")
+                && columnExists("t_growth_event", "domain")
+                && columnExists("t_growth_event", "content_id")
+                && columnExists("t_growth_event", "target_type")
+                && columnExists("t_growth_event", "target_value")
+                && columnExists("t_growth_event", "source_page")
+                && columnExists("t_growth_event", "ext_json")
+                && columnExists("t_growth_event", "create_time")
+                && primaryKeyExists("t_growth_event", "id")
+                && indexExists("t_growth_event", "idx_growth_event_type_time")
+                && indexExists("t_growth_event", "idx_growth_event_domain_time")
+                && indexExists("t_growth_event", "idx_growth_event_uid_time")
+                && indexExists("t_growth_event", "idx_growth_event_content_time");
+    }
+
+    public boolean contentAssistReady() {
+        return tableExists("t_content_assist_record")
+                && columnExists("t_content_assist_record", "scene")
+                && columnExists("t_content_assist_record", "provider")
+                && columnExists("t_content_assist_record", "assist_status")
+                && columnExists("t_content_assist_record", "content_hash")
+                && primaryKeyExists("t_content_assist_record", "id")
+                && indexExists("t_content_assist_record", "idx_content_assist_scene_time")
+                && indexExists("t_content_assist_record", "idx_content_assist_status_time")
+                && indexExists("t_content_assist_record", "idx_content_assist_provider_time")
+                && indexExists("t_content_assist_record", "idx_content_assist_uid_time");
+    }
+
+    public boolean contentSeriesReady() {
+        return tableExists("t_content_series")
+                && tableExists("t_content_series_post")
+                && columnExists("t_content_series", "creator_uid")
+                && columnExists("t_content_series", "title")
+                && columnExists("t_content_series_post", "series_id")
+                && columnExists("t_content_series_post", "post_id")
+                && primaryKeyExists("t_content_series", "id")
+                && primaryKeyExists("t_content_series_post", "id")
+                && indexExists("t_content_series", "idx_content_series_creator_update")
+                && indexExists("t_content_series", "idx_content_series_domain_update")
+                && indexExists("t_content_series_post", "uk_content_series_post")
+                && indexExists("t_content_series_post", "idx_content_series_post_series_sort")
+                && indexExists("t_content_series_post", "idx_content_series_post_post");
+    }
+
+    public boolean newCreatorSupportStatsReady() {
+        return tableExists("t_feed_recommend_support_stat")
+                && columnExists("t_feed_recommend_support_stat", "viewer_uid")
+                && columnExists("t_feed_recommend_support_stat", "domain")
+                && columnExists("t_feed_recommend_support_stat", "delivered_item_count")
+                && columnExists("t_feed_recommend_support_stat", "support_hit_item_count")
+                && primaryKeyExists("t_feed_recommend_support_stat", "id")
+                && indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_create_time")
+                && indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_domain_create_time")
+                && indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_viewer_create_time");
+    }
+
+    public boolean expertCertificationReady() {
+        return tableExists("t_expert_cert_application")
+                && columnExists("t_expert_cert_application", "applicant_uid")
+                && columnExists("t_expert_cert_application", "domain")
+                && columnExists("t_expert_cert_application", "status")
+                && columnExists("t_expert_cert_application", "evidence_summary")
+                && columnExists("t_expert_cert_application", "risk_acknowledged")
+                && columnExists("t_expert_cert_application", "active_guard")
+                && primaryKeyExists("t_expert_cert_application", "id")
+                && indexExists("t_expert_cert_application", "uk_expert_cert_active_guard")
+                && indexExists("t_expert_cert_application", "idx_expert_cert_applicant_domain")
+                && indexExists("t_expert_cert_application", "idx_expert_cert_review_queue");
     }
 
     public boolean postExtensionDomainReady() {

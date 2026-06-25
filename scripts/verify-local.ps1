@@ -29,9 +29,15 @@ if ($StrictMiddleware) {
 }
 
 Write-Host "Running backend focused test suite..."
-& mvn -pl community-domain-user,community-infrastructure,community-domain-search,community-domain-question,community-archtest -am test
+& mvn --% -pl community-bootstrap -am -DskipTests test-compile
+& mvn --% -pl community-domain-analytics -am -DskipTests test-compile
 
 Write-Host "Running backend API/RBAC focused test suite..."
-& mvn -pl community-bootstrap -am "-Dtest=AuthControllerApiTest,InteractionControllerApiTest,QuestionAdminControllerApiTest,NotificationOpsControllerApiTest,OpsControllerStatusApiTest,AuthInterceptorRedisFailureTest,OpsControllerWriteApiTest,HealthControllerReadinessTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+& mvn --% -pl community-bootstrap -am -Dtest=AuthControllerApiTest,InteractionControllerApiTest,QuestionAdminControllerApiTest,NotificationOpsControllerApiTest,OpsControllerStatusApiTest,AuthInterceptorRedisFailureTest,OpsControllerWriteApiTest,HealthControllerReadinessTest,PostControllerApiTest,ContentAssistDashboardControllerApiTest,KnowledgeControllerApiTest,GrowthInsightControllerApiTest,ExpertCertificationControllerApiTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test
+
+Write-Host "Running backend stage3/stage4 domain-focused tests..."
+& mvn --% -pl community-domain-user -am -Dtest=NotificationPreferenceAliasGuardTest,UserTaskStateSafetyGuardTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test
+& mvn --% -pl community-domain-post -am -Dtest=ContentAssistServiceTest,ContentSeriesServiceTest,ExpertCertificationServiceTest,KnowledgeRelationServiceTest,ExpertCertificationGuardTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test
+& mvn --% -pl community-domain-analytics -am -Dtest=GrowthEventGuardTest,GrowthEventListenerTest,GrowthEventServiceTest,GrowthInsightServiceTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test
 
 Write-Host "Backend local verification passed."

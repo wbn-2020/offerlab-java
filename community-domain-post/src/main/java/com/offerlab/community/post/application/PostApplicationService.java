@@ -55,10 +55,12 @@ public class PostApplicationService {
     private final AfterCommitExecutor afterCommit;
     private final CommunityTopicService communityTopicService;
     private final MigrationCheckService migrationCheckService;
+    private final DomainConfigService domainConfigService;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
         Integer domain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), Post.DOMAIN_TECH);
+        domainConfigService.requireDomainEnabled(domain);
         PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
                 cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
         long id = idGen.nextId();
@@ -66,7 +68,8 @@ public class PostApplicationService {
         requireResolvedTagCount(input.postType(), resolvedTagIds);
         String enrichedExtJson = mergeAnonymousToExtJson(
                 mergeDomainToExtJson(input.extJson(), domain), domain, cmd.getAnonymous());
-        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired());
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired())
+                || domainConfigService.reviewRequiredForPublish(domain);
         Post post = Post.builder()
                 .id(id)
                 .authorId(cmd.getAuthorId())
@@ -92,6 +95,7 @@ public class PostApplicationService {
                     .content(input.content())
                     .visibility(post.getVisibility())
                     .postStatus(post.getPostStatus())
+                    .domain(post.getDomain())
                     .timestamp(Instant.now().toEpochMilli())
                     .tagIds(resolvedTagIds)
                     .topicNotificationTargets(communityTopicService.notificationTargetsForPost(resolvedTagIds, cmd.getAuthorId()))
@@ -108,6 +112,7 @@ public class PostApplicationService {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         Integer nextDomain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), post.getDomain());
+        domainConfigService.requireDomainEnabled(nextDomain);
         boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
         List<Long> existingTagIds = currentTagIds(post.getId());
         List<Long> validationTagIds = tagsProvided ? cmd.getTagIds() : existingTagIds;
@@ -136,7 +141,8 @@ public class PostApplicationService {
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
-        if (Boolean.TRUE.equals(cmd.getReviewRequired())) {
+        if (Boolean.TRUE.equals(cmd.getReviewRequired())
+                || domainConfigService.reviewRequiredForPublish(nextDomain)) {
             post.setPostStatus(Post.STATUS_REVIEWING);
         }
         postRepo.update(post);

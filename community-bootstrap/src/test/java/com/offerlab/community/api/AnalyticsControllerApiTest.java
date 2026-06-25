@@ -1,8 +1,11 @@
 package com.offerlab.community.api;
 
 import com.offerlab.community.analytics.api.AnalyticsFacade;
+import com.offerlab.community.analytics.api.dto.GrowthFunnelDTO;
+import com.offerlab.community.analytics.application.GrowthEventService;
 import com.offerlab.community.analytics.controller.AnalyticsController;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,6 +15,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -21,13 +26,17 @@ class AnalyticsControllerApiTest {
     @Mock
     private AnalyticsFacade facade;
     @Mock
+    private GrowthEventService growthEventService;
+    @Mock
+    private AdminPermissionService adminPermissionService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new AnalyticsController(facade), jwtService);
+        mvc = ApiTestSupport.mvc(new AnalyticsController(facade, growthEventService, adminPermissionService), jwtService);
     }
 
     @Test
@@ -37,6 +46,27 @@ class AnalyticsControllerApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
 
-        verifyNoInteractions(facade);
+        verifyNoInteractions(facade, growthEventService, adminPermissionService);
+    }
+
+    @Test
+    void growthFunnelRequiresOpsScopeAndDelegatesToGrowthService() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(growthEventService.funnel(14, 2)).thenReturn(GrowthFunnelDTO.builder()
+                .days(14)
+                .activeDomain(2)
+                .build());
+
+        mvc.perform(get("/api/v1/dashboard/growth/funnel")
+                        .header("Authorization", "Bearer token")
+                        .param("days", "14")
+                        .param("domain", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.days").value(14))
+                .andExpect(jsonPath("$.data.activeDomain").value(2));
+
+        verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);
+        verify(growthEventService).funnel(14, 2);
     }
 }

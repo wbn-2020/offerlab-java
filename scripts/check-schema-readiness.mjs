@@ -48,7 +48,15 @@ const expectations = [
     't_mock_interview_answer',
     't_ai_extract_task',
     't_domain_moderator',
+    't_domain_config',
+    't_growth_event',
     't_post_extension',
+    't_user_task_state',
+    't_content_assist_record',
+    't_content_series',
+    't_content_series_post',
+    't_feed_recommend_support_stat',
+    't_expert_cert_application',
   ]),
   ...columns('t_tag', [
     'tag_status',
@@ -84,8 +92,117 @@ const expectations = [
     'create_time',
     'update_time',
   ]),
+  ...columns('t_domain_config', [
+    'domain',
+    'domain_name',
+    'domain_slug',
+    'description',
+    'sort_order',
+    'enabled',
+    'risk_level',
+    'posting_notice',
+    'browse_notice',
+    'interaction_notice',
+    'created_by',
+    'updated_by',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_growth_event', [
+    'id',
+    'event_type',
+    'uid',
+    'domain',
+    'content_id',
+    'target_type',
+    'target_value',
+    'source_page',
+    'ext_json',
+    'create_time',
+  ]),
   ...columns('t_post_extension', [
     'domain',
+  ]),
+  ...columns('t_user_task_state', [
+    'id',
+    'uid',
+    'task_type',
+    'task_code',
+    'task_date',
+    'completed',
+    'complete_source',
+    'complete_ref_id',
+    'first_completed_time',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_content_assist_record', [
+    'id',
+    'uid',
+    'scene',
+    'provider',
+    'assist_status',
+    'domain',
+    'content_length',
+    'content_hash',
+    'prompt_tokens',
+    'completion_tokens',
+    'estimated_cost_micros',
+    'error_code',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_content_series', [
+    'id',
+    'creator_uid',
+    'title',
+    'description',
+    'domain',
+    'cover_url',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
+  ...columns('t_content_series_post', [
+    'id',
+    'series_id',
+    'post_id',
+    'sort_order',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
+  ...columns('t_feed_recommend_support_stat', [
+    'id',
+    'viewer_uid',
+    'domain',
+    'delivered_item_count',
+    'support_hit_item_count',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_expert_cert_application', [
+    'id',
+    'applicant_uid',
+    'domain',
+    'status',
+    'evidence_summary',
+    'evidence_links_json',
+    'eligibility_passed',
+    'eligibility_summary',
+    'eligibility_snapshot_json',
+    'risk_acknowledged',
+    'risk_warning',
+    'reviewer_uid',
+    'review_note',
+    'review_time',
+    'revoked_by',
+    'revoke_note',
+    'revoked_time',
+    'create_time',
+    'update_time',
+    'is_deleted',
+    'active_guard',
   ]),
   ...indexes('t_post_report', ['idx_post_reporter_status']),
   ...indexes('t_comment_report', ['idx_comment_reporter_status']),
@@ -106,8 +223,53 @@ const expectations = [
     'idx_domain_moderator_domain_enabled',
     'idx_domain_moderator_uid_enabled',
   ]),
+  ...indexes('t_domain_config', [
+    'uk_domain_config_slug',
+    'idx_domain_config_enabled_sort',
+    'idx_domain_config_risk_enabled',
+  ]),
+  ...indexes('t_growth_event', [
+    'idx_growth_event_type_time',
+    'idx_growth_event_domain_time',
+    'idx_growth_event_uid_time',
+    'idx_growth_event_content_time',
+  ]),
   ...indexes('t_post_extension', ['idx_post_extension_domain_post']),
+  ...indexes('t_user_task_state', ['uk_user_task_scope_code_day', 'idx_user_task_scope_date']),
+  ...indexes('t_content_assist_record', [
+    'idx_content_assist_scene_time',
+    'idx_content_assist_status_time',
+    'idx_content_assist_provider_time',
+    'idx_content_assist_uid_time',
+  ]),
+  ...indexes('t_content_series', [
+    'idx_content_series_creator_update',
+    'idx_content_series_domain_update',
+  ]),
+  ...indexes('t_content_series_post', [
+    'uk_content_series_post',
+    'idx_content_series_post_series_sort',
+    'idx_content_series_post_post',
+  ]),
+  ...indexes('t_feed_recommend_support_stat', [
+    'idx_feed_recommend_support_stat_create_time',
+    'idx_feed_recommend_support_stat_domain_create_time',
+    'idx_feed_recommend_support_stat_viewer_create_time',
+  ]),
+  ...indexes('t_expert_cert_application', [
+    'uk_expert_cert_active_guard',
+    'idx_expert_cert_applicant_domain',
+    'idx_expert_cert_review_queue',
+  ]),
   ...primaryKeys('t_domain_moderator', ['id']),
+  ...primaryKeys('t_domain_config', ['domain']),
+  ...primaryKeys('t_growth_event', ['id']),
+  ...primaryKeys('t_user_task_state', ['id']),
+  ...primaryKeys('t_content_assist_record', ['id']),
+  ...primaryKeys('t_content_series', ['id']),
+  ...primaryKeys('t_content_series_post', ['id']),
+  ...primaryKeys('t_feed_recommend_support_stat', ['id']),
+  ...primaryKeys('t_expert_cert_application', ['id']),
 ]
 
 const sql = `
@@ -241,7 +403,14 @@ function migrationForTable(table) {
   if (table === 't_ai_extract_task') return 'db/migration/20260605_ai_extract_task_metrics.sql'
   if (table === 't_tag') return 'db/migration/20260608_tag_governance.sql'
   if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_domain_config') return 'db/migration/20260623_domain_config.sql'
+  if (table === 't_growth_event') return 'db/migration/20260623_growth_event.sql'
+  if (table === 't_user_task_state') return 'db/migration/20260623_user_task_state.sql'
   if (table === 't_post_extension') return 'db/migration/20260618_post_extension_domain_index.sql'
+  if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
+  if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
+  if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   return 'earlier governance/init migration'
 }
 
@@ -250,7 +419,14 @@ function migrationForColumn(table) {
   if (table === 't_mock_interview_answer') return 'db/migration/20260608_mock_interview_ai_review_transparency.sql'
   if (table === 't_ai_extract_task') return 'db/migration/20260605_ai_extract_task_metrics.sql'
   if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_domain_config') return 'db/migration/20260623_domain_config.sql'
+  if (table === 't_growth_event') return 'db/migration/20260623_growth_event.sql'
+  if (table === 't_user_task_state') return 'db/migration/20260623_user_task_state.sql'
   if (table === 't_post_extension') return 'db/migration/20260618_post_extension_domain_index.sql'
+  if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
+  if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
+  if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   return 'unknown'
 }
 
@@ -259,11 +435,25 @@ function migrationForIndex(table) {
   if (table.startsWith('t_community_topic')) return 'db/migration/20260608_community_topics.sql'
   if (table === 't_review_queue') return 'db/migration/20260608_review_queue.sql'
   if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_domain_config') return 'db/migration/20260623_domain_config.sql'
+  if (table === 't_growth_event') return 'db/migration/20260623_growth_event.sql'
+  if (table === 't_user_task_state') return 'db/migration/20260623_user_task_state.sql'
   if (table === 't_post_extension') return 'db/migration/20260618_post_extension_domain_index.sql'
+  if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
+  if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
+  if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   return 'earlier governance/init migration'
 }
 
 function migrationForConstraint(table) {
   if (table === 't_domain_moderator') return 'db/migration/20260617_domain_moderators.sql'
+  if (table === 't_domain_config') return 'db/migration/20260623_domain_config.sql'
+  if (table === 't_growth_event') return 'db/migration/20260623_growth_event.sql'
+  if (table === 't_user_task_state') return 'db/migration/20260623_user_task_state.sql'
+  if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
+  if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
+  if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   return 'unknown'
 }

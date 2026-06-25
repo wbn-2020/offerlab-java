@@ -35,3 +35,20 @@ CREATE TABLE IF NOT EXISTS t_search_analytics_event (
     KEY idx_keyword_time (keyword, create_time),
     KEY idx_company_time (company, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Search analytics events';
+
+CREATE TABLE IF NOT EXISTS t_growth_event (
+    id              BIGINT        NOT NULL PRIMARY KEY,
+    event_type      VARCHAR(32)   NOT NULL,
+    uid             BIGINT        NULL,
+    domain          TINYINT       NULL,
+    content_id      BIGINT        NULL,
+    target_type     VARCHAR(32)   NULL,
+    target_value    VARCHAR(128)  NULL,
+    source_page     VARCHAR(128)  NULL,
+    ext_json        JSON          NULL,
+    create_time     DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    KEY idx_growth_event_type_time (event_type, create_time),
+    KEY idx_growth_event_domain_time (domain, create_time),
+    KEY idx_growth_event_uid_time (uid, create_time),
+    KEY idx_growth_event_content_time (content_id, create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Community growth event log';
