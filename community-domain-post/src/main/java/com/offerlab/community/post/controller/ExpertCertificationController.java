@@ -3,6 +3,7 @@ package com.offerlab.community.post.controller;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplicationDTO;
+import com.offerlab.community.post.api.dto.ExpertCertificationApplicantApplicationDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplyCmd;
 import com.offerlab.community.post.api.dto.ExpertCertificationEligibilityDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationReviewCmd;
@@ -34,18 +35,18 @@ public class ExpertCertificationController {
     }
 
     @GetMapping("/applications/me")
-    public Result<List<ExpertCertificationApplicationDTO>> listMine(@RequestParam(required = false) Integer domain) {
+    public Result<List<ExpertCertificationApplicantApplicationDTO>> listMine(@RequestParam(required = false) Integer domain) {
         return Result.ok(expertCertificationService.listMine(UserContext.require(), domain));
     }
 
     @PostMapping("/applications")
-    public Result<ExpertCertificationApplicationDTO> submit(@Valid @RequestBody ExpertCertificationApplyCmd cmd) {
+    public Result<ExpertCertificationApplicantApplicationDTO> submit(@Valid @RequestBody ExpertCertificationApplyCmd cmd) {
         return Result.ok(expertCertificationService.submit(cmd, UserContext.require()));
     }
 
     @PostMapping("/applications/{applicationId}/revoke")
-    public Result<ExpertCertificationApplicationDTO> revoke(@PathVariable Long applicationId,
-                                                            @Valid @RequestBody RevokeReq req) {
+    public Result<ExpertCertificationApplicantApplicationDTO> revoke(@PathVariable Long applicationId,
+                                                                     @Valid @RequestBody RevokeReq req) {
         return Result.ok(expertCertificationService.revoke(applicationId, req.getNote(), UserContext.require()));
     }
 

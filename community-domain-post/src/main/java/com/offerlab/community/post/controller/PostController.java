@@ -292,9 +292,12 @@ public class PostController {
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private Boolean anonymous;
-        private List<Long> tags;
-        private List<Long> tagIds;
-        private List<String> tagNames;
+        @Size(max = 20)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;
+        @Size(max = 20)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
+        @Size(max = 20)
+        private List<@Size(max = 32) String> tagNames;
         private Long draftId;
 
         private List<Long> effectiveTagIds() {
@@ -316,9 +319,12 @@ public class PostController {
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private Boolean anonymous;
-        private List<Long> tags;
-        private List<Long> tagIds;
-        private List<String> tagNames;
+        @Size(max = 20)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;
+        @Size(max = 20)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
+        @Size(max = 20)
+        private List<@Size(max = 32) String> tagNames;
         private Long draftId;
 
         private List<Long> effectiveTagIds() {

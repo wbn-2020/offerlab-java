@@ -28,6 +28,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -217,6 +218,53 @@ class PostControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"postType\":10,\"domain\":999,\"title\":\"bad domain\",\"content\":\"content\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verifyNoInteractions(postFacade, postService, draftService);
+    }
+
+    @Test
+    void publishRejectsMoreThanTwentyTagIdsBeforeFacade() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        List<String> tagIds = new ArrayList<>();
+        for (long i = 1; i <= 21; i++) {
+            tagIds.add(String.valueOf(i));
+        }
+
+        mvc.perform(post("/api/v1/posts")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "postType": 10,
+                                  "title": "too many tag ids",
+                                  "content": "content",
+                                  "tagIds": [%s]
+                                }
+                                """.formatted(String.join(",", tagIds))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verifyNoInteractions(postFacade, postService, draftService);
+    }
+
+    @Test
+    void publishRejectsOverlongTagNameBeforeFacade() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        mvc.perform(post("/api/v1/posts")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "postType": 10,
+                                  "title": "tag name too long",
+                                  "content": "content",
+                                  "tagNames": ["123456789012345678901234567890123"]
+                                }
+                                """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
 

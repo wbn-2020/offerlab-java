@@ -6,6 +6,7 @@ import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplicationDTO;
+import com.offerlab.community.post.api.dto.ExpertCertificationApplicantApplicationDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplyCmd;
 import com.offerlab.community.post.api.dto.ExpertCertificationEligibilityDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationReviewCmd;
@@ -46,11 +47,12 @@ class ExpertCertificationServiceTest {
         BizException ex = assertThrows(BizException.class, () -> service.submit(applyCmd(false), 7L));
         assertEquals(ErrorCode.PARAM_ERROR.getCode(), ex.getCode());
 
-        ExpertCertificationApplicationDTO created = service.submit(applyCmd(true), 7L);
+        ExpertCertificationApplicantApplicationDTO created = service.submit(applyCmd(true), 7L);
 
         assertEquals(ExpertCertificationService.STATUS_SUBMITTED, created.getStatus());
         assertFalse(created.getAutoCertified(), "pilot review must never auto-certify a user");
         assertTrue(Boolean.TRUE.equals(created.getRiskAcknowledged()));
+        assertEquals(null, created.getReviewTime());
         assertEquals(1, mapperState.applicationsById.size());
     }
 
@@ -67,7 +69,7 @@ class ExpertCertificationServiceTest {
                 auditStub,
                 new MigrationCheckStub(true));
 
-        ExpertCertificationApplicationDTO created = service.submit(careerApplyCmd(), 9L);
+        ExpertCertificationApplicantApplicationDTO created = service.submit(careerApplyCmd(), 9L);
         ExpertCertificationReviewCmd reviewCmd = new ExpertCertificationReviewCmd();
         reviewCmd.setApproved(true);
         reviewCmd.setNote("manual pilot approval");
@@ -92,12 +94,12 @@ class ExpertCertificationServiceTest {
         ExpertCertificationMapperState mapperState = new ExpertCertificationMapperState(1);
         ExpertCertificationService service = newService(mapperState, eligibleCareerPosts(12L));
 
-        ExpertCertificationApplicationDTO created = service.submit(careerApplyCmd(), 12L);
-        ExpertCertificationApplicationDTO revoked = service.revoke(created.getId(), "withdrawn by applicant", 12L);
+        ExpertCertificationApplicantApplicationDTO created = service.submit(careerApplyCmd(), 12L);
+        ExpertCertificationApplicantApplicationDTO revoked = service.revoke(created.getId(), "withdrawn by applicant", 12L);
 
         assertEquals(ExpertCertificationService.STATUS_REVOKED, revoked.getStatus());
-        assertEquals(12L, revoked.getRevokedBy());
         assertFalse(revoked.getAutoCertified());
+        assertNotNull(revoked.getRevokedTime());
     }
 
     @Test
@@ -124,6 +126,87 @@ class ExpertCertificationServiceTest {
                 new MigrationCheckStub(false));
 
         assertTrue(service.listMine(22L, Post.DOMAIN_CAREER).isEmpty());
+    }
+
+    @Test
+    void listMineMasksInternalReviewerAndRevokeFieldsForApplicantView() {
+        ExpertCertificationMapperState mapperState = new ExpertCertificationMapperState(1);
+        ExpertCertificationApplicationPO po = new ExpertCertificationApplicationPO();
+        po.setId(3001L);
+        po.setApplicantUid(22L);
+        po.setDomain(Post.DOMAIN_CAREER);
+        po.setStatus(ExpertCertificationService.STATUS_REVOKED);
+        po.setEvidenceSummary("career pilot");
+        po.setEvidenceLinksJson("[\"https://example.test/post/3001\"]");
+        po.setEligibilityPassed(1);
+        po.setEligibilitySummary("eligible");
+        po.setRiskAcknowledged(0);
+        po.setRiskWarning(null);
+        po.setReviewerUid(88L);
+        po.setReviewNote("internal review note");
+        po.setRevokedBy(99L);
+        po.setRevokeNote("internal revoke note");
+        po.setReviewTime(LocalDateTime.now().minusDays(1));
+        po.setRevokedTime(LocalDateTime.now());
+        po.setCreateTime(LocalDateTime.now().minusDays(2));
+        po.setUpdateTime(LocalDateTime.now());
+        po.setIsDeleted(0);
+        mapperState.applicationsById.put(po.getId(), clone(po));
+
+        ExpertCertificationService service = newService(mapperState, eligibleCareerPosts(22L));
+
+        List<ExpertCertificationApplicantApplicationDTO> mine = service.listMine(22L, Post.DOMAIN_CAREER);
+
+        assertEquals(1, mine.size());
+        ExpertCertificationApplicantApplicationDTO dto = mine.get(0);
+        assertEquals(3001L, dto.getId());
+        assertEquals(ExpertCertificationService.STATUS_REVOKED, dto.getStatus());
+        assertNotNull(dto.getReviewTime());
+        assertNotNull(dto.getRevokedTime());
+    }
+
+    @Test
+    void reviewQueueKeepsInternalReviewerAndRevokeFieldsForAdminView() {
+        ExpertCertificationMapperState mapperState = new ExpertCertificationMapperState(1);
+        DomainModeratorStub moderatorStub = new DomainModeratorStub();
+        moderatorStub.allowedDomains.put(domainKey(88L, Post.DOMAIN_CAREER), true);
+        ExpertCertificationApplicationPO po = new ExpertCertificationApplicationPO();
+        po.setId(3002L);
+        po.setApplicantUid(23L);
+        po.setDomain(Post.DOMAIN_CAREER);
+        po.setStatus(ExpertCertificationService.STATUS_REJECTED);
+        po.setEvidenceSummary("career pilot");
+        po.setEvidenceLinksJson("[\"https://example.test/post/3002\"]");
+        po.setEligibilityPassed(1);
+        po.setEligibilitySummary("eligible");
+        po.setRiskAcknowledged(0);
+        po.setReviewerUid(88L);
+        po.setReviewNote("admin-only review note");
+        po.setRevokedBy(77L);
+        po.setRevokeNote("admin-only revoke note");
+        po.setReviewTime(LocalDateTime.now().minusDays(1));
+        po.setRevokedTime(LocalDateTime.now());
+        po.setCreateTime(LocalDateTime.now().minusDays(3));
+        po.setUpdateTime(LocalDateTime.now());
+        po.setIsDeleted(0);
+        mapperState.applicationsById.put(po.getId(), clone(po));
+
+        ExpertCertificationService service = newService(
+                mapperState,
+                eligibleCareerPosts(23L),
+                moderatorStub,
+                new AdminAuditStub(),
+                new MigrationCheckStub(true));
+
+        List<ExpertCertificationApplicationDTO> queue = service.listReviewQueue(Post.DOMAIN_CAREER,
+                ExpertCertificationService.STATUS_REJECTED, 20, 88L);
+
+        assertEquals(1, queue.size());
+        ExpertCertificationApplicationDTO dto = queue.get(0);
+        assertEquals(88L, dto.getReviewerUid());
+        assertEquals("admin-only review note", dto.getReviewNote());
+        assertEquals(77L, dto.getRevokedBy());
+        assertEquals("admin-only revoke note", dto.getRevokeNote());
     }
 
     private static ExpertCertificationService newService(ExpertCertificationMapperState mapperState,
@@ -339,7 +422,7 @@ class ExpertCertificationServiceTest {
         private final List<String> requireModerateCalls = new ArrayList<>();
 
         private DomainModeratorStub() {
-            super(null, null, null, null);
+            super(null, null, null, null, null);
         }
 
         @Override

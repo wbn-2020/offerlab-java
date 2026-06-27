@@ -38,7 +38,7 @@ class KnowledgeControllerApiTest {
 
     @Test
     void publicKnowledgeRelationsExposeLightweightNodesAndEdges() throws Exception {
-        when(knowledgeRelationService.explore(null, null, null, 1, null, 6)).thenReturn(KnowledgeRelationGraphDTO.builder()
+        when(knowledgeRelationService.explore(null, null, null, 1, 6)).thenReturn(KnowledgeRelationGraphDTO.builder()
                 .limit(6)
                 .nodes(List.of(
                         KnowledgeRelationNodeDTO.builder().key("domain:1").type("domain").label("tech").build(),
@@ -61,25 +61,27 @@ class KnowledgeControllerApiTest {
                 .andExpect(jsonPath("$.data.nodes[0].key").value("domain:1"))
                 .andExpect(jsonPath("$.data.edges[0].relation").value("domain_post"));
 
-        verify(knowledgeRelationService).explore(null, null, null, 1, null, 6);
+        verify(knowledgeRelationService).explore(null, null, null, 1, 6);
     }
 
     @Test
-    void publicKnowledgeRelationsIgnoreSeriesIdSeed() throws Exception {
-        when(knowledgeRelationService.explore(null, null, null, 1, null, 6)).thenReturn(KnowledgeRelationGraphDTO.builder()
+    void publicKnowledgeRelationsUseOnlyDocumentedSeeds() throws Exception {
+        when(knowledgeRelationService.explore(88L, 22L, 33L, 1, 6)).thenReturn(KnowledgeRelationGraphDTO.builder()
                 .limit(6)
                 .nodes(List.of(KnowledgeRelationNodeDTO.builder().key("domain:1").type("domain").label("tech").build()))
                 .edges(List.of())
                 .build());
 
         mvc.perform(get("/api/v1/knowledge/relations")
+                        .param("postId", "88")
+                        .param("tagId", "22")
+                        .param("topicId", "33")
                         .param("domain", "1")
-                        .param("seriesId", "44")
                         .param("limit", "6"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.nodes[0].key").value("domain:1"));
 
-        verify(knowledgeRelationService).explore(null, null, null, 1, null, 6);
+        verify(knowledgeRelationService).explore(88L, 22L, 33L, 1, 6);
     }
 }

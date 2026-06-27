@@ -4,6 +4,7 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.utils.RiskConfirmation;
 import com.offerlab.community.infra.audit.AdminAuditService;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.post.api.dto.DomainModeratorDTO;
@@ -26,6 +27,7 @@ public class DomainModeratorService {
     private final AdminPermissionService adminPermissionService;
     private final AdminAuditService adminAuditService;
     private final SnowflakeIdGenerator idGenerator;
+    private final MigrationCheckService migrationCheckService;
 
     public boolean canModerateDomain(Long uid, Integer domain) {
         if (uid == null) {
@@ -154,7 +156,7 @@ public class DomainModeratorService {
 
     private boolean tableReady() {
         try {
-            return mapper.tableExists() > 0;
+            return migrationCheckService.domainModeratorReady();
         } catch (RuntimeException e) {
             return false;
         }

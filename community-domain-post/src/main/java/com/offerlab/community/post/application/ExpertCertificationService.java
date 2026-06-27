@@ -8,6 +8,7 @@ import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplicationDTO;
+import com.offerlab.community.post.api.dto.ExpertCertificationApplicantApplicationDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplyCmd;
 import com.offerlab.community.post.api.dto.ExpertCertificationEligibilityDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationReviewCmd;
@@ -89,14 +90,14 @@ public class ExpertCertificationService {
                 .build();
     }
 
-    public List<ExpertCertificationApplicationDTO> listMine(Long applicantUid, Integer domain) {
+    public List<ExpertCertificationApplicantApplicationDTO> listMine(Long applicantUid, Integer domain) {
         requireUser(applicantUid);
         if (!tableReady()) {
             return List.of();
         }
         Integer activeDomain = domain == null ? null : requireDomain(domain);
         return mapper.selectMine(applicantUid, activeDomain, MAX_LIMIT).stream()
-                .map(this::toDto)
+                .map(this::toApplicantDto)
                 .toList();
     }
 
@@ -112,7 +113,7 @@ public class ExpertCertificationService {
     }
 
     @Transactional
-    public ExpertCertificationApplicationDTO submit(ExpertCertificationApplyCmd cmd, Long applicantUid) {
+    public ExpertCertificationApplicantApplicationDTO submit(ExpertCertificationApplyCmd cmd, Long applicantUid) {
         requireUser(applicantUid);
         requireWritable();
         if (cmd == null) {
@@ -155,7 +156,7 @@ public class ExpertCertificationService {
             po.setUpdateTime(now);
             po.setIsDeleted(0);
             mapper.insert(po);
-            return toDto(po);
+            return toApplicantDto(po);
         } finally {
             releaseSubmitLock(lockName);
         }
@@ -187,7 +188,7 @@ public class ExpertCertificationService {
     }
 
     @Transactional
-    public ExpertCertificationApplicationDTO revoke(Long applicationId, String note, Long operatorUid) {
+    public ExpertCertificationApplicantApplicationDTO revoke(Long applicationId, String note, Long operatorUid) {
         requireUser(operatorUid);
         requireWritable();
         ExpertCertificationApplicationPO po = requireApplication(applicationId);
@@ -214,7 +215,7 @@ public class ExpertCertificationService {
             adminAuditService.recordRequired(operatorUid, "EXPERT_CERT_APPLICATION_REVOKE",
                     "EXPERT_CERT_APPLICATION", applicationId, before, after, limit(note, 500));
         }
-        return after;
+        return toApplicantDto(po);
     }
 
     private List<PostPO> recentPublicPosts(Long applicantUid, Integer domain) {
@@ -250,6 +251,28 @@ public class ExpertCertificationService {
                 .reviewNote(po.getReviewNote())
                 .revokedBy(po.getRevokedBy())
                 .revokeNote(po.getRevokeNote())
+                .autoCertified(false)
+                .createTime(po.getCreateTime())
+                .updateTime(po.getUpdateTime())
+                .reviewTime(po.getReviewTime())
+                .revokedTime(po.getRevokedTime())
+                .build();
+    }
+
+    private ExpertCertificationApplicantApplicationDTO toApplicantDto(ExpertCertificationApplicationPO po) {
+        return ExpertCertificationApplicantApplicationDTO.builder()
+                .id(po.getId())
+                .applicantUid(po.getApplicantUid())
+                .domain(po.getDomain())
+                .domainName(PostDomain.fromCode(po.getDomain()).getDisplayName())
+                .status(po.getStatus())
+                .statusLabel(statusLabel(po.getStatus()))
+                .evidenceSummary(po.getEvidenceSummary())
+                .evidenceLinks(readLinks(po.getEvidenceLinksJson()))
+                .eligibilityPassed(po.getEligibilityPassed() != null && po.getEligibilityPassed() == 1)
+                .eligibilitySummary(po.getEligibilitySummary())
+                .riskAcknowledged(po.getRiskAcknowledged() != null && po.getRiskAcknowledged() == 1)
+                .riskWarning(po.getRiskWarning())
                 .autoCertified(false)
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())

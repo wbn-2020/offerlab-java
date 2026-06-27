@@ -23,8 +23,7 @@ public class KnowledgeController {
                                                        @RequestParam(required = false) Long tagId,
                                                        @RequestParam(required = false) Long topicId,
                                                        @RequestParam(required = false) Integer domain,
-                                                       @RequestParam(required = false) Long seriesId,
                                                        @RequestParam(defaultValue = "8") int limit) {
-        return Result.ok(knowledgeRelationService.explore(postId, tagId, topicId, domain, null, limit));
+        return Result.ok(knowledgeRelationService.explore(postId, tagId, topicId, domain, limit));
     }
 }

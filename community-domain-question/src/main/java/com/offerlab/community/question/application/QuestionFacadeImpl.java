@@ -778,12 +778,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
     @Transactional
     public QuestionDuplicateGroupDTO hideDuplicateQuestions(Long questionId, List<Long> duplicateQuestionIds) {
         InterviewQuestionPO question = requireQuestionForDuplicateGroup(questionId);
-        List<Long> ids = duplicateQuestionIds == null ? List.of() : duplicateQuestionIds.stream()
-                .filter(Objects::nonNull)
-                .filter(id -> id > 0 && !Objects.equals(id, questionId))
-                .distinct()
-                .limit(50)
-                .toList();
+        List<Long> ids = sanitizeDuplicateHideIds(questionId, duplicateQuestionIds);
         if (ids.isEmpty()) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
@@ -1666,6 +1661,18 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .questions(toAdminQuestionDtos(rows, null))
                 .semanticCandidates(semanticDuplicateCandidates(questionId, rows, hash))
                 .build();
+    }
+
+    private List<Long> sanitizeDuplicateHideIds(Long questionId, List<Long> duplicateQuestionIds) {
+        if (duplicateQuestionIds == null || duplicateQuestionIds.isEmpty()) {
+            return List.of();
+        }
+        return duplicateQuestionIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0 && !Objects.equals(id, questionId))
+                .distinct()
+                .limit(50)
+                .toList();
     }
 
     private List<QuestionDuplicateCandidateDTO> semanticDuplicateCandidates(Long questionId,

@@ -93,7 +93,7 @@ public class UserController {
 
     @PutMapping("/me/intent")
     @RateLimit(key = "'user:intent:update:' + #uid", rate = 30, per = 60)
-    public Result<Void> updateIntent(@RequestBody UserIntentDTO intent) {
+    public Result<Void> updateIntent(@Valid @RequestBody UserIntentDTO intent) {
         Long uid = UserContext.require();
         // UserIntentDTO 同时兼容 targetCity/expectedCity，避免旧前端保存后丢城市字段。
         userService.updateIntent(uid, intent);

@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -36,6 +37,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     private static final int REALTIME_POLL_INTERVAL_SECONDS = 20;
     private static final long AGGREGATION_WINDOW_MINUTES = 30L;
+    private static final int MAX_READ_BATCH_SIZE = 200;
 
     private static final int TYPE_LIKE = 1;
     private static final int TYPE_COMMENT = 2;
@@ -119,13 +121,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
     @Override
     @Transactional
     public void markAsRead(Long uid, List<Long> notifIds) {
-        if (notifIds == null || notifIds.isEmpty() || !messageTableReady()) {
+        List<Long> normalizedNotifIds = normalizeReadIds(notifIds);
+        if (normalizedNotifIds.isEmpty() || !messageTableReady()) {
             return;
         }
         mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
                 .eq(NotificationMessagePO::getReceiverUid, uid)
                 .eq(NotificationMessagePO::getIsDeleted, 0)
-                .in(NotificationMessagePO::getId, notifIds)
+                .in(NotificationMessagePO::getId, normalizedNotifIds)
                 .set(NotificationMessagePO::getIsRead, 1));
     }
 
@@ -278,6 +281,18 @@ public class NotificationFacadeImpl implements NotificationFacade {
         }
     }
 
+    private List<Long> normalizeReadIds(List<Long> notifIds) {
+        if (notifIds == null || notifIds.isEmpty()) {
+            return List.of();
+        }
+        return notifIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .limit(MAX_READ_BATCH_SIZE)
+                .toList();
+    }
+
     private List<Map<String, Object>> aggregateItems(List<NotificationMessagePO> rows, Map<Long, UserBriefDTO> senders) {
         List<Map<String, Object>> items = new ArrayList<>();
         List<NotificationMessagePO> group = new ArrayList<>();
@@ -346,13 +361,8 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private Map<String, Object> toItem(NotificationMessagePO po, UserBriefDTO sender) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("id", po.getId());
-        item.put("receiverUid", po.getReceiverUid());
-        item.put("senderUid", po.getSenderUid());
         item.put("sender", sender);
         item.put("type", typeName(po.getNotifType()));
-        item.put("notifType", po.getNotifType());
-        item.put("targetType", po.getTargetType());
-        item.put("targetId", po.getTargetId());
         item.put("content", parseContent(po.getContentJson()));
         item.put("isRead", po.getIsRead() != null && po.getIsRead() == 1);
         item.put("createTime", po.getCreateTime());

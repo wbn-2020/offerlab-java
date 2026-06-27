@@ -107,9 +107,12 @@ public class PostDraftController {
         private Boolean anonymous;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
-        private List<Long> tags;
-        private List<Long> tagIds;
-        private List<String> tagNames;
+        @Size(max = 20)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;
+        @Size(max = 20)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
+        @Size(max = 20)
+        private List<@Size(max = 32) String> tagNames;
     }
 
     private static Integer requireOptionalDomain(Integer domain) {

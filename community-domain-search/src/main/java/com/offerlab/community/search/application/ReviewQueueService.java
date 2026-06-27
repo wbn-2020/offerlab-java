@@ -4,6 +4,7 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.utils.RiskConfirmation;
 import com.offerlab.community.infra.audit.AdminAuditService;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
@@ -35,9 +36,10 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     private final ReviewQueueMapper mapper;
     private final SnowflakeIdGenerator idGen;
     private final AdminAuditService auditService;
+    private final MigrationCheckService migrationCheckService;
 
     public List<ReviewQueueItemPO> list(String status, String sourceType, String riskLevel, int limit) {
-        if (!tableReady()) {
+        if (!queueReady()) {
             return List.of();
         }
         return mapper.list(normalizeStatus(status), normalizeSourceType(sourceType), normalizeRiskLevel(riskLevel), clamp(limit));
@@ -48,7 +50,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
         for (String status : List.of("pending", "claimed", "approved", "rejected", "closed")) {
             byStatus.put(status, 0L);
         }
-        if (!tableReady()) {
+        if (!queueReady()) {
             return Map.of("available", false, "status", "DOWN", "byStatus", byStatus);
         }
         for (Map<String, Object> row : mapper.countByStatus()) {
@@ -124,7 +126,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
 
     private SourceResolveResult resolveSourceInternal(String sourceType, Long sourceId, String status, String result,
                                                      String note, Long operatorUid) {
-        if (!tableReady() || sourceId == null || sourceId <= 0) {
+        if (!queueReady() || sourceId == null || sourceId <= 0) {
             return null;
         }
         String normalizedSourceType = normalizeRequiredSourceType(sourceType);
@@ -235,14 +237,14 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     }
 
     private void requireTable() {
-        if (!tableReady()) {
+        if (!queueReady()) {
             throw new BizException(ErrorCode.DATABASE_ERROR.getCode(), "Review queue table is unavailable");
         }
     }
 
-    private boolean tableReady() {
+    private boolean queueReady() {
         try {
-            return mapper.tableExists() > 0;
+            return migrationCheckService.reviewQueueReady();
         } catch (RuntimeException e) {
             log.warn("review queue table unavailable: {}", e.getMessage());
             return false;
