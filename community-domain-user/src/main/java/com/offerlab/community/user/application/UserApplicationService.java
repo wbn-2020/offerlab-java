@@ -8,6 +8,7 @@ import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.NotificationPreferenceDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
@@ -174,7 +175,8 @@ public class UserApplicationService {
         User u = getUser(uid);
         try {
             // 求职意向当前以 JSON 存在用户资料表，DTO 需保持字段兼容后再序列化。
-            u.setIntentJson(objectMapper.writeValueAsString(intent));
+            UserIntentDTO normalizedIntent = normalizeIntent(intent);
+            u.setIntentJson(objectMapper.writeValueAsString(normalizedIntent));
         } catch (Exception e) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
@@ -192,6 +194,11 @@ public class UserApplicationService {
             privacySettingMapper.insert(po);
         }
         return toPrivacyDTO(po);
+    }
+
+    @Transactional
+    public NotificationPreferenceDTO getNotificationPreference(Long uid) {
+        return toNotificationPreferenceDTO(loadOrCreatePrivacySetting(uid));
     }
 
     @Transactional
@@ -219,6 +226,29 @@ public class UserApplicationService {
             privacySettingMapper.insert(po);
         }
         return toPrivacyDTO(po);
+    }
+
+    @Transactional
+    public NotificationPreferenceDTO updateNotificationPreference(Long uid, NotificationPreferenceDTO setting) {
+        getUser(uid);
+        UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
+        boolean exists = po != null;
+        if (po == null) {
+            po = defaultPrivacySetting(uid);
+        }
+        po.setInteractionNotification(toFlag(setting == null ? null : setting.getInteractionNotification(), po.getInteractionNotification()));
+        po.setSystemNotification(toFlag(setting == null ? null : setting.getSystemNotification(), po.getSystemNotification()));
+        po.setLikeNotification(toFlag(setting == null ? null : setting.getLikeNotification(), po.getLikeNotification()));
+        po.setCommentNotification(toFlag(setting == null ? null : setting.getCommentNotification(), po.getCommentNotification()));
+        po.setFollowNotification(toFlag(setting == null ? null : setting.getFollowNotification(), po.getFollowNotification()));
+        po.setFavoriteNotification(toFlag(setting == null ? null : setting.getFavoriteNotification(), po.getFavoriteNotification()));
+        po.setMentionNotification(toFlag(setting == null ? null : setting.getMentionNotification(), po.getMentionNotification()));
+        if (exists) {
+            privacySettingMapper.updateById(po);
+        } else {
+            privacySettingMapper.insert(po);
+        }
+        return toNotificationPreferenceDTO(po);
     }
 
     public List<UserBriefDTO> searchUsers(String keyword, Long viewerUid, int size, UserFacade userFacade) {
@@ -270,11 +300,33 @@ public class UserApplicationService {
         return po;
     }
 
+    private UserPrivacySettingPO loadOrCreatePrivacySetting(Long uid) {
+        getUser(uid);
+        UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
+        if (po == null) {
+            po = defaultPrivacySetting(uid);
+            privacySettingMapper.insert(po);
+        }
+        return po;
+    }
+
     private static UserPrivacySettingDTO toPrivacyDTO(UserPrivacySettingPO po) {
         return UserPrivacySettingDTO.builder()
                 .profileVisibility(po.getProfileVisibility())
                 .intentVisibility(po.getIntentVisibility())
                 .searchable(isEnabled(po.getSearchable()))
+                .interactionNotification(isEnabled(po.getInteractionNotification()))
+                .systemNotification(isEnabled(po.getSystemNotification()))
+                .likeNotification(isEnabled(po.getLikeNotification()))
+                .commentNotification(isEnabled(po.getCommentNotification()))
+                .followNotification(isEnabled(po.getFollowNotification()))
+                .favoriteNotification(isEnabled(po.getFavoriteNotification()))
+                .mentionNotification(isEnabled(po.getMentionNotification()))
+                .build();
+    }
+
+    private static NotificationPreferenceDTO toNotificationPreferenceDTO(UserPrivacySettingPO po) {
+        return NotificationPreferenceDTO.builder()
                 .interactionNotification(isEnabled(po.getInteractionNotification()))
                 .systemNotification(isEnabled(po.getSystemNotification()))
                 .likeNotification(isEnabled(po.getLikeNotification()))
@@ -305,5 +357,58 @@ public class UserApplicationService {
             return "FOLLOWERS";
         }
         return "PUBLIC";
+    }
+
+    private static UserIntentDTO normalizeIntent(UserIntentDTO intent) {
+        if (intent == null) {
+            return null;
+        }
+        return UserIntentDTO.builder()
+                .targetCompanies(normalizeList(intent.getTargetCompanies()))
+                .targetPositions(normalizeList(intent.getTargetPositions()))
+                .yearsOfExp(intent.getYearsOfExp())
+                .expectedCity(normalizeText(intent.getExpectedCity()))
+                .techStack(normalizeList(intent.getTechStack()))
+                .interestTopics(normalizeList(intent.getInterestTopics()))
+                .interestTags(normalizeList(intent.getInterestTags()))
+                .contentPreferences(normalizeList(intent.getContentPreferences()))
+                .expectedSalaryRange(normalizeSalaryRange(intent.getExpectedSalaryRange()))
+                .build();
+    }
+
+    private static UserIntentDTO.SalaryRange normalizeSalaryRange(UserIntentDTO.SalaryRange salaryRange) {
+        if (salaryRange == null) {
+            return null;
+        }
+        String unit = normalizeText(salaryRange.getUnit());
+        if (salaryRange.getMin() == null && salaryRange.getMax() == null && unit == null) {
+            return null;
+        }
+        return UserIntentDTO.SalaryRange.builder()
+                .min(salaryRange.getMin())
+                .max(salaryRange.getMax())
+                .unit(unit)
+                .build();
+    }
+
+    private static List<String> normalizeList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        List<String> normalized = values.stream()
+                .map(UserApplicationService::normalizeText)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .limit(20)
+                .toList();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static String normalizeText(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 }

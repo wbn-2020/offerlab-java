@@ -33,6 +33,9 @@ class QuestionIndexTaskSafetyGuardTest {
         assertTrue(taskService.contains("STATUS_FAILED"), "rebuild task must expose failed status");
         assertTrue(taskService.contains("rebuildSubmitLock"), "rebuild submission must be serialized in-process");
         assertTrue(taskService.contains("findActiveRebuildTask"), "rebuild submission must reuse active pending/running tasks");
+        assertTrue(taskService.contains("StringRedisTemplate"), "rebuild submission should use redis-backed active gate when available");
+        assertTrue(taskService.contains("offerlab:question:index:rebuild:active"), "rebuild submission should reserve a dedicated distributed active key");
+        assertFalse(taskService.contains("ForkJoinPool.commonPool()"), "rebuild submission must not use the JVM common pool");
         assertTrue(taskService.contains("retryTask"), "failed rebuild task must be manually retryable");
         assertTrue(controller.contains("@Min(1) @Max(500) int limit"), "question rebuild endpoint must validate limit at controller boundary");
         assertTrue(controller.contains("/questions/index-tasks/{taskId}/retry"), "admin API must expose rebuild task retry");

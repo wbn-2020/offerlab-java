@@ -44,9 +44,13 @@ class QuestionDuplicateGovernanceGuardTest {
         assertTrue(controllerSource.contains("requireWritable(\"QUESTION_DUPLICATE_CANONICAL\""), "canonical changes must fail closed when audit is unavailable");
         assertTrue(controllerSource.contains("RiskConfirmation.requireCritical(request == null ? null : request.remark()"),
                 "duplicate governance writes must require remark plus CONFIRM");
+        assertTrue(controllerSource.contains("@NotEmpty @Size(max = 50) List<@NotNull @Positive Long> ids"),
+                "duplicate hide request ids must be element-validated and capped at fifty");
         assertTrue(controllerSource.contains("@Size(max = 32) String confirmationPhrase"),
                 "duplicate governance requests must carry an explicit confirmation phrase");
         assertTrue(controllerSource.contains("recordRequired(uid, \"QUESTION_DUPLICATE_MERGE_CANDIDATE\""), "semantic candidate merges must require audit writes");
+        assertTrue(controllerSource.contains("sanitizeDuplicateHideIds(id, request == null ? null : request.ids())"),
+                "duplicate hide must sanitize ids before facade and audit");
         assertTrue(controllerSource.contains("recordRequired(uid, \"QUESTION_DUPLICATE_HIDE\""), "duplicate hide changes must require audit writes");
 
         assertTrue(facadeSource.contains("!Objects.equals(question.getNormalizedHash(), canonical.getNormalizedHash())"), "canonical adjustment must reject cross-group questions");
@@ -54,6 +58,8 @@ class QuestionDuplicateGovernanceGuardTest {
         assertTrue(facadeSource.contains("similarityScore < 72"), "semantic merges must reject weak candidates");
         assertTrue(facadeSource.contains("TECHNICAL_KEYWORDS"), "semantic candidates must use technical keyword signals");
         assertTrue(facadeSource.contains("QUESTION_APPROVED"), "canonical adjustment must require an approved main question");
+        assertTrue(facadeSource.contains("sanitizeDuplicateHideIds(questionId, duplicateQuestionIds)"),
+                "duplicate hide facade must retain defensive sanitization");
         assertTrue(facadeSource.contains("refreshCanonicalGroup(question.getNormalizedHash())"), "hiding duplicates must refresh canonical counts");
         assertTrue(facadeSource.contains("questionSearchIndexer.indexQuestion"), "duplicate governance must sync search index");
     }

@@ -674,6 +674,59 @@ class QuestionAdminControllerApiTest {
     }
 
     @Test
+    void duplicateHideRejectsMoreThanFiftyIdsBeforeSideEffects() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        String idsJson = java.util.stream.LongStream.rangeClosed(1, 51)
+                .mapToObj(Long::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+
+        mvc.perform(post("/api/v1/admin/questions/42/duplicates/hide")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[" + idsJson + "],\"remark\":\"hide duplicate questions\",\"confirmationPhrase\":\"CONFIRM\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verifyNoInteractions(adminPermissionService, questionFacade, adminAuditService);
+    }
+
+    @Test
+    void duplicateHideSanitizesIdsBeforeFacadeAndAudit() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        QuestionDuplicateGroupDTO dto = QuestionDuplicateGroupDTO.builder()
+                .questionId(42L)
+                .canonicalId(42L)
+                .questionCount(3)
+                .sourcePostCount(2)
+                .questions(List.of())
+                .build();
+        List<Long> sanitizedIds = java.util.stream.LongStream.rangeClosed(43, 92)
+                .boxed()
+                .toList();
+        when(questionFacade.hideDuplicateQuestions(42L, sanitizedIds)).thenReturn(dto);
+        String idsJson = "[42,43,43,null,-1,0,"
+                + java.util.stream.LongStream.rangeClosed(44, 100)
+                .mapToObj(Long::toString)
+                .collect(java.util.stream.Collectors.joining(","))
+                + "]";
+
+        mvc.perform(post("/api/v1/admin/questions/42/duplicates/hide")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":" + idsJson + ",\"remark\":\"hide duplicate questions\",\"confirmationPhrase\":\"CONFIRM\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.questionId").value(42))
+                .andExpect(jsonPath("$.data.canonicalId").value(42));
+
+        verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
+        verify(adminAuditService).requireWritable("QUESTION_DUPLICATE_HIDE", "QUESTION", 42L);
+        verify(questionFacade).hideDuplicateQuestions(42L, sanitizedIds);
+        verify(adminAuditService).recordRequired(7L, "QUESTION_DUPLICATE_HIDE", "QUESTION", 42L,
+                Map.of("ids", sanitizedIds), dto, "hide duplicate questions");
+    }
+
+    @Test
     void companyAliasWritesRequireServerSideRiskRemarkBeforeSideEffects() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
 

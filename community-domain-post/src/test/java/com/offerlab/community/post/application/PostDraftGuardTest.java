@@ -51,6 +51,12 @@ class PostDraftGuardTest {
         assertTrue(controller.contains("UserContext.require()"), "draft APIs must be user-owned");
         assertTrue(controller.contains("private Integer domain"), "draft request must accept explicit domain");
         assertTrue(controller.contains("private Boolean anonymous"), "draft request must accept explicit anonymous");
+        assertTrue(controller.contains("@Size(max = 20)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;"),
+                "legacy draft tags field must keep the same DTO-level tag id cap and element guard");
+        assertTrue(controller.contains("@Size(max = 20)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;"),
+                "draft tagIds must cap selections and reject invalid ids at DTO level");
+        assertTrue(controller.contains("@Size(max = 20)\n        private List<@Size(max = 32) String> tagNames;"),
+                "draft tagNames must cap selections and bound each tag name at DTO level");
         assertTrue(controller.contains("requireOptionalDomain(req.getDomain())"), "draft request domain must use the shared domain validator");
         assertTrue(controller.contains("draftService.save"), "draft save endpoints must call the service");
         assertTrue(controller.contains("draftService.delete"), "draft delete endpoint must call the service");

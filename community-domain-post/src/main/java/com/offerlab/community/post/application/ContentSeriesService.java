@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.post.api.dto.ContentSeriesAddPostCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
@@ -37,6 +38,7 @@ public class ContentSeriesService {
     private final ContentSeriesPostMapper contentSeriesPostMapper;
     private final PostMapper postMapper;
     private final SnowflakeIdGenerator idGenerator;
+    private final MigrationCheckService migrationCheckService;
 
     public List<ContentSeriesDTO> listMine(Long creatorUid) {
         requireUser(creatorUid);
@@ -157,7 +159,7 @@ public class ContentSeriesService {
 
     private boolean schemaReady() {
         try {
-            return contentSeriesMapper.tableExists() > 0 && contentSeriesPostMapper.tableExists() > 0;
+            return migrationCheckService.contentSeriesReady();
         } catch (RuntimeException e) {
             return false;
         }

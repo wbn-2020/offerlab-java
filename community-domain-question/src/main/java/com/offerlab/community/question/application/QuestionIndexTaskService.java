@@ -1,35 +1,60 @@
 package com.offerlab.community.question.application;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.question.infrastructure.persistence.mapper.QuestionIndexTaskMapper;
 import com.offerlab.community.question.infrastructure.persistence.po.QuestionIndexTaskPO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.lang.Nullable;
 import lombok.Builder;
 import lombok.Data;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class QuestionIndexTaskService {
     private static final String TYPE_REBUILD = "QUESTION_INDEX_REBUILD";
     private static final String STATUS_PENDING = "PENDING";
     private static final String STATUS_RUNNING = "RUNNING";
     private static final String STATUS_SUCCEEDED = "SUCCEEDED";
     private static final String STATUS_FAILED = "FAILED";
+    private static final String REDIS_ACTIVE_REBUILD_KEY = "offerlab:question:index:rebuild:active";
+    private static final Duration ACTIVE_REBUILD_TTL = Duration.ofHours(6);
 
     private final QuestionSearchIndexer indexer;
     private final QuestionIndexTaskMapper taskMapper;
+    private final StringRedisTemplate redis;
     private final Object rebuildSubmitLock = new Object();
-    private Executor rebuildExecutor = ForkJoinPool.commonPool();
+    private Executor rebuildExecutor = defaultRebuildExecutor();
+
+    public QuestionIndexTaskService(QuestionSearchIndexer indexer, QuestionIndexTaskMapper taskMapper) {
+        this(indexer, taskMapper, null);
+    }
+
+    @Autowired
+    public QuestionIndexTaskService(QuestionSearchIndexer indexer,
+                                    QuestionIndexTaskMapper taskMapper,
+                                    @Nullable StringRedisTemplate redis) {
+        this.indexer = indexer;
+        this.taskMapper = taskMapper;
+        this.redis = redis;
+    }
 
     public QuestionIndexTask submitRebuildTask(Long operatorUid) {
         ensureTableReady();
@@ -39,18 +64,29 @@ public class QuestionIndexTaskService {
             if (activeTask != null) {
                 return snapshot(activeTask);
             }
-            task = new QuestionIndexTaskPO();
-            task.setTaskId(UUID.randomUUID().toString());
-            task.setTaskType(TYPE_REBUILD);
-            task.setTaskStatus(STATUS_PENDING);
-            task.setOperatorUid(operatorUid);
-            task.setAccepted(0);
-            task.setIndexed(0);
-            task.setFailed(0);
-            task.setTotal(0);
-            taskMapper.insertTask(task);
+            String taskId = UUID.randomUUID().toString();
+            if (!tryClaimDistributedActiveTask(taskId)) {
+                return activeTaskSnapshotOrRemote(operatorUid);
+            }
+            try {
+                QuestionIndexTaskPO distributedActiveTask = taskMapper.findActiveRebuildTask(TYPE_REBUILD);
+                if (distributedActiveTask != null) {
+                    releaseDistributedActiveTask(taskId);
+                    return snapshot(distributedActiveTask);
+                }
+                task = newPendingTask(taskId, operatorUid);
+                taskMapper.insertTask(task);
+            } catch (RuntimeException e) {
+                releaseDistributedActiveTask(taskId);
+                throw e;
+            }
         }
-        CompletableFuture.runAsync(() -> runRebuild(task.getTaskId()), rebuildExecutor);
+        try {
+            CompletableFuture.runAsync(() -> runRebuild(task.getTaskId()), rebuildExecutor);
+        } catch (RuntimeException e) {
+            handleSchedulingFailure(task.getTaskId(), e);
+            throw new BizException(ErrorCode.SYSTEM_ERROR.getCode(), "Question index rebuild task could not be scheduled");
+        }
         return snapshot(taskMapper.findByTaskId(task.getTaskId()));
     }
 
@@ -60,8 +96,31 @@ public class QuestionIndexTaskService {
         if (existing == null) {
             return null;
         }
-        if (STATUS_FAILED.equals(existing.getTaskStatus()) && taskMapper.markRetry(taskId) > 0) {
-            CompletableFuture.runAsync(() -> runRebuild(taskId), rebuildExecutor);
+        if (STATUS_FAILED.equals(existing.getTaskStatus())) {
+            if (!tryClaimDistributedActiveTask(taskId)) {
+                QuestionIndexTaskPO activeTask = taskMapper.findActiveRebuildTask(TYPE_REBUILD);
+                return activeTask == null ? snapshot(existing) : snapshot(activeTask);
+            }
+            try {
+                QuestionIndexTaskPO activeTask = taskMapper.findActiveRebuildTask(TYPE_REBUILD);
+                if (activeTask != null && !taskId.equals(activeTask.getTaskId())) {
+                    releaseDistributedActiveTask(taskId);
+                    return snapshot(activeTask);
+                }
+                if (taskMapper.markRetry(taskId) > 0) {
+                    try {
+                        CompletableFuture.runAsync(() -> runRebuild(taskId), rebuildExecutor);
+                    } catch (RuntimeException e) {
+                        handleSchedulingFailure(taskId, e);
+                        throw new BizException(ErrorCode.SYSTEM_ERROR.getCode(), "Question index rebuild task could not be scheduled");
+                    }
+                } else {
+                    releaseDistributedActiveTask(taskId);
+                }
+            } catch (RuntimeException e) {
+                releaseDistributedActiveTask(taskId);
+                throw e;
+            }
         }
         return snapshot(taskMapper.findByTaskId(taskId));
     }
@@ -83,7 +142,12 @@ public class QuestionIndexTaskService {
     }
 
     private void runRebuild(String taskId) {
-        if (!tableReady() || taskMapper.markRunning(taskId) == 0) {
+        if (!tableReady()) {
+            releaseDistributedActiveTask(taskId);
+            return;
+        }
+        if (taskMapper.markRunning(taskId) == 0) {
+            releaseDistributedActiveTask(taskId);
             return;
         }
         try {
@@ -96,6 +160,8 @@ public class QuestionIndexTaskService {
         } catch (Exception e) {
             log.error("question index rebuild task failed: taskId={}", taskId, e);
             taskMapper.finish(taskId, STATUS_FAILED, 0, 0, 0, 0, null, shortMessage(e));
+        } finally {
+            releaseDistributedActiveTask(taskId);
         }
     }
 
@@ -104,7 +170,7 @@ public class QuestionIndexTaskService {
     }
 
     void setRebuildExecutorForTest(Executor rebuildExecutor) {
-        this.rebuildExecutor = rebuildExecutor == null ? ForkJoinPool.commonPool() : rebuildExecutor;
+        this.rebuildExecutor = rebuildExecutor == null ? defaultRebuildExecutor() : rebuildExecutor;
     }
 
     private void ensureTableReady() {
@@ -115,10 +181,121 @@ public class QuestionIndexTaskService {
 
     private boolean tableReady() {
         try {
-            return taskMapper.tableExists() > 0;
+            if (taskMapper.tableExists() <= 0) {
+                return false;
+            }
+            taskMapper.listRecent(1);
+            return true;
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    private static Executor defaultRebuildExecutor() {
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, "offerlab-question-index-rebuild");
+            thread.setDaemon(true);
+            return thread;
+        };
+        return new ThreadPoolExecutor(
+                1,
+                1,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1),
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private boolean tryClaimDistributedActiveTask(String taskId) {
+        if (redis == null) {
+            return true;
+        }
+        try {
+            Boolean claimed = redis.opsForValue().setIfAbsent(REDIS_ACTIVE_REBUILD_KEY, taskId, ACTIVE_REBUILD_TTL);
+            return Boolean.TRUE.equals(claimed);
+        } catch (Exception e) {
+            log.error("question index rebuild distributed gate unavailable", e);
+            throw new BizException(ErrorCode.CACHE_ERROR.getCode(), "Question index rebuild gate is temporarily unavailable");
+        }
+    }
+
+    private QuestionIndexTask activeTaskSnapshotOrRemote(Long operatorUid) {
+        QuestionIndexTaskPO activeTask = taskMapper.findActiveRebuildTask(TYPE_REBUILD);
+        if (activeTask != null) {
+            return snapshot(activeTask);
+        }
+        return remoteActiveSnapshot(currentDistributedActiveTaskId(), operatorUid);
+    }
+
+    private String currentDistributedActiveTaskId() {
+        if (redis == null) {
+            return null;
+        }
+        try {
+            return redis.opsForValue().get(REDIS_ACTIVE_REBUILD_KEY);
+        } catch (Exception e) {
+            log.warn("question index rebuild distributed gate read failed", e);
+            return null;
+        }
+    }
+
+    private QuestionIndexTask remoteActiveSnapshot(String taskId, Long operatorUid) {
+        return QuestionIndexTask.builder()
+                .taskId(taskId == null || taskId.isBlank() ? "remote-active" : taskId)
+                .type(TYPE_REBUILD)
+                .status(STATUS_RUNNING)
+                .operatorUid(operatorUid)
+                .accepted(false)
+                .indexed(0)
+                .failed(0)
+                .total(0)
+                .message("Another rebuild task is already active")
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+    }
+
+    private void releaseDistributedActiveTask(String taskId) {
+        if (redis == null || taskId == null) {
+            return;
+        }
+        try {
+            redis.execute((RedisCallback<Boolean>) connection -> {
+                byte[] key = REDIS_ACTIVE_REBUILD_KEY.getBytes(StandardCharsets.UTF_8);
+                byte[] current = connection.stringCommands().get(key);
+                if (current == null || !taskId.equals(new String(current, StandardCharsets.UTF_8))) {
+                    return false;
+                }
+                Long deleted = connection.keyCommands().del(key);
+                return deleted != null && deleted == 1L;
+            });
+        } catch (Exception e) {
+            log.warn("question index rebuild distributed gate release failed: taskId={}", taskId, e);
+        }
+    }
+
+    private void handleSchedulingFailure(String taskId, RuntimeException cause) {
+        releaseDistributedActiveTask(taskId);
+        log.error("question index rebuild task scheduling failed: taskId={}", taskId, cause);
+        try {
+            taskMapper.finish(taskId, STATUS_FAILED, 0, 0, 0, 0, null, schedulingFailureMessage(cause));
+        } catch (RuntimeException finishError) {
+            log.error("question index rebuild task scheduling failure could not be persisted: taskId={}", taskId, finishError);
+        }
+    }
+
+    private static QuestionIndexTaskPO newPendingTask(String taskId, Long operatorUid) {
+        QuestionIndexTaskPO task = new QuestionIndexTaskPO();
+        task.setTaskId(taskId);
+        task.setTaskType(TYPE_REBUILD);
+        task.setTaskStatus(STATUS_PENDING);
+        task.setOperatorUid(operatorUid);
+        task.setAccepted(0);
+        task.setIndexed(0);
+        task.setFailed(0);
+        task.setTotal(0);
+        return task;
     }
 
     private static QuestionIndexTask snapshot(QuestionIndexTaskPO task) {
@@ -156,6 +333,12 @@ public class QuestionIndexTaskService {
         }
         String message = cause.getMessage();
         return message.length() <= 500 ? message : message.substring(0, 500);
+    }
+
+    private static String schedulingFailureMessage(Throwable cause) {
+        String message = shortMessage(cause);
+        String prefix = "Question index rebuild task could not be scheduled";
+        return message == null || message.isBlank() ? prefix : prefix + ": " + message;
     }
 
     @Data

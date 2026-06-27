@@ -38,9 +38,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @RestController
 @RequestMapping("/api/v1/admin")
@@ -367,7 +369,7 @@ public class QuestionAdminController {
                                                                    @Valid @RequestBody(required = false) QuestionDuplicateHideRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
-        List<Long> ids = request == null || request.ids() == null ? List.of() : request.ids();
+        List<Long> ids = sanitizeDuplicateHideIds(id, request == null ? null : request.ids());
         String remark = RiskConfirmation.requireCritical(request == null ? null : request.remark(),
                 request == null ? null : request.confirmationPhrase());
         adminAuditService.requireWritable("QUESTION_DUPLICATE_HIDE", "QUESTION", id);
@@ -448,7 +450,7 @@ public class QuestionAdminController {
     }
 
     public record QuestionDuplicateHideRequest(
-            List<Long> ids,
+            @NotEmpty @Size(max = 50) List<@NotNull @Positive Long> ids,
             @Size(max = 500) String remark,
             @Size(max = 32) String confirmationPhrase) {
     }
@@ -484,6 +486,23 @@ public class QuestionAdminController {
         after.put(idKey, idValue);
         after.put("group", dto);
         return after;
+    }
+
+    private static List<Long> sanitizeDuplicateHideIds(Long questionId, List<Long> rawIds) {
+        if (rawIds == null || rawIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> sanitized = new ArrayList<>(Math.min(rawIds.size(), 50));
+        for (Long rawId : rawIds) {
+            if (rawId == null || rawId <= 0 || Objects.equals(rawId, questionId) || sanitized.contains(rawId)) {
+                continue;
+            }
+            sanitized.add(rawId);
+            if (sanitized.size() == 50) {
+                break;
+            }
+        }
+        return List.copyOf(sanitized);
     }
 
     private static String cleanRemark(String remark) {

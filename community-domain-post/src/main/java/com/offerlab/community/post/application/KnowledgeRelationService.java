@@ -11,12 +11,8 @@ import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.CommunityTopicMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.CommunityTopicTagMapper;
-import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesMapper;
-import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesPostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.CommunityTopicPO;
-import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPO;
-import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import lombok.RequiredArgsConstructor;
@@ -40,11 +36,9 @@ public class KnowledgeRelationService {
     private final PostMapper postMapper;
     private final CommunityTopicMapper topicMapper;
     private final CommunityTopicTagMapper topicTagMapper;
-    private final ContentSeriesMapper contentSeriesMapper;
-    private final ContentSeriesPostMapper contentSeriesPostMapper;
 
-    public KnowledgeRelationGraphDTO explore(Long postId, Long tagId, Long topicId, Integer domain, Long seriesId, int limit) {
-        if (postId == null && tagId == null && topicId == null && domain == null && seriesId == null) {
+    public KnowledgeRelationGraphDTO explore(Long postId, Long tagId, Long topicId, Integer domain, int limit) {
+        if (postId == null && tagId == null && topicId == null && domain == null) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         Integer activeDomain = domain == null ? null : requireDomain(domain);
@@ -144,14 +138,6 @@ public class KnowledgeRelationService {
             return topicMapper.selectOnlineTopicsByTagIds(tagIds, limit);
         } catch (RuntimeException e) {
             return List.of();
-        }
-    }
-
-    private boolean seriesSchemaReady() {
-        try {
-            return contentSeriesMapper.tableExists() > 0 && contentSeriesPostMapper.tableExists() > 0;
-        } catch (RuntimeException e) {
-            return false;
         }
     }
 

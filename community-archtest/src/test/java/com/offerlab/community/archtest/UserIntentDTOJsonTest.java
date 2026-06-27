@@ -2,16 +2,20 @@ package com.offerlab.community.archtest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UserIntentDTOJsonTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
     @Test
     void should_accept_frontend_target_city_alias() throws Exception {
@@ -67,5 +71,35 @@ class UserIntentDTOJsonTest {
         assertTrue(json.contains("\"interestTopics\""));
         assertTrue(json.contains("\"interestTags\""));
         assertTrue(json.contains("\"contentPreferences\""));
+    }
+
+    @Test
+    void should_reject_oversized_and_out_of_range_intent_fields() {
+        UserIntentDTO dto = UserIntentDTO.builder()
+                .targetCompanies(List.of(
+                        "OpenAI", "Anthropic", "DeepMind", "微软", "谷歌", "字节", "阿里", "腾讯", "百度", "美团",
+                        "京东", "滴滴", "快手", "小红书", "Shopee", "Grab", "AWS", "Azure", "Cloudflare", "Databricks",
+                        "Snowflake"))
+                .targetPositions(List.of("x".repeat(65)))
+                .yearsOfExp(51)
+                .expectedCity("x".repeat(65))
+                .techStack(List.of("Java"))
+                .expectedSalaryRange(UserIntentDTO.SalaryRange.builder()
+                        .min(-1)
+                        .max(1001)
+                        .unit("x".repeat(17))
+                        .build())
+                .build();
+
+        var violations = validator.validate(dto);
+
+        assertFalse(violations.isEmpty());
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("targetCompanies")));
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("targetPositions")));
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("yearsOfExp")));
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("expectedCity")));
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("expectedSalaryRange.min")));
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("expectedSalaryRange.max")));
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().startsWith("expectedSalaryRange.unit")));
     }
 }

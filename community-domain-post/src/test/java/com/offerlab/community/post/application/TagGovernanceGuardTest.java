@@ -65,6 +65,9 @@ class TagGovernanceGuardTest {
         assertContains(postService, "tagMapper.insertIgnoreNameCompat(id, name, tagType)");
 
         String postController = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/controller/PostController.java"));
+        assertContains(postController, "@Size(max = 20)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;");
+        assertContains(postController, "@Size(max = 20)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;");
+        assertContains(postController, "@Size(max = 20)\n        private List<@Size(max = 32) String> tagNames;");
         assertContains(postController, "private List<String> tagNames");
         assertContains(postController, ".tagNames(req.getTagNames())");
 

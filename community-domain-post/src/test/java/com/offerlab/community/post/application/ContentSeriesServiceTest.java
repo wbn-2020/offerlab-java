@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.post.api.dto.ContentSeriesAddPostCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
@@ -33,19 +34,40 @@ class ContentSeriesServiceTest {
 
     @Test
     void readFallsBackToEmptyListWhenSeriesSchemaIsNotReady() {
-        ContentSeriesService service = newService(new SeriesMapperState(0), new SeriesPostMapperState(), new LinkedHashMap<>());
+        ContentSeriesService service = newService(
+                new SeriesMapperState(1),
+                new SeriesPostMapperState(),
+                new LinkedHashMap<>(),
+                new MigrationCheckStub(false));
 
         assertEquals(List.of(), service.listMine(7L));
     }
 
     @Test
     void writeFailsWithMigrationHintWhenSeriesSchemaIsNotReady() {
-        ContentSeriesService service = newService(new SeriesMapperState(0), new SeriesPostMapperState(), new LinkedHashMap<>());
+        ContentSeriesService service = newService(
+                new SeriesMapperState(1),
+                new SeriesPostMapperState(),
+                new LinkedHashMap<>(),
+                new MigrationCheckStub(false));
 
         BizException ex = assertThrows(BizException.class, () -> service.create(createCmd("未迁移系列", 1), 7L));
 
         assertEquals(ErrorCode.DEPENDENCY_ERROR.getCode(), ex.getCode());
         assertTrue(ex.getMessage().contains("db/migration/20260624_content_series.sql"));
+    }
+
+    @Test
+    void writeFailsClosedWhenReadinessIsBlockedEvenIfTablesExist() {
+        SeriesMapperState seriesState = new SeriesMapperState(1);
+        SeriesPostMapperState relationState = new SeriesPostMapperState();
+        ContentSeriesService service = newService(seriesState, relationState, new LinkedHashMap<>(), new MigrationCheckStub(false));
+
+        BizException ex = assertThrows(BizException.class, () -> service.create(createCmd("半迁移系列", 1), 7L));
+
+        assertEquals(ErrorCode.DEPENDENCY_ERROR.getCode(), ex.getCode());
+        assertTrue(seriesState.seriesById.isEmpty());
+        assertTrue(relationState.links.isEmpty());
     }
 
     @Test
@@ -99,11 +121,19 @@ class ContentSeriesServiceTest {
     private static ContentSeriesService newService(SeriesMapperState seriesState,
                                                    SeriesPostMapperState relationState,
                                                    Map<Long, PostPO> posts) {
+        return newService(seriesState, relationState, posts, new MigrationCheckStub(true));
+    }
+
+    private static ContentSeriesService newService(SeriesMapperState seriesState,
+                                                   SeriesPostMapperState relationState,
+                                                   Map<Long, PostPO> posts,
+                                                   MigrationCheckService migrationCheckService) {
         return new ContentSeriesService(
                 seriesMapper(seriesState, relationState, posts),
                 seriesPostMapper(relationState),
                 postMapper(posts),
-                new SnowflakeIdGenerator()
+                new SnowflakeIdGenerator(),
+                migrationCheckService
         );
     }
 
@@ -263,6 +293,20 @@ class ContentSeriesServiceTest {
                     .filter(link -> Objects.equals(link.getSeriesId(), seriesId))
                     .filter(link -> !Objects.equals(link.getIsDeleted(), 1))
                     .toList();
+        }
+    }
+
+    private static final class MigrationCheckStub extends MigrationCheckService {
+        private final boolean contentSeriesReady;
+
+        private MigrationCheckStub(boolean contentSeriesReady) {
+            super(null);
+            this.contentSeriesReady = contentSeriesReady;
+        }
+
+        @Override
+        public boolean contentSeriesReady() {
+            return contentSeriesReady;
         }
     }
 }

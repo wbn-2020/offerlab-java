@@ -8,12 +8,8 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.infrastructure.persistence.mapper.CommunityTopicMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.CommunityTopicTagMapper;
-import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesMapper;
-import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesPostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.CommunityTopicPO;
-import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPO;
-import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import org.junit.jupiter.api.Test;
@@ -35,12 +31,10 @@ class KnowledgeRelationServiceTest {
                 postFacade(),
                 postMapper(),
                 topicMapper(),
-                topicTagMapper(),
-                seriesMapper(),
-                seriesPostMapper()
+                topicTagMapper()
         );
 
-        KnowledgeRelationGraphDTO graph = service.explore(null, null, null, 1, null, 8);
+        KnowledgeRelationGraphDTO graph = service.explore(null, null, null, 1, 8);
 
         assertEquals(8, graph.getLimit());
         assertTrue(graph.getNodes().stream().map(KnowledgeRelationNodeDTO::getKey).toList().contains("domain:1"));
@@ -98,30 +92,6 @@ class KnowledgeRelationServiceTest {
                 });
     }
 
-    private static ContentSeriesMapper seriesMapper() {
-        return (ContentSeriesMapper) Proxy.newProxyInstance(
-                ContentSeriesMapper.class.getClassLoader(),
-                new Class<?>[]{ContentSeriesMapper.class},
-                (proxy, method, args) -> switch (method.getName()) {
-                    case "tableExists" -> 1;
-                    case "selectByPostIds" -> List.of(series(401L, "Java Growth Path", 1));
-                    case "toString" -> "ContentSeriesMapperStub";
-                    default -> throw new UnsupportedOperationException(method.toString());
-                });
-    }
-
-    private static ContentSeriesPostMapper seriesPostMapper() {
-        return (ContentSeriesPostMapper) Proxy.newProxyInstance(
-                ContentSeriesPostMapper.class.getClassLoader(),
-                new Class<?>[]{ContentSeriesPostMapper.class},
-                (proxy, method, args) -> switch (method.getName()) {
-                    case "tableExists" -> 1;
-                    case "selectActiveByPostIds" -> List.of(seriesPost(501L, 401L, 101L));
-                    case "toString" -> "ContentSeriesPostMapperStub";
-                    default -> throw new UnsupportedOperationException(method.toString());
-                });
-    }
-
     private static PostPO post(Long id) {
         PostPO post = new PostPO();
         post.setId(id);
@@ -147,23 +117,6 @@ class KnowledgeRelationServiceTest {
         tag.setTagName(name);
         tag.setTagStatus(1);
         return tag;
-    }
-
-    private static ContentSeriesPO series(Long id, String title, Integer domain) {
-        ContentSeriesPO po = new ContentSeriesPO();
-        po.setId(id);
-        po.setTitle(title);
-        po.setDomain(domain);
-        po.setCreatorUid(7L);
-        return po;
-    }
-
-    private static ContentSeriesPostPO seriesPost(Long id, Long seriesId, Long postId) {
-        ContentSeriesPostPO po = new ContentSeriesPostPO();
-        po.setId(id);
-        po.setSeriesId(seriesId);
-        po.setPostId(postId);
-        return po;
     }
 
     private static Map<Long, PostBriefDTO> postsById(Collection<Long> postIds) {

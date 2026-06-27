@@ -2,6 +2,7 @@ package com.offerlab.community.api;
 
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplicationDTO;
+import com.offerlab.community.post.api.dto.ExpertCertificationApplicantApplicationDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationEligibilityDTO;
 import com.offerlab.community.post.application.ExpertCertificationService;
 import com.offerlab.community.post.controller.ExpertCertificationController;
@@ -71,7 +72,7 @@ class ExpertCertificationControllerApiTest {
     @Test
     void submitApplicationBindsRiskAcknowledgementAndEvidenceFields() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
-        when(expertCertificationService.submit(any(), eq(7L))).thenReturn(ExpertCertificationApplicationDTO.builder()
+        when(expertCertificationService.submit(any(), eq(7L))).thenReturn(ExpertCertificationApplicantApplicationDTO.builder()
                 .id(9001L)
                 .applicantUid(7L)
                 .domain(5)
@@ -96,7 +97,11 @@ class ExpertCertificationControllerApiTest {
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.id").value(9001))
                 .andExpect(jsonPath("$.data.status").value(ExpertCertificationService.STATUS_SUBMITTED))
-                .andExpect(jsonPath("$.data.autoCertified").value(false));
+                .andExpect(jsonPath("$.data.autoCertified").value(false))
+                .andExpect(jsonPath("$.data.reviewerUid").doesNotExist())
+                .andExpect(jsonPath("$.data.reviewNote").doesNotExist())
+                .andExpect(jsonPath("$.data.revokedBy").doesNotExist())
+                .andExpect(jsonPath("$.data.revokeNote").doesNotExist());
 
         verify(expertCertificationService).submit(any(), eq(7L));
     }
@@ -105,7 +110,7 @@ class ExpertCertificationControllerApiTest {
     void listMineUsesAuthenticatedApplicantContext() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
         when(expertCertificationService.listMine(7L, 2)).thenReturn(List.of(
-                ExpertCertificationApplicationDTO.builder()
+                ExpertCertificationApplicantApplicationDTO.builder()
                         .id(9002L)
                         .applicantUid(7L)
                         .domain(2)
@@ -120,7 +125,11 @@ class ExpertCertificationControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data[0].id").value(9002))
-                .andExpect(jsonPath("$.data[0].domain").value(2));
+                .andExpect(jsonPath("$.data[0].domain").value(2))
+                .andExpect(jsonPath("$.data[0].reviewerUid").doesNotExist())
+                .andExpect(jsonPath("$.data[0].reviewNote").doesNotExist())
+                .andExpect(jsonPath("$.data[0].revokedBy").doesNotExist())
+                .andExpect(jsonPath("$.data[0].revokeNote").doesNotExist());
 
         verify(expertCertificationService).listMine(7L, 2);
     }
@@ -128,13 +137,12 @@ class ExpertCertificationControllerApiTest {
     @Test
     void revokeEndpointUsesAuthenticatedApplicantContext() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
-        when(expertCertificationService.revoke(9001L, "withdrawn by applicant", 7L)).thenReturn(ExpertCertificationApplicationDTO.builder()
+        when(expertCertificationService.revoke(9001L, "withdrawn by applicant", 7L)).thenReturn(ExpertCertificationApplicantApplicationDTO.builder()
                 .id(9001L)
                 .applicantUid(7L)
                 .domain(2)
                 .status(ExpertCertificationService.STATUS_REVOKED)
                 .statusLabel("REVOKED")
-                .revokedBy(7L)
                 .autoCertified(false)
                 .build());
 
@@ -149,7 +157,10 @@ class ExpertCertificationControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.status").value(ExpertCertificationService.STATUS_REVOKED))
-                .andExpect(jsonPath("$.data.revokedBy").value(7));
+                .andExpect(jsonPath("$.data.revokedBy").doesNotExist())
+                .andExpect(jsonPath("$.data.reviewerUid").doesNotExist())
+                .andExpect(jsonPath("$.data.reviewNote").doesNotExist())
+                .andExpect(jsonPath("$.data.revokeNote").doesNotExist());
 
         verify(expertCertificationService).revoke(9001L, "withdrawn by applicant", 7L);
     }
@@ -164,6 +175,8 @@ class ExpertCertificationControllerApiTest {
                                 .domain(2)
                                 .status(ExpertCertificationService.STATUS_SUBMITTED)
                                 .statusLabel("SUBMITTED")
+                                .reviewerUid(66L)
+                                .reviewNote("internal note")
                                 .autoCertified(false)
                                 .build()));
 
@@ -175,7 +188,9 @@ class ExpertCertificationControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data[0].id").value(9003))
-                .andExpect(jsonPath("$.data[0].status").value(ExpertCertificationService.STATUS_SUBMITTED));
+                .andExpect(jsonPath("$.data[0].status").value(ExpertCertificationService.STATUS_SUBMITTED))
+                .andExpect(jsonPath("$.data[0].reviewerUid").value(66))
+                .andExpect(jsonPath("$.data[0].reviewNote").value("internal note"));
 
         verify(expertCertificationService).listReviewQueue(2, ExpertCertificationService.STATUS_SUBMITTED, 15, 88L);
     }
