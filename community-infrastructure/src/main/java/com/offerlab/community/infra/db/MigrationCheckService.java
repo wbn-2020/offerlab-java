@@ -161,6 +161,7 @@ public class MigrationCheckService {
                 "description",
                 "domain",
                 "cover_url",
+                "visibility",
                 "create_time",
                 "update_time",
                 "is_deleted"
@@ -253,6 +254,7 @@ public class MigrationCheckService {
         indexes.put("t_content_assist_record.idx_content_assist_uid_time", indexExists("t_content_assist_record", "idx_content_assist_uid_time"));
         indexes.put("t_content_series.idx_content_series_creator_update", indexExists("t_content_series", "idx_content_series_creator_update"));
         indexes.put("t_content_series.idx_content_series_domain_update", indexExists("t_content_series", "idx_content_series_domain_update"));
+        indexes.put("t_content_series.idx_content_series_public_creator", indexExists("t_content_series", "idx_content_series_public_creator"));
         indexes.put("t_content_series_post.uk_content_series_post", indexExists("t_content_series_post", "uk_content_series_post"));
         indexes.put("t_content_series_post.idx_content_series_post_series_sort", indexExists("t_content_series_post", "idx_content_series_post_series_sort"));
         indexes.put("t_content_series_post.idx_content_series_post_post", indexExists("t_content_series_post", "idx_content_series_post_post"));
@@ -438,12 +440,14 @@ public class MigrationCheckService {
                 && tableExists("t_content_series_post")
                 && columnExists("t_content_series", "creator_uid")
                 && columnExists("t_content_series", "title")
+                && columnExists("t_content_series", "visibility")
                 && columnExists("t_content_series_post", "series_id")
                 && columnExists("t_content_series_post", "post_id")
                 && primaryKeyExists("t_content_series", "id")
                 && primaryKeyExists("t_content_series_post", "id")
                 && indexExists("t_content_series", "idx_content_series_creator_update")
                 && indexExists("t_content_series", "idx_content_series_domain_update")
+                && indexExists("t_content_series", "idx_content_series_public_creator")
                 && indexExists("t_content_series_post", "uk_content_series_post")
                 && indexExists("t_content_series_post", "idx_content_series_post_series_sort")
                 && indexExists("t_content_series_post", "idx_content_series_post_post");

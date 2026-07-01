@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class UserContributionGuardTest {
 
@@ -34,6 +35,8 @@ class UserContributionGuardTest {
         assertTrue(service.contains("profile_restricted"), "restricted profiles must not leak contribution counters");
         assertTrue(service.contains("backend_aggregate"), "contribution service must label backend aggregate data");
         assertTrue(service.contains("postCount * 10 + featuredCount * 30 + likeCount + favoriteCount * 2 + commentCount * 2"), "backend score must match the frontend contribution formula");
+        assertTrue(service.contains("L5 领域作者"), "backend contribution level must use creator wording");
+        assertFalse(service.contains("L5 社区专家"), "backend contribution level must not return old expert wording");
 
         assertTrue(mapper.contains("aggregatePublicContributionByAuthor"), "post mapper must aggregate contribution from existing post tables");
         assertTrue(mapper.contains("t_post_counter"), "contribution aggregate must include interaction counters");
@@ -45,7 +48,8 @@ class UserContributionGuardTest {
         assertTrue(api.contains("/api/v1/users/me/contribution"), "frontend user API must load my contribution");
         assertTrue(userProfile.contains("backendContribution"), "author profile must prefer backend contribution");
         assertTrue(meProfile.contains("backendContribution"), "me profile must prefer backend contribution");
-        assertTrue(userProfile.contains("buildContributionSummary(posts.value)") && meProfile.contains("buildContributionSummary(posts.items)"), "profiles must retain frontend fallback estimation");
+        assertTrue(userProfile.contains("buildContributionSummary(visiblePosts.value)") && meProfile.contains("buildContributionSummary(posts.items)"), "profiles must retain frontend fallback estimation");
+        assertTrue(userProfile.contains("frontend_estimate") && meProfile.contains("frontend_estimate"), "profiles must label frontend fallback estimation");
         assertTrue(userProfile.contains("contributionSourceText") && meProfile.contains("contributionSourceText"), "profiles must show contribution data source");
     }
 

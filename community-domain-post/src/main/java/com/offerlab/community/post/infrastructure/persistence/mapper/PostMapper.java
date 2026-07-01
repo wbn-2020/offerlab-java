@@ -820,4 +820,22 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             """)
     List<Long> selectRecentPublicInterviewPostIds(@Param("limit") int limit);
+
+    @Select("""
+            SELECT p.*
+            FROM t_content_series_post sp
+            JOIN t_post_main p
+              ON p.id = sp.post_id
+            WHERE sp.series_id = #{seriesId}
+              AND sp.is_deleted = 0
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (#{cursor} = 0 OR p.id < #{cursor})
+            ORDER BY p.id DESC
+            LIMIT #{limit}
+            """)
+    List<PostPO> selectPublicPostsByContentSeries(@Param("seriesId") Long seriesId,
+                                                  @Param("cursor") long cursor,
+                                                  @Param("limit") int limit);
 }

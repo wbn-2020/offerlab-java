@@ -1,6 +1,7 @@
 package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
@@ -9,6 +10,8 @@ import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesDTO;
 import com.offerlab.community.post.api.dto.ContentSeriesProgressDTO;
 import com.offerlab.community.post.api.dto.ContentSeriesUpdateCmd;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
+import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesPostMapper;
@@ -33,10 +36,14 @@ import java.util.Objects;
 public class ContentSeriesService {
 
     private static final String MIGRATION_HINT = "db/migration/20260624_content_series.sql";
+    private static final int VISIBILITY_PUBLIC = 1;
+    private static final int VISIBILITY_PRIVATE = 2;
+    private static final int MAX_PAGE_SIZE = 30;
 
     private final ContentSeriesMapper contentSeriesMapper;
     private final ContentSeriesPostMapper contentSeriesPostMapper;
     private final PostMapper postMapper;
+    private final PostFacade postFacade;
     private final SnowflakeIdGenerator idGenerator;
     private final MigrationCheckService migrationCheckService;
 
@@ -67,6 +74,7 @@ public class ContentSeriesService {
         series.setDescription(clean(cmd == null ? null : cmd.getDescription(), 1000));
         series.setDomain(requireDomain(cmd == null ? null : cmd.getDomain()));
         series.setCoverUrl(clean(cmd == null ? null : cmd.getCoverUrl(), 512));
+        series.setVisibility(normalizeVisibility(cmd == null ? null : cmd.getVisibility()));
         series.setCreateTime(LocalDateTime.now());
         series.setUpdateTime(LocalDateTime.now());
         contentSeriesMapper.insert(series);
@@ -82,8 +90,69 @@ public class ContentSeriesService {
         series.setDescription(clean(cmd == null ? null : cmd.getDescription(), 1000));
         series.setDomain(requireDomain(cmd == null ? null : cmd.getDomain()));
         series.setCoverUrl(clean(cmd == null ? null : cmd.getCoverUrl(), 512));
+        series.setVisibility(normalizeVisibility(cmd == null ? null : cmd.getVisibility()));
         series.setUpdateTime(LocalDateTime.now());
         contentSeriesMapper.updateById(series);
+        return getOwnedSeries(seriesId, operatorUid);
+    }
+
+    public ContentSeriesDTO getPublicDetail(Long seriesId) {
+        requireSchemaReady();
+        ContentSeriesPO series = requirePublicSeries(seriesId);
+        return toDto(series, publicProgressBySeriesIds(List.of(seriesId)).get(seriesId));
+    }
+
+    public List<ContentSeriesDTO> listPublicByUser(Long creatorUid, long cursor, int size) {
+        if (creatorUid == null || creatorUid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (!schemaReady()) {
+            return List.of();
+        }
+        int pageSize = normalizePageSize(size);
+        List<ContentSeriesPO> series = contentSeriesMapper.selectPublicByCreatorUid(creatorUid, Math.max(0, cursor), pageSize);
+        if (series == null || series.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, ContentSeriesProgressDTO> progressBySeriesId = publicProgressBySeriesIds(
+                series.stream().map(ContentSeriesPO::getId).toList());
+        return series.stream()
+                .map(item -> toDto(item, progressBySeriesId.get(item.getId())))
+                .toList();
+    }
+
+    public PageResult<PostBriefDTO> listPublicPosts(Long seriesId, long cursor, int size) {
+        requireSchemaReady();
+        requirePublicSeries(seriesId);
+        int pageSize = normalizePageSize(size);
+        List<PostPO> posts = postMapper.selectPublicPostsByContentSeries(seriesId, Math.max(0, cursor), pageSize + 1);
+        if (posts == null || posts.isEmpty()) {
+            return PageResult.empty();
+        }
+        boolean hasMore = posts.size() > pageSize;
+        List<PostPO> pagePosts = posts.stream()
+                .limit(pageSize)
+                .toList();
+        Map<Long, PostBriefDTO> briefById = postFacade.batchGetPosts(
+                pagePosts.stream().map(PostPO::getId).toList(), null, false);
+        List<PostBriefDTO> items = pagePosts.stream()
+                .map(post -> briefById.get(post.getId()))
+                .filter(Objects::nonNull)
+                .toList();
+        String nextCursor = hasMore && !pagePosts.isEmpty() ? String.valueOf(pagePosts.get(pagePosts.size() - 1).getId()) : null;
+        return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    @Transactional
+    public ContentSeriesDTO removePost(Long seriesId, Long postId, Long operatorUid) {
+        requireUser(operatorUid);
+        requireSchemaReady();
+        requireOwnedSeries(seriesId, operatorUid);
+        if (postId == null || postId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        contentSeriesPostMapper.softDeleteRelation(seriesId, postId);
+        contentSeriesMapper.touchSeries(seriesId);
         return getOwnedSeries(seriesId, operatorUid);
     }
 
@@ -103,11 +172,16 @@ public class ContentSeriesService {
         if (contentSeriesPostMapper.existsActiveRelation(seriesId, postId) > 0) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION.getCode(), "Post already belongs to this series");
         }
+        int sortOrder = resolveSortOrder(seriesId, cmd.getSortOrder());
+        if (contentSeriesPostMapper.restoreDeletedRelation(seriesId, postId, sortOrder) > 0) {
+            contentSeriesMapper.touchSeries(seriesId);
+            return getOwnedSeries(seriesId, operatorUid);
+        }
         ContentSeriesPostPO relation = new ContentSeriesPostPO();
         relation.setId(idGenerator.nextId());
         relation.setSeriesId(seriesId);
         relation.setPostId(postId);
-        relation.setSortOrder(resolveSortOrder(seriesId, cmd.getSortOrder()));
+        relation.setSortOrder(sortOrder);
         relation.setCreateTime(LocalDateTime.now());
         relation.setUpdateTime(LocalDateTime.now());
         contentSeriesPostMapper.insert(relation);
@@ -134,12 +208,31 @@ public class ContentSeriesService {
         return series;
     }
 
+    private ContentSeriesPO requirePublicSeries(Long seriesId) {
+        if (seriesId == null || seriesId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        ContentSeriesPO series = contentSeriesMapper.selectPublicById(seriesId);
+        if (series == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return series;
+    }
+
     private Map<Long, ContentSeriesProgressDTO> progressBySeriesIds(Collection<Long> seriesIds) {
+        return progressByRows(seriesIds, contentSeriesMapper.selectProgressBySeriesIds(seriesIds));
+    }
+
+    private Map<Long, ContentSeriesProgressDTO> publicProgressBySeriesIds(Collection<Long> seriesIds) {
+        return progressByRows(seriesIds, contentSeriesMapper.selectPublicProgressBySeriesIds(seriesIds));
+    }
+
+    private Map<Long, ContentSeriesProgressDTO> progressByRows(Collection<Long> seriesIds, List<Map<String, Object>> rows) {
         if (seriesIds == null || seriesIds.isEmpty()) {
             return Map.of();
         }
         Map<Long, ContentSeriesProgressDTO> result = new HashMap<>();
-        for (Map<String, Object> row : contentSeriesMapper.selectProgressBySeriesIds(seriesIds)) {
+        for (Map<String, Object> row : rows) {
             Long seriesId = asLong(row.get("seriesId"));
             long published = safeLong(row.get("publishedPostCount"));
             long total = safeLong(row.get("totalPostCount"));
@@ -180,6 +273,7 @@ public class ContentSeriesService {
                 .description(series.getDescription())
                 .domain(series.getDomain())
                 .coverUrl(series.getCoverUrl())
+                .visibility(series.getVisibility() == null ? VISIBILITY_PRIVATE : series.getVisibility())
                 .progress(progress == null ? emptyProgress() : progress)
                 .createTime(series.getCreateTime())
                 .updateTime(series.getUpdateTime())
@@ -213,6 +307,23 @@ public class ContentSeriesService {
             return domain;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static Integer normalizeVisibility(Integer visibility) {
+        if (visibility == null) {
+            return VISIBILITY_PRIVATE;
+        }
+        if (visibility == VISIBILITY_PUBLIC || visibility == VISIBILITY_PRIVATE) {
+            return visibility;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static int normalizePageSize(int size) {
+        if (size <= 0) {
+            return 10;
+        }
+        return Math.min(MAX_PAGE_SIZE, size);
     }
 
     private static Long requirePostId(ContentSeriesAddPostCmd cmd) {
@@ -256,4 +367,5 @@ public class ContentSeriesService {
         Long number = asLong(value);
         return number == null ? 0L : number;
     }
+
 }

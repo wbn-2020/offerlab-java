@@ -8,11 +8,13 @@ CREATE TABLE IF NOT EXISTS t_content_series (
     description  VARCHAR(1000) NULL,
     domain       TINYINT      NOT NULL,
     cover_url    VARCHAR(512) NULL,
+    visibility   TINYINT      NOT NULL DEFAULT 2,
     create_time  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted   TINYINT      NOT NULL DEFAULT 0,
     KEY idx_content_series_creator_update (creator_uid, update_time, id),
-    KEY idx_content_series_domain_update (domain, update_time, id)
+    KEY idx_content_series_domain_update (domain, update_time, id),
+    KEY idx_content_series_public_creator (visibility, creator_uid, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='User-owned content series';
 
 CREATE TABLE IF NOT EXISTS t_content_series_post (
@@ -86,8 +88,10 @@ CALL v20260624_content_series_add_column_if_missing('t_content_series', 'domain'
     'ALTER TABLE t_content_series ADD COLUMN domain TINYINT NOT NULL AFTER description');
 CALL v20260624_content_series_add_column_if_missing('t_content_series', 'cover_url',
     'ALTER TABLE t_content_series ADD COLUMN cover_url VARCHAR(512) NULL AFTER domain');
+CALL v20260624_content_series_add_column_if_missing('t_content_series', 'visibility',
+    'ALTER TABLE t_content_series ADD COLUMN visibility TINYINT NOT NULL DEFAULT 2 AFTER cover_url');
 CALL v20260624_content_series_add_column_if_missing('t_content_series', 'create_time',
-    'ALTER TABLE t_content_series ADD COLUMN create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) AFTER cover_url');
+    'ALTER TABLE t_content_series ADD COLUMN create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) AFTER visibility');
 CALL v20260624_content_series_add_column_if_missing('t_content_series', 'update_time',
     'ALTER TABLE t_content_series ADD COLUMN update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) AFTER create_time');
 CALL v20260624_content_series_add_column_if_missing('t_content_series', 'is_deleted',
@@ -112,6 +116,8 @@ CALL v20260624_content_series_add_index_if_missing('t_content_series', 'idx_cont
     'ALTER TABLE t_content_series ADD KEY idx_content_series_creator_update (creator_uid, update_time, id)');
 CALL v20260624_content_series_add_index_if_missing('t_content_series', 'idx_content_series_domain_update',
     'ALTER TABLE t_content_series ADD KEY idx_content_series_domain_update (domain, update_time, id)');
+CALL v20260624_content_series_add_index_if_missing('t_content_series', 'idx_content_series_public_creator',
+    'ALTER TABLE t_content_series ADD KEY idx_content_series_public_creator (visibility, creator_uid, id)');
 CALL v20260624_content_series_add_index_if_missing('t_content_series_post', 'uk_content_series_post',
     'ALTER TABLE t_content_series_post ADD UNIQUE KEY uk_content_series_post (series_id, post_id)');
 CALL v20260624_content_series_add_index_if_missing('t_content_series_post', 'idx_content_series_post_series_sort',

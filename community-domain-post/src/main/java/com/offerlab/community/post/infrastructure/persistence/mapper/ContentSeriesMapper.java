@@ -29,6 +29,7 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
                    description,
                    domain,
                    cover_url AS coverUrl,
+                   visibility,
                    create_time AS createTime,
                    update_time AS updateTime,
                    is_deleted AS isDeleted
@@ -38,6 +39,47 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
             ORDER BY update_time DESC, id DESC
             """)
     List<ContentSeriesPO> selectMine(@Param("creatorUid") Long creatorUid);
+
+    @Select("""
+            SELECT id,
+                   creator_uid AS creatorUid,
+                   title,
+                   description,
+                   domain,
+                   cover_url AS coverUrl,
+                   visibility,
+                   create_time AS createTime,
+                   update_time AS updateTime,
+                   is_deleted AS isDeleted
+            FROM t_content_series
+            WHERE id = #{seriesId}
+              AND visibility = 1
+              AND is_deleted = 0
+            """)
+    ContentSeriesPO selectPublicById(@Param("seriesId") Long seriesId);
+
+    @Select("""
+            SELECT id,
+                   creator_uid AS creatorUid,
+                   title,
+                   description,
+                   domain,
+                   cover_url AS coverUrl,
+                   visibility,
+                   create_time AS createTime,
+                   update_time AS updateTime,
+                   is_deleted AS isDeleted
+            FROM t_content_series
+            WHERE creator_uid = #{creatorUid}
+              AND visibility = 1
+              AND is_deleted = 0
+              AND (#{cursor} = 0 OR id < #{cursor})
+            ORDER BY id DESC
+            LIMIT #{limit}
+            """)
+    List<ContentSeriesPO> selectPublicByCreatorUid(@Param("creatorUid") Long creatorUid,
+                                                   @Param("cursor") long cursor,
+                                                   @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -62,12 +104,34 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
 
     @Select("""
             <script>
+            SELECT s.id AS seriesId,
+                   COALESCE(SUM(CASE WHEN p.id IS NOT NULL AND p.post_status = 1 AND p.visibility = 1 THEN 1 ELSE 0 END), 0) AS totalPostCount,
+                   COALESCE(SUM(CASE WHEN p.id IS NOT NULL AND p.post_status = 1 AND p.visibility = 1 THEN 1 ELSE 0 END), 0) AS publishedPostCount
+            FROM t_content_series s
+            LEFT JOIN t_content_series_post sp
+                   ON sp.series_id = s.id
+                  AND sp.is_deleted = 0
+            LEFT JOIN t_post_main p
+                   ON p.id = sp.post_id
+                  AND p.is_deleted = 0
+            WHERE s.id IN
+            <foreach collection="seriesIds" item="seriesId" open="(" separator="," close=")">
+              #{seriesId}
+            </foreach>
+            GROUP BY s.id
+            </script>
+            """)
+    List<Map<String, Object>> selectPublicProgressBySeriesIds(@Param("seriesIds") Collection<Long> seriesIds);
+
+    @Select("""
+            <script>
             SELECT DISTINCT s.id,
                    s.creator_uid AS creatorUid,
                    s.title,
                    s.description,
                    s.domain,
                    s.cover_url AS coverUrl,
+                   s.visibility,
                    s.create_time AS createTime,
                    s.update_time AS updateTime,
                    s.is_deleted AS isDeleted

@@ -16,4 +16,5 @@ public class ContentSeriesUpdateCmd {
     private Integer domain;
     @Size(max = 512)
     private String coverUrl;
+    private Integer visibility;
 }

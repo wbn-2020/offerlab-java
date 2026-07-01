@@ -18,6 +18,7 @@ public class ContentSeriesDTO {
     private String description;
     private Integer domain;
     private String coverUrl;
+    private Integer visibility;
     private ContentSeriesProgressDTO progress;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
