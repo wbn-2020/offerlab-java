@@ -329,7 +329,7 @@ public class PostPublishQualityValidator {
         }
         if (!missing.isEmpty()) {
             String typeName = postType == Post.TYPE_PROJECT_REVIEW ? "项目复盘" : "故障复盘";
-            fail("content", typeName + "需要包含" + String.join("、", missing) + "，便于沉淀为面试素材");
+            fail("content", typeName + "需要包含" + String.join("、", missing) + "，便于沉淀为可参考的经验");
         }
     }
 

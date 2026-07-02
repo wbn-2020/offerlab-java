@@ -634,7 +634,7 @@ public class FeedFacadeImpl implements FeedFacade {
             reasons.add("技术标签完整，便于快速判断主题");
         }
         if (reasons.isEmpty()) {
-            reasons.add("根据近期内容质量和活跃度推荐");
+            reasons.add("根据近期活跃度、发布时间和标签完整度推荐");
         }
         return reasons.stream().limit(3).toList();
     }

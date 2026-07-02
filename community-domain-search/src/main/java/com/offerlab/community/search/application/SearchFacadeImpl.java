@@ -337,7 +337,10 @@ public class SearchFacadeImpl implements SearchFacade {
     private Optional<List<String>> suggestByElasticsearch(String prefix, int limit) {
         Map<String, Object> body = Map.of(
                 "query", Map.of("bool", Map.of(
-                        "filter", List.of(Map.of("term", Map.of("status", "published"))),
+                        "filter", List.of(
+                                Map.of("term", Map.of("status", "published")),
+                                Map.of("term", Map.of("visibility", 1))
+                        ),
                         "should", List.of(
                                 Map.of("match_phrase_prefix", Map.of("title", prefix)),
                                 Map.of("match_phrase_prefix", Map.of("company", prefix)),
@@ -349,14 +352,17 @@ public class SearchFacadeImpl implements SearchFacade {
                         ),
                         "minimum_should_match", 1
                 )),
-                "_source", List.of("title", "company", "position", "scenario", "techStacks", "tagNames", "tagSynonyms", "tagSearchTerms"),
+                "_source", List.of("id", "postId", "title", "company", "position", "scenario", "techStacks", "tagNames", "tagSynonyms", "tagSearchTerms"),
                 "size", limit
         );
         return elasticsearch.search(elasticsearch.postIndex(), body).map(json -> {
             Set<String> result = new LinkedHashSet<>();
             JsonNode hits = json.path("hits").path("hits");
-            for (JsonNode hit : hits) {
-                JsonNode source = hit.path("_source");
+            Map<Long, JsonNode> visibleCandidateSources = visibleSuggestionSources(hits);
+            if (visibleCandidateSources.isEmpty()) {
+                return List.<String>of();
+            }
+            for (JsonNode source : visibleCandidateSources.values()) {
                 if (PublicContentFilter.isSyntheticText(source.path("title").asText(null))
                         || PublicContentFilter.isSyntheticText(source.path("company").asText(null))
                         || PublicContentFilter.isSyntheticText(source.path("position").asText(null))) {
@@ -373,6 +379,41 @@ public class SearchFacadeImpl implements SearchFacade {
             }
             return result.stream().limit(limit).toList();
         });
+    }
+
+    private Map<Long, JsonNode> visibleSuggestionSources(JsonNode hits) {
+        if (!hits.isArray() || hits.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, JsonNode> sourcesById = new java.util.LinkedHashMap<>();
+        for (JsonNode hit : hits) {
+            JsonNode source = hit.path("_source");
+            Long postId = suggestionPostId(source);
+            if (postId != null && postId > 0) {
+                sourcesById.putIfAbsent(postId, source);
+            }
+        }
+        if (sourcesById.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, PostBriefDTO> visibleById = postFacade.batchGetPosts(sourcesById.keySet(), null, false);
+        Map<Long, JsonNode> visibleSources = new java.util.LinkedHashMap<>();
+        for (Map.Entry<Long, JsonNode> entry : sourcesById.entrySet()) {
+            if (visibleById.containsKey(entry.getKey())) {
+                visibleSources.put(entry.getKey(), entry.getValue());
+            } else {
+                log.debug("stale elasticsearch suggestion filtered: postId={}", entry.getKey());
+            }
+        }
+        return visibleSources;
+    }
+
+    private Long suggestionPostId(JsonNode source) {
+        JsonNode postId = source.path("postId");
+        if (postId.canConvertToLong()) {
+            return postId.asLong();
+        }
+        return parsePostIdKeyword(source.path("id").asText(null)).orElse(null);
     }
 
     private List<String> suggestByMysql(String prefix, int limit) {

@@ -48,7 +48,7 @@ public class UserTaskApplicationService {
                 .collect(Collectors.toMap(UserTaskStatePO::getTaskCode, Function.identity(), (left, right) -> left));
         return buildOverview(
                 TASK_TYPE_ONBOARDING,
-                "新人任务链",
+                "新用户引导",
                 "先完成浏览、关注、互动和首次发布，尽快进入社区节奏。",
                 isOnboardingActive(user),
                 onboardingDefinitions(),
@@ -63,7 +63,7 @@ public class UserTaskApplicationService {
                 .collect(Collectors.toMap(UserTaskStatePO::getTaskCode, Function.identity(), (left, right) -> left));
         return buildOverview(
                 TASK_TYPE_DAILY,
-                "每日任务 Lite",
+                "今日行动",
                 "每天完成一次浏览、互动或发布，让回访更有方向。",
                 true,
                 dailyDefinitions(),

@@ -32,6 +32,10 @@ class UserTaskStateSafetyGuardTest {
         assertTrue(service.contains("DAILY_VIEW_PUBLIC_CONTENT"), "daily browse task must exist");
         assertTrue(service.contains("DAILY_INTERACT_ONCE"), "daily interaction task must exist");
         assertTrue(service.contains("DAILY_PUBLISH_ONCE"), "daily publish task must exist");
+        assertTrue(service.contains("\"新用户引导\""), "onboarding task title must use community-oriented copy");
+        assertTrue(service.contains("\"今日行动\""), "daily task title must use community-oriented copy");
+        assertFalse(service.contains("\"新人任务链\""), "task title must not keep old private-task copy");
+        assertFalse(service.contains("\"每日任务 Lite\""), "task title must not keep old Lite task copy");
         assertTrue(listener.contains("@TransactionalEventListener"), "task auto-completion must hook into trusted business events");
         assertTrue(controller.contains("/api/v1/me"), "task APIs must live under /api/v1/me");
         assertTrue(controller.contains("/onboarding-tasks"), "onboarding task endpoints must exist");
