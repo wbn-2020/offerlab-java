@@ -6,6 +6,7 @@ import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
 import com.offerlab.community.search.api.dto.ReviewQueueCreateCmd;
 import com.offerlab.community.search.infrastructure.persistence.mapper.ReviewQueueMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.ReviewQueueItemPO;
@@ -45,13 +46,54 @@ class ReviewQueueServiceTest {
         assertEquals(0, mapperState.itemsById.size());
     }
 
+    @Test
+    void approveResolvesReportQueueItems() {
+        ReviewQueueMapperState mapperState = new ReviewQueueMapperState(1);
+        ReviewQueueItemPO item = queueItem(101L, "POST_REPORT", 9001L);
+        mapperState.itemsById.put(item.getId(), item);
+        ReviewQueueService service = newService(mapperState, new MigrationCheckStub(true));
+
+        ReviewQueueItemPO approved = service.approve(101L, 77L, "confirmed violation", "CONFIRM");
+
+        assertEquals(ReviewQueueMapper.STATUS_APPROVED, approved.getQueueStatus());
+        assertEquals("approved", approved.getHandleResult());
+        assertEquals("confirmed violation", approved.getHandleNote());
+        assertEquals(77L, approved.getAssigneeUid());
+    }
+
+    @Test
+    void approveDispatchesSourceActionForReportQueueItems() {
+        ReviewQueueMapperState mapperState = new ReviewQueueMapperState(1);
+        ReviewQueueItemPO item = queueItem(102L, "POST_REPORT", 9002L);
+        mapperState.itemsById.put(item.getId(), item);
+        RecordingSourceActionHandler handler = new RecordingSourceActionHandler("POST_REPORT");
+        ReviewQueueService service = newService(mapperState, new MigrationCheckStub(true), List.of(handler));
+
+        service.approve(102L, 77L, "confirmed violation", "CONFIRM");
+
+        assertEquals(1, handler.calls);
+        assertEquals("POST_REPORT", handler.sourceType);
+        assertEquals(9002L, handler.sourceId);
+        assertEquals(ReviewQueueMapper.STATUS_APPROVED, handler.status);
+        assertEquals("approved", handler.result);
+        assertEquals("confirmed violation", handler.note);
+        assertEquals(77L, handler.operatorUid);
+    }
+
     private static ReviewQueueService newService(ReviewQueueMapperState mapperState,
                                                  MigrationCheckService migrationCheckService) {
+        return newService(mapperState, migrationCheckService, List.of());
+    }
+
+    private static ReviewQueueService newService(ReviewQueueMapperState mapperState,
+                                                 MigrationCheckService migrationCheckService,
+                                                 List<ReviewQueueSourceActionHandler> sourceActionHandlers) {
         return new ReviewQueueService(
                 mapper(mapperState),
                 new SnowflakeIdGenerator(),
                 new AdminAuditStub(),
-                migrationCheckService
+                migrationCheckService,
+                sourceActionHandlers
         );
     }
 
@@ -71,7 +113,10 @@ class ReviewQueueServiceTest {
                     case "findBySource" -> state.findBySource((String) args[0], (Long) args[1]);
                     case "list" -> List.of();
                     case "countByStatus" -> List.of();
-                    case "claim", "release", "resolve", "resolveBySource" -> 0;
+                    case "claim", "release" -> 0;
+                    case "resolve" -> state.resolve((Long) args[0], (String) args[1], (String) args[2],
+                            (String) args[3], (Long) args[4]);
+                    case "resolveBySource" -> 0;
                     case "toString" -> "ReviewQueueMapperStub";
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
@@ -90,6 +135,21 @@ class ReviewQueueServiceTest {
         return cmd;
     }
 
+    private static ReviewQueueItemPO queueItem(Long id, String sourceType, Long sourceId) {
+        ReviewQueueItemPO item = new ReviewQueueItemPO();
+        item.setId(id);
+        item.setSourceType(sourceType);
+        item.setSourceId(sourceId);
+        item.setTitle("queue title");
+        item.setSummary("summary");
+        item.setRiskLevel("high");
+        item.setQueueStatus(ReviewQueueMapper.STATUS_PENDING);
+        item.setCreatorUid(7L);
+        item.setPriority(80);
+        item.setExtJson("{}");
+        return item;
+    }
+
     private static ReviewQueueItemPO clone(ReviewQueueItemPO source) {
         ReviewQueueItemPO copy = new ReviewQueueItemPO();
         copy.setId(source.getId());
@@ -102,6 +162,9 @@ class ReviewQueueServiceTest {
         copy.setCreatorUid(source.getCreatorUid());
         copy.setPriority(source.getPriority());
         copy.setExtJson(source.getExtJson());
+        copy.setHandleResult(source.getHandleResult());
+        copy.setHandleNote(source.getHandleNote());
+        copy.setAssigneeUid(source.getAssigneeUid());
         return copy;
     }
 
@@ -120,6 +183,19 @@ class ReviewQueueServiceTest {
                     .filter(item -> Objects.equals(item.getSourceId(), sourceId))
                     .findFirst()
                     .orElse(null);
+        }
+
+        private int resolve(Long id, String status, String result, String note, Long operatorUid) {
+            ReviewQueueItemPO item = itemsById.get(id);
+            if (item == null || !List.of(ReviewQueueMapper.STATUS_PENDING, ReviewQueueMapper.STATUS_CLAIMED)
+                    .contains(item.getQueueStatus())) {
+                return 0;
+            }
+            item.setQueueStatus(status);
+            item.setHandleResult(result);
+            item.setHandleNote(note);
+            item.setAssigneeUid(operatorUid);
+            return 1;
         }
     }
 
@@ -147,4 +223,36 @@ class ReviewQueueServiceTest {
                                    Object before, Object after, String remark) {
         }
     }
+
+    private static final class RecordingSourceActionHandler implements ReviewQueueSourceActionHandler {
+        private final String supportedSourceType;
+        private int calls;
+        private String sourceType;
+        private Long sourceId;
+        private String status;
+        private String result;
+        private String note;
+        private Long operatorUid;
+
+        private RecordingSourceActionHandler(String supportedSourceType) {
+            this.supportedSourceType = supportedSourceType;
+        }
+
+        @Override
+        public boolean supports(String sourceType) {
+            return Objects.equals(supportedSourceType, sourceType);
+        }
+
+        @Override
+        public void handle(String sourceType, Long sourceId, String status, String result, String note, Long operatorUid) {
+            calls++;
+            this.sourceType = sourceType;
+            this.sourceId = sourceId;
+            this.status = status;
+            this.result = result;
+            this.note = note;
+            this.operatorUid = operatorUid;
+        }
+    }
+
 }

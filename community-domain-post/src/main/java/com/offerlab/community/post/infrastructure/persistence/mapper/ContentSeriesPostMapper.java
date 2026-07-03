@@ -75,6 +75,16 @@ public interface ContentSeriesPostMapper extends BaseMapper<ContentSeriesPostPO>
     List<ContentSeriesPostPO> selectActivePostsBySeriesId(@Param("seriesId") Long seriesId,
                                                           @Param("limit") int limit);
 
+    @Select("""
+            SELECT id
+            FROM t_content_series_post
+            WHERE series_id = #{seriesId}
+              AND post_id = #{postId}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    Long selectActiveRelationId(@Param("seriesId") Long seriesId, @Param("postId") Long postId);
+
     @Update("""
             UPDATE t_content_series_post
             SET is_deleted = 1,

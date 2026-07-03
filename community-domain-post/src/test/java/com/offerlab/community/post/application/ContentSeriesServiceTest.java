@@ -147,6 +147,33 @@ class ContentSeriesServiceTest {
     }
 
     @Test
+    void addPostRejectsNonPublicUnpublishedOrDeletedPostsBeforeLinking() {
+        SeriesMapperState seriesState = new SeriesMapperState(1);
+        SeriesPostMapperState relationState = new SeriesPostMapperState();
+        Map<Long, PostPO> posts = new LinkedHashMap<>();
+        ContentSeriesService service = newService(seriesState, relationState, posts);
+
+        ContentSeriesDTO created = service.create(createCmd("public-safe-series", 1, 1), 7L);
+        Long seriesId = created.getId();
+
+        posts.put(9101L, post(9101L, 7L, Post.STATUS_PUBLISHED, Post.VIS_SELF, Post.TYPE_NOTE, "private", "private"));
+        posts.put(9102L, post(9102L, 7L, Post.STATUS_DRAFT, Post.VIS_PUBLIC, Post.TYPE_NOTE, "draft", "draft"));
+        posts.put(9103L, deletedPost(9103L, 7L));
+
+        BizException privatePost = assertThrows(BizException.class,
+                () -> service.addPost(seriesId, addPostCmd(9101L), 7L));
+        BizException draftPost = assertThrows(BizException.class,
+                () -> service.addPost(seriesId, addPostCmd(9102L), 7L));
+        BizException deletedPost = assertThrows(BizException.class,
+                () -> service.addPost(seriesId, addPostCmd(9103L), 7L));
+
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), privatePost.getCode());
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), draftPost.getCode());
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), deletedPost.getCode());
+        assertTrue(relationState.activeLinks(seriesId).isEmpty());
+    }
+
+    @Test
     void publicDetailAndUserListOnlyExposePublicSeries() {
         SeriesMapperState seriesState = new SeriesMapperState(1);
         ContentSeriesService service = newService(seriesState, new SeriesPostMapperState(), new LinkedHashMap<>());
@@ -204,7 +231,7 @@ class ContentSeriesServiceTest {
     }
 
     @Test
-    void publicPostsUseReturnedItemAsCursorAndKeepEnrichedBriefs() {
+    void publicPostsUseSeriesOrderCursorAndKeepEnrichedBriefs() {
         SeriesMapperState seriesState = new SeriesMapperState(1);
         SeriesPostMapperState relationState = new SeriesPostMapperState();
         Map<Long, PostPO> posts = new LinkedHashMap<>();
@@ -214,19 +241,25 @@ class ContentSeriesServiceTest {
         posts.put(9003L, post(9003L, 7L, Post.STATUS_PUBLISHED, Post.VIS_PUBLIC, Post.TYPE_NOTE, "第三篇", "第三篇正文"));
         posts.put(9002L, post(9002L, 7L, Post.STATUS_PUBLISHED, Post.VIS_PUBLIC, Post.TYPE_RESOURCE, "第二篇", "第二篇正文"));
         posts.put(9001L, post(9001L, 7L, Post.STATUS_PUBLISHED, Post.VIS_PUBLIC, Post.TYPE_BLOG, "第一篇", "第一篇正文"));
-        service.addPost(created.getId(), addPostCmd(9001L), 7L);
-        service.addPost(created.getId(), addPostCmd(9002L), 7L);
-        service.addPost(created.getId(), addPostCmd(9003L), 7L);
+        service.addPost(created.getId(), addPostCmd(9003L, 0), 7L);
+        service.addPost(created.getId(), addPostCmd(9001L, 1), 7L);
+        service.addPost(created.getId(), addPostCmd(9002L, 2), 7L);
+
+        Long firstPageLastRelationId = relationState.activeLinks(created.getId()).stream()
+                .filter(link -> Objects.equals(link.getPostId(), 9001L))
+                .map(ContentSeriesPostPO::getId)
+                .findFirst()
+                .orElseThrow();
 
         PageResult<PostBriefDTO> firstPage = service.listPublicPosts(created.getId(), 0, 2);
         PageResult<PostBriefDTO> secondPage = service.listPublicPosts(created.getId(), Long.parseLong(firstPage.getNextCursor()), 2);
 
-        assertEquals(List.of(9003L, 9002L), firstPage.getItems().stream().map(PostBriefDTO::getId).toList());
-        assertEquals("9002", firstPage.getNextCursor());
+        assertEquals(List.of(9003L, 9001L), firstPage.getItems().stream().map(PostBriefDTO::getId).toList());
+        assertEquals(String.valueOf(firstPageLastRelationId), firstPage.getNextCursor());
         assertEquals(7L, firstPage.getItems().get(0).getAuthor().getUid());
         assertEquals(0L, firstPage.getItems().get(0).getCounter().getViewCount());
         assertEquals(1, firstPage.getItems().get(0).getDomain());
-        assertEquals(List.of(9001L), secondPage.getItems().stream().map(PostBriefDTO::getId).toList());
+        assertEquals(List.of(9002L), secondPage.getItems().stream().map(PostBriefDTO::getId).toList());
     }
 
     @Test
@@ -241,8 +274,8 @@ class ContentSeriesServiceTest {
         posts.put(9002L, post(9002L, 7L, Post.STATUS_PUBLISHED, Post.VIS_SELF, Post.TYPE_NOTE, "私密内容", "私密正文"));
         posts.put(9003L, post(9003L, 7L, Post.STATUS_DRAFT, Post.VIS_PUBLIC, Post.TYPE_NOTE, "草稿内容", "草稿正文"));
         service.addPost(created.getId(), addPostCmd(9001L), 7L);
-        service.addPost(created.getId(), addPostCmd(9002L), 7L);
-        service.addPost(created.getId(), addPostCmd(9003L), 7L);
+        relationState.addLegacyLink(created.getId(), 9002L, 1);
+        relationState.addLegacyLink(created.getId(), 9003L, 2);
 
         ContentSeriesDTO owned = service.listMine(7L).stream()
                 .filter(series -> Objects.equals(series.getId(), created.getId()))
@@ -333,6 +366,7 @@ class ContentSeriesServiceTest {
                     case "existsActiveRelation" -> relationState.exists((Long) args[0], (Long) args[1]) ? 1 : 0;
                     case "restoreDeletedRelation" -> relationState.restore((Long) args[0], (Long) args[1], (Integer) args[2]);
                     case "selectMaxSortOrder" -> relationState.maxSortOrder((Long) args[0]);
+                    case "selectActiveRelationId" -> relationState.activeRelationId((Long) args[0], (Long) args[1]);
                     case "insert" -> {
                         relationState.links.add((ContentSeriesPostPO) args[0]);
                         yield 1;
@@ -376,15 +410,29 @@ class ContentSeriesServiceTest {
                                                   long cursor,
                                                   int limit,
                                                   SeriesPostMapperState relationState) {
+        ContentSeriesPostPO cursorLink = cursor <= 0
+                ? null
+                : relationState.activeLinks(seriesId).stream()
+                .filter(link -> Objects.equals(link.getId(), cursor))
+                .findFirst()
+                .orElse(null);
         return relationState.activeLinks(seriesId).stream()
+                .filter(link -> cursorLink == null || compareSeriesLinks(link, cursorLink) > 0)
+                .sorted(ContentSeriesServiceTest::compareSeriesLinks)
                 .map(link -> posts.get(link.getPostId()))
                 .filter(Objects::nonNull)
                 .filter(post -> Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED))
                 .filter(post -> Objects.equals(post.getVisibility(), Post.VIS_PUBLIC))
-                .filter(post -> cursor <= 0 || post.getId() < cursor)
-                .sorted(Comparator.comparing(PostPO::getId).reversed())
                 .limit(limit)
                 .toList();
+    }
+
+    private static int compareSeriesLinks(ContentSeriesPostPO left, ContentSeriesPostPO right) {
+        int bySortOrder = Comparator.nullsLast(Integer::compareTo).compare(left.getSortOrder(), right.getSortOrder());
+        if (bySortOrder != 0) {
+            return bySortOrder;
+        }
+        return Comparator.nullsLast(Long::compareTo).compare(left.getId(), right.getId());
     }
 
     private static Map<Long, PostBriefDTO> briefMap(Map<Long, PostPO> posts, Collection<Long> ids) {
@@ -490,6 +538,12 @@ class ContentSeriesServiceTest {
         return cmd;
     }
 
+    private static ContentSeriesAddPostCmd addPostCmd(Long postId, Integer sortOrder) {
+        ContentSeriesAddPostCmd cmd = addPostCmd(postId);
+        cmd.setSortOrder(sortOrder);
+        return cmd;
+    }
+
     private static PostPO post(Long id, Long authorId, Integer status) {
         return post(id, authorId, status, Post.VIS_PUBLIC, Post.TYPE_NOTE, "标题" + id, "正文" + id);
     }
@@ -505,6 +559,12 @@ class ContentSeriesServiceTest {
         po.setPostStatus(status);
         po.setCreateTime(LocalDateTime.now());
         po.setUpdateTime(LocalDateTime.now());
+        return po;
+    }
+
+    private static PostPO deletedPost(Long id, Long authorId) {
+        PostPO po = post(id, authorId, Post.STATUS_PUBLISHED);
+        po.setIsDeleted(1);
         return po;
     }
 
@@ -544,6 +604,17 @@ class ContentSeriesServiceTest {
         private final int tableExists = 1;
         private final List<ContentSeriesPostPO> links = new ArrayList<>();
 
+        private void addLegacyLink(Long seriesId, Long postId, Integer sortOrder) {
+            ContentSeriesPostPO link = new ContentSeriesPostPO();
+            link.setId(10_000L + links.size());
+            link.setSeriesId(seriesId);
+            link.setPostId(postId);
+            link.setSortOrder(sortOrder);
+            link.setCreateTime(LocalDateTime.now());
+            link.setUpdateTime(LocalDateTime.now());
+            links.add(link);
+        }
+
         private boolean exists(Long seriesId, Long postId) {
             return activeLinks(seriesId).stream().anyMatch(link -> Objects.equals(link.getPostId(), postId));
         }
@@ -553,6 +624,14 @@ class ContentSeriesServiceTest {
                     .map(ContentSeriesPostPO::getSortOrder)
                     .filter(Objects::nonNull)
                     .max(Integer::compareTo)
+                    .orElse(null);
+        }
+
+        private Long activeRelationId(Long seriesId, Long postId) {
+            return activeLinks(seriesId).stream()
+                    .filter(link -> Objects.equals(link.getPostId(), postId))
+                    .map(ContentSeriesPostPO::getId)
+                    .findFirst()
                     .orElse(null);
         }
 

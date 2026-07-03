@@ -23,10 +23,14 @@ class SeoGuardTest {
 
         assertContains(service, "listPublicLinks");
         assertContains(service, "buildSitemapXml");
+        assertContains(service, "MAX_PUBLIC_POST_LINKS");
+        assertContains(service, "safeBuildSitemapXml");
         assertContains(service, "\"/\"");
         assertContains(service, "\"/explore\"");
         assertContains(service, "\"/about\"");
         assertContains(service, "\"/post/\"");
+        assertContains(service, "escapeXml(link.getUrl())");
+        assertContains(service, "stableSortPublicLinks");
 
         assertContains(controller, "@RequestMapping(\"/api/v1/seo\")");
         assertContains(controller, "@GetMapping(value = \"/sitemap.xml\"");
@@ -36,6 +40,15 @@ class SeoGuardTest {
         assertContains(mapper, "selectPublicSeoPosts");
         assertContains(mapper, "p.visibility = 1");
         assertContains(mapper, "p.post_status = 1");
+        assertContains(mapper, "p.is_deleted = 0");
+        assertContains(mapper, "t_post_extension");
+        assertContains(mapper, "NOT LIKE '%E2E%'");
+        assertContains(mapper, "NOT LIKE '%SMOKE%'");
+        assertContains(mapper, "NOT LIKE '%CODEX%'");
+        assertContains(mapper, "NOT LIKE '%TESTDATA%'");
+        assertContains(mapper, "NOT LIKE '%DEMO%'");
+        assertContains(mapper, "NOT LIKE '%FIXTURE%'");
+        assertContains(mapper, "ORDER BY p.id ASC");
     }
 
     private static String read(String path) throws Exception {

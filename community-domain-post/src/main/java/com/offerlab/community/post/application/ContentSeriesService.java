@@ -12,6 +12,7 @@ import com.offerlab.community.post.api.dto.ContentSeriesProgressDTO;
 import com.offerlab.community.post.api.dto.ContentSeriesUpdateCmd;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesPostMapper;
@@ -139,8 +140,11 @@ public class ContentSeriesService {
                 .map(post -> briefById.get(post.getId()))
                 .filter(Objects::nonNull)
                 .toList();
-        String nextCursor = hasMore && !pagePosts.isEmpty() ? String.valueOf(pagePosts.get(pagePosts.size() - 1).getId()) : null;
-        return PageResult.of(items, nextCursor, hasMore);
+        Long nextRelationId = hasMore && !pagePosts.isEmpty()
+                ? contentSeriesPostMapper.selectActiveRelationId(seriesId, pagePosts.get(pagePosts.size() - 1).getId())
+                : null;
+        String nextCursor = nextRelationId == null ? null : String.valueOf(nextRelationId);
+        return PageResult.of(items, nextCursor, hasMore && nextCursor != null);
     }
 
     @Transactional
@@ -169,6 +173,7 @@ public class ContentSeriesService {
         if (!Objects.equals(post.getAuthorId(), operatorUid)) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
+        requirePublicSeriesPost(post);
         if (contentSeriesPostMapper.existsActiveRelation(seriesId, postId) > 0) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION.getCode(), "Post already belongs to this series");
         }
@@ -331,6 +336,15 @@ public class ContentSeriesService {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         return cmd.getPostId();
+    }
+
+    private static void requirePublicSeriesPost(PostPO post) {
+        if (Objects.equals(post.getIsDeleted(), 1)
+                || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
+                || !Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "Only public published posts can be added to a content series");
+        }
     }
 
     private Integer resolveSortOrder(Long seriesId, Integer requestedSortOrder) {

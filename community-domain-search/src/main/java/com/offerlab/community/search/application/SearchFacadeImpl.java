@@ -18,11 +18,10 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.search.api.SearchFacade;
-import com.offerlab.community.user.api.UserFacade;
-import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -46,7 +45,6 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private static final int SUMMARY_LEN = 120;
     private static final int MYSQL_FALLBACK_MAX_SCAN = 200;
-    private static final List<String> FALLBACK_HOT = List.of("Java", "Spring", "Redis", "Kafka", "架构复盘", "踩坑记录");
 
     private final PostMapper postMapper;
     private final PostExtensionMapper extensionMapper;
@@ -55,7 +53,6 @@ public class SearchFacadeImpl implements SearchFacade {
     private final ElasticsearchHttpClient elasticsearch;
     private final PostSearchIndexer postSearchIndexer;
     private final PostFacade postFacade;
-    private final UserFacade userFacade;
     private final SearchAnalyticsService searchAnalyticsService;
     private final MigrationCheckService migrationCheckService;
 
@@ -107,17 +104,47 @@ public class SearchFacadeImpl implements SearchFacade {
                                                         boolean degraded, String fallbackReason, int scanLimit,
                                                         boolean includeTestData, String keyword, Integer type) {
         boolean syntheticQuery = PublicContentFilter.isSyntheticText(keyword);
+        attachHitReasons(result, keyword);
         result.withMetadata(source, degraded, fallbackReason, scanLimit)
                 .withDiagnostic("includeTestData", includeTestData)
                 .withDiagnostic("testDataFilterActive", !includeTestData)
                 .withDiagnostic("syntheticQuery", syntheticQuery)
-                .withDiagnostic("type", type);
+                .withDiagnostic("type", type)
+                .withDiagnostic("hitExplanation", hitExplanation(source));
         if (isEmptyPage(result) && syntheticQuery && !includeTestData) {
             result.withDiagnostic("emptyReason", "test_data_filtered_unless_includeTestData");
         } else if (isEmptyPage(result) && type != null) {
             result.withDiagnostic("emptyReason", "type_or_filter_no_match");
+        } else if (isEmptyPage(result)) {
+            result.withDiagnostic("emptyReason", "no_public_results_after_visibility_and_governance_filters");
+        }
+        if (isEmptyPage(result)) {
+            result.withDiagnostic("emptyHints", emptyHints(degraded, fallbackReason, includeTestData));
         }
         return result;
+    }
+
+    private List<String> emptyHints(boolean degraded, String fallbackReason, boolean includeTestData) {
+        List<String> hints = new ArrayList<>();
+        hints.add("broaden_keyword_or_filters");
+        hints.add("only_public_published_content_is_returned");
+        if (!includeTestData) {
+            hints.add("test_data_is_filtered");
+        }
+        if (degraded) {
+            hints.add("search_backend_degraded:" + clean(fallbackReason));
+        }
+        return hints;
+    }
+
+    private String hitExplanation(String source) {
+        if ("elasticsearch".equals(source)) {
+            return "elasticsearch_highlight_only";
+        }
+        if ("mysql".equals(source)) {
+            return "mysql_fallback_no_hit_explanation";
+        }
+        return "unavailable";
     }
 
     private boolean isEmptyPage(PageResult<PostBriefDTO> page) {
@@ -161,10 +188,7 @@ public class SearchFacadeImpl implements SearchFacade {
         if (!mysqlSuggestions.isEmpty()) {
             return mysqlSuggestions;
         }
-        return FALLBACK_HOT.stream()
-                .filter(item -> item.toLowerCase().contains(p.toLowerCase()))
-                .limit(limit)
-                .toList();
+        return List.of();
     }
 
     @Override
@@ -174,13 +198,14 @@ public class SearchFacadeImpl implements SearchFacade {
         activeTags().stream()
                 .sorted(Comparator.comparing(TagPO::getUseCount, Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(TagPO::getTagName)
-                .filter(name -> name != null && !name.isBlank() && !PublicContentFilter.isSyntheticText(name))
+                .filter(name -> name != null && !name.isBlank()
+                        && !PublicContentFilter.isSyntheticText(name)
+                        && !PublicContentFilter.isUnsafeSuggestionText(name))
                 .limit(limit)
                 .forEach(result::add);
         LocalDateTime since = LocalDateTime.now().minusDays(90);
         postMapper.countCompanies(since, limit).forEach(row -> addName(result, row.get("name")));
         postMapper.countPositions(since, limit).forEach(row -> addName(result, row.get("name")));
-        FALLBACK_HOT.forEach(result::add);
         return result.stream().limit(limit).toList();
     }
 
@@ -319,11 +344,80 @@ public class SearchFacadeImpl implements SearchFacade {
                 log.debug("stale elasticsearch post filtered: postId={}", esItem.getId());
                 continue;
             }
-            current.setHighlightTitle(esItem.getHighlightTitle());
-            current.setHighlightSummary(esItem.getHighlightSummary());
+            current.setHighlightTitle(verifiedHighlight(esItem.getHighlightTitle(), current.getTitle()).orElse(null));
+            current.setHighlightSummary(verifiedHighlight(esItem.getHighlightSummary(), current.getSummary()).orElse(null));
             visible.add(current);
         }
         return visible;
+    }
+
+    private Optional<String> verifiedHighlight(String highlight, String currentText) {
+        if (!StringUtils.hasText(highlight)) {
+            return Optional.empty();
+        }
+        String plainHighlight = clean(highlight.replaceAll("<[^>]+>", ""));
+        if (!StringUtils.hasText(plainHighlight) || !containsIgnoreCase(currentText, plainHighlight)) {
+            return Optional.empty();
+        }
+        return Optional.of(highlight);
+    }
+
+    private void attachHitReasons(PageResult<PostBriefDTO> result, String keyword) {
+        if (result == null || result.getItems() == null || result.getItems().isEmpty()) {
+            return;
+        }
+        for (PostBriefDTO post : result.getItems()) {
+            List<String> reasons = hitReasons(post, keyword);
+            if (!reasons.isEmpty()) {
+                post.setRecommendationReasons(reasons);
+            }
+        }
+    }
+
+    private List<String> hitReasons(PostBriefDTO post, String keyword) {
+        if (post == null) {
+            return List.of();
+        }
+        String kw = clean(keyword);
+        LinkedHashSet<String> reasons = new LinkedHashSet<>();
+        if (StringUtils.hasText(post.getHighlightTitle())) {
+            reasons.add("标题高亮命中");
+        }
+        if (StringUtils.hasText(post.getHighlightSummary())) {
+            reasons.add("摘要高亮命中");
+        }
+        if (!kw.isBlank()) {
+            if (containsIgnoreCase(post.getTitle(), kw)) {
+                reasons.add("标题包含搜索词");
+            }
+            if (containsIgnoreCase(post.getSummary(), kw)) {
+                reasons.add("摘要包含搜索词");
+            }
+            if (post.getTags() != null && post.getTags().stream().anyMatch(tag ->
+                    containsIgnoreCase(tag.getName(), kw)
+                            || (tag.getSynonyms() != null
+                            && tag.getSynonyms().stream().anyMatch(value -> containsIgnoreCase(value, kw))))) {
+                reasons.add("标签匹配搜索词");
+            }
+            JsonNode ext = parseExt(post.getExtJson());
+            if (containsIgnoreCase(ext.path("company").asText(null), kw)
+                    || containsIgnoreCase(ext.path("position").asText(null), kw)
+                    || containsIgnoreCase(ext.path("scenario").asText(null), kw)
+                    || containsIgnoreCase(ext.path("techStacks").asText(null), kw)) {
+                reasons.add("结构化字段匹配");
+            }
+        }
+        return reasons.stream()
+                .filter(reason -> !PublicContentFilter.isUnsafeSuggestionText(reason))
+                .limit(3)
+                .toList();
+    }
+
+    private boolean containsIgnoreCase(String value, String keyword) {
+        if (!StringUtils.hasText(value) || !StringUtils.hasText(keyword)) {
+            return false;
+        }
+        return value.toLowerCase().contains(keyword.toLowerCase());
     }
 
     private Optional<String> firstHighlight(JsonNode hit, String field) {
@@ -365,7 +459,10 @@ public class SearchFacadeImpl implements SearchFacade {
             for (JsonNode source : visibleCandidateSources.values()) {
                 if (PublicContentFilter.isSyntheticText(source.path("title").asText(null))
                         || PublicContentFilter.isSyntheticText(source.path("company").asText(null))
-                        || PublicContentFilter.isSyntheticText(source.path("position").asText(null))) {
+                        || PublicContentFilter.isSyntheticText(source.path("position").asText(null))
+                        || PublicContentFilter.isUnsafeSuggestionText(source.path("title").asText(null))
+                        || PublicContentFilter.isUnsafeSuggestionText(source.path("company").asText(null))
+                        || PublicContentFilter.isUnsafeSuggestionText(source.path("position").asText(null))) {
                     continue;
                 }
                 addIfMatches(result, source.path("company").asText(null), prefix);
@@ -434,7 +531,10 @@ public class SearchFacadeImpl implements SearchFacade {
             JsonNode ext = parseExt(extByPostId.get(post.getId()));
             if (PublicContentFilter.isSyntheticText(post.getTitle())
                     || PublicContentFilter.isSyntheticText(post.getContent())
-                    || PublicContentFilter.isSyntheticText(extByPostId.get(post.getId()))) {
+                    || PublicContentFilter.isSyntheticText(extByPostId.get(post.getId()))
+                    || PublicContentFilter.isUnsafeSuggestionText(post.getTitle())
+                    || PublicContentFilter.isUnsafeSuggestionText(post.getContent())
+                    || PublicContentFilter.isUnsafeSuggestionText(extByPostId.get(post.getId()))) {
                 continue;
             }
             addIfMatches(result, ext.path("company").asText(null), p);
@@ -482,7 +582,6 @@ public class SearchFacadeImpl implements SearchFacade {
         if (filtered.isEmpty()) {
             return PageResult.empty();
         }
-        boolean hasMore = filtered.size() > limit;
         Map<Long, List<TagDTO>> tags = tagsByPostIds(filtered.stream().map(PostPO::getId).toList());
         List<PostBriefDTO> items = filtered.stream().map(p -> PostBriefDTO.builder()
                 .id(p.getId())
@@ -505,6 +604,7 @@ public class SearchFacadeImpl implements SearchFacade {
                             .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
                     .toList();
         }
+        boolean hasMore = items.size() > limit;
         items = items.stream().limit(limit).toList();
         String next = hasMore && !items.isEmpty()
                 ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -513,31 +613,6 @@ public class SearchFacadeImpl implements SearchFacade {
                 .withDiagnostic("rawHits", candidates.size())
                 .withDiagnostic("visibleHits", items.size())
                 .withDiagnostic("syntheticFiltered", syntheticFiltered);
-    }
-
-    private List<PostBriefDTO> enrich(List<PostBriefDTO> posts) {
-        if (posts == null || posts.isEmpty()) {
-            return List.of();
-        }
-        Map<Long, PostCounterDTO> counters = postFacade.batchGetCounters(posts.stream().map(PostBriefDTO::getId).toList());
-        Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(posts.stream()
-                .map(PostBriefDTO::getAuthorId)
-                .collect(Collectors.toSet()));
-        posts.forEach(p -> {
-            p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
-            p.setAuthor(authors.get(p.getAuthorId()));
-        });
-        return posts;
-    }
-
-    private static PostCounterDTO emptyCounter(Long postId) {
-        return PostCounterDTO.builder()
-                .postId(postId)
-                .viewCount(0L)
-                .likeCount(0L)
-                .commentCount(0L)
-                .favoriteCount(0L)
-                .build();
     }
 
     private int fallbackScanLimit(int limit) {
@@ -629,7 +704,10 @@ public class SearchFacadeImpl implements SearchFacade {
     }
 
     private void addIfMatches(Set<String> result, String value, String prefix) {
-        if (value != null && !value.isBlank() && value.toLowerCase().contains(prefix.toLowerCase())) {
+        if (value != null
+                && !value.isBlank()
+                && value.toLowerCase().contains(prefix.toLowerCase())
+                && !PublicContentFilter.isUnsafeSuggestionText(value)) {
             result.add(value);
         }
     }
@@ -722,9 +800,20 @@ public class SearchFacadeImpl implements SearchFacade {
             return;
         }
         String text = String.valueOf(value).trim();
-        if (!text.isBlank() && !PublicContentFilter.isSyntheticText(text)) {
+        addSafeKeyword(result, text);
+    }
+
+    private void addSafeKeyword(Set<String> result, String text) {
+        if (isSafeSuggestionText(text)) {
             result.add(text);
         }
+    }
+
+    private boolean isSafeSuggestionText(String text) {
+        return text != null
+                && !text.isBlank()
+                && !PublicContentFilter.isSyntheticText(text)
+                && !PublicContentFilter.isUnsafeSuggestionText(text);
     }
 
     private double hotScore(PostBriefDTO post) {

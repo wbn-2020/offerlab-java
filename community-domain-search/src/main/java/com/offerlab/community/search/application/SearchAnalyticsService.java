@@ -1,7 +1,6 @@
 package com.offerlab.community.search.application;
 
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
-import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
 import com.offerlab.community.search.api.dto.SearchAnalyticsItemDTO;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchAnalyticsMapper;
@@ -86,6 +85,10 @@ public class SearchAnalyticsService {
         }
         int safeDays = Math.max(1, Math.min(days, 90));
         int safeLimit = Math.max(1, Math.min(limit, 50));
+        List<SearchAnalyticsItemDTO> prepClicks = mapper.topPrepClicks(safeDays, safeLimit, includeTestData)
+                .stream()
+                .map(this::toPrepItem)
+                .toList();
         List<SearchAnalyticsItemDTO> recommendClicks = mapper.topRecommendationClicks(safeDays, safeLimit, includeTestData)
                 .stream()
                 .map(this::toRecommendItem)
@@ -93,7 +96,7 @@ public class SearchAnalyticsService {
         return SearchAnalyticsDTO.builder()
                 .hotKeywords(mapper.topSearchKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
                 .noResultKeywords(mapper.topNoResultKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
-                .prepClicks(recommendClicks)
+                .prepClicks(prepClicks)
                 .recommendClicks(recommendClicks)
                 .build();
     }
@@ -102,7 +105,7 @@ public class SearchAnalyticsService {
         SearchAnalyticsEventPO event = new SearchAnalyticsEventPO();
         event.setId(idGenerator.nextId());
         event.setEventType(eventType);
-        event.setUid(UserContext.get());
+        event.setUid(null);
         return event;
     }
 

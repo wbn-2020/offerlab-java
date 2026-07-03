@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.KnowledgeRelationEdgeDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationGraphDTO;
@@ -53,7 +54,7 @@ public class KnowledgeRelationService {
         }
         if (topicId != null && topicId > 0) {
             CommunityTopicPO topic = topicMapper.selectById(topicId);
-            if (topic != null) {
+            if (isOnlineTopic(topic)) {
                 List<Long> topicTagIds = topicTagMapper.selectTagsByTopicId(topicId).stream()
                         .map(TagPO::getId)
                         .filter(Objects::nonNull)
@@ -89,7 +90,7 @@ public class KnowledgeRelationService {
                     .build());
             addEdge(edges, "domain:" + postDomain, "post:" + post.getId(), "domain_post");
             for (TagDTO tag : post.getTags() == null ? List.<TagDTO>of() : post.getTags()) {
-                if (tag == null || tag.getId() == null) {
+                if (!isPublicTag(tag)) {
                     continue;
                 }
                 tagIds.add(tag.getId());
@@ -104,7 +105,7 @@ public class KnowledgeRelationService {
 
         if (!tagIds.isEmpty()) {
             for (CommunityTopicPO topic : safeTopicsByTagIds(tagIds, safeLimit)) {
-                if (topic == null || topic.getId() == null) {
+                if (!isOnlineTopic(topic)) {
                     continue;
                 }
                 addNode(nodes, KnowledgeRelationNodeDTO.builder()
@@ -113,7 +114,7 @@ public class KnowledgeRelationService {
                         .label(topic.getTopicName())
                         .build());
                 for (TagPO tag : topicTagMapper.selectTagsByTopicId(topic.getId())) {
-                    if (tag == null || tag.getId() == null) {
+                    if (!isPublicTag(tag)) {
                         continue;
                     }
                     addNode(nodes, KnowledgeRelationNodeDTO.builder()
@@ -139,6 +140,33 @@ public class KnowledgeRelationService {
         } catch (RuntimeException e) {
             return List.of();
         }
+    }
+
+    private static boolean isOnlineTopic(CommunityTopicPO topic) {
+        return topic != null
+                && topic.getId() != null
+                && !Integer.valueOf(1).equals(topic.getIsDeleted())
+                && Integer.valueOf(1).equals(topic.getTopicStatus())
+                && !PublicContentFilter.isSyntheticText(topic.getTopicName())
+                && !PublicContentFilter.isUnsafeSuggestionText(topic.getTopicName());
+    }
+
+    private static boolean isPublicTag(TagDTO tag) {
+        return tag != null
+                && tag.getId() != null
+                && (tag.getStatus() == null || Integer.valueOf(1).equals(tag.getStatus()))
+                && tag.getMergeTargetId() == null
+                && !PublicContentFilter.isSyntheticText(tag.getName())
+                && !PublicContentFilter.isUnsafeSuggestionText(tag.getName());
+    }
+
+    private static boolean isPublicTag(TagPO tag) {
+        return tag != null
+                && tag.getId() != null
+                && (tag.getTagStatus() == null || Integer.valueOf(1).equals(tag.getTagStatus()))
+                && tag.getMergeTargetId() == null
+                && !PublicContentFilter.isSyntheticText(tag.getTagName())
+                && !PublicContentFilter.isUnsafeSuggestionText(tag.getTagName());
     }
 
     private static void addNode(Map<String, KnowledgeRelationNodeDTO> nodes, KnowledgeRelationNodeDTO node) {

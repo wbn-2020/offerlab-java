@@ -91,4 +91,65 @@ public interface GrowthInsightMapper {
     List<Map<String, Object>> selectRepresentativePosts(@Param("authorId") Long authorId,
                                                         @Param("since") LocalDateTime since,
                                                         @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.id AS postId,
+                   p.title AS title,
+                   COALESCE(e.domain, 1) AS domain,
+                   CASE WHEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1') THEN 1 ELSE 0 END AS featured,
+                   CAST(COALESCE(c.like_count, 0) + COALESCE(c.favorite_count, 0) + COALESCE(c.comment_count, 0) AS SIGNED) AS interactionCount
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.author_id = #{authorId}
+              AND p.id IN
+              <foreach collection="postIds" item="postId" open="(" separator="," close=")">
+                #{postId}
+              </foreach>
+            ORDER BY FIELD(p.id
+              <foreach collection="postIds" item="postId" separator=",">
+                , #{postId}
+              </foreach>
+            )
+            </script>
+            """)
+    List<Map<String, Object>> selectRepresentativePostsByIds(@Param("authorId") Long authorId,
+                                                             @Param("postIds") List<Long> postIds);
+
+    @Select("""
+            <script>
+            SELECT c.id AS commentId,
+                   p.id AS postId,
+                   p.title AS postTitle,
+                   LEFT(COALESCE(c.content, ''), 120) AS commentExcerpt,
+                   COALESCE(c.like_count, 0) AS likeCount,
+                   c.create_time AS createTime
+            FROM t_int_comment c
+            JOIN t_post_main p
+              ON p.id = c.post_id
+            LEFT JOIN t_post_extension e
+              ON e.post_id = p.id
+            WHERE c.is_deleted = 0
+              AND c.comment_status = 1
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.author_id = #{authorId}
+              AND (c.author_id IS NULL OR c.author_id != #{authorId})
+              AND c.create_time &gt;= #{since}
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+            ORDER BY COALESCE(c.like_count, 0) DESC, c.create_time DESC, c.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<Map<String, Object>> selectCreatorReplyOpportunities(@Param("authorId") Long authorId,
+                                                              @Param("since") LocalDateTime since,
+                                                              @Param("limit") int limit);
 }

@@ -67,20 +67,20 @@ public class PostController {
     private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
             new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "技术文章", "文章",
                     "沉淀架构设计、技术方案、源码阅读和工程实践。", "例如：Spring Cloud Gateway 鉴权链路实践", 40, false),
-            new PostContentTypeDTO(Post.TYPE_PROJECT_REVIEW, "PROJECT_REVIEW", "项目复盘", "复盘",
-                    "复盘项目背景、架构取舍、关键问题、结果和经验。", "例如：CodeCoachAI 从 0 到 1 的后端架构复盘", 80, false),
-            new PostContentTypeDTO(Post.TYPE_PITFALL, "PITFALL", "踩坑记录", "踩坑",
-                    "记录排查过程、根因、修复方案和防复发建议。", "例如：一次 Redis 缓存击穿的定位记录", 60, false),
-            new PostContentTypeDTO(Post.TYPE_COMMUNITY_QUESTION, "QUESTION", "问答求助", "问答",
-                    "提出具体技术问题，补充上下文和已尝试方案。", "例如：MyBatis 分页失效应该从哪里排查？", 30, false),
-            new PostContentTypeDTO(Post.TYPE_RESOURCE, "RESOURCE", "资源分享", "资源",
-                    "分享学习路线、工具、模板、开源项目和参考资料。", "例如：Java 后端工程化学习资源合集", 30, false),
-            new PostContentTypeDTO(Post.TYPE_NOTE, "NOTE", "经验笔记", "笔记",
-                    "记录小而有用的经验、命令、配置和处理手法。", "例如：一次慢 SQL 优化的复盘笔记", 30, false),
-            new PostContentTypeDTO(Post.TYPE_SYSTEM_DESIGN, "SYSTEM_DESIGN", "系统设计", "设计",
-                    "拆解架构目标、容量估算、模块边界、数据模型和取舍。", "例如：从 0 设计一个消息通知系统", 80, false),
-            new PostContentTypeDTO(Post.TYPE_INTERVIEW_RECAP, "INTERVIEW_RECAP", "面试复盘", "复盘",
-                    "沉淀面试问题、追问路径、表达卡点和后续补强计划。", "例如：某厂 Java 后端二面复盘", 80, false),
+            new PostContentTypeDTO(Post.TYPE_NOTE, "NOTE", "经验分享", "经验",
+                    "分享亲身经历、过程、踩坑、结果和可复用的做法。", "例如：我如何用两周时间调整作息并稳定完成学习计划", 30, false),
+            new PostContentTypeDTO(Post.TYPE_COMMUNITY_QUESTION, "QUESTION", "问题求助", "求助",
+                    "提出具体问题，补充背景、已尝试方法和期待获得的建议。", "例如：第一次租房看房时，哪些细节最容易被忽略？", 30, false),
+            new PostContentTypeDTO(Post.TYPE_RESOURCE, "RESOURCE", "资源推荐", "资源",
+                    "推荐工具、网站、书单、课程、模板、资料和使用建议。", "例如：我常用的 8 个免费效率工具和适合场景", 30, false),
+            new PostContentTypeDTO(Post.TYPE_SYSTEM_DESIGN, "SYSTEM_DESIGN", "观点讨论", "讨论",
+                    "表达观点、提出判断、分享观察，并邀请大家一起讨论。", "例如：远程办公真正考验的是自我管理还是团队协作？", 40, false),
+            new PostContentTypeDTO(Post.TYPE_PROJECT_REVIEW, "PROJECT_REVIEW", "复盘记录", "复盘",
+                    "复盘一次项目、活动、经历或决策，记录背景、过程、结果和下一步。", "例如：第一次组织线下读书会后的完整复盘", 60, false),
+            new PostContentTypeDTO(Post.TYPE_PITFALL, "PITFALL", "图文笔记", "笔记",
+                    "轻量记录灵感、日常观察、实用片段和图文式分享。", "例如：这周让我效率变高的 5 个小习惯", 30, false),
+            new PostContentTypeDTO(Post.TYPE_INTERVIEW_RECAP, "INTERVIEW_RECAP", "面试复盘", "面试",
+                    "职场经验频道保留的面试复盘类型，用于兼容历史内容和直达链路。", "例如：某次产品运营岗位面试后的表达复盘", 80, true),
             new PostContentTypeDTO(Post.TYPE_INTERVIEW, "LEGACY_INTERVIEW", "历史经验", "旧经验",
                     "旧版经验类型，保留给历史数据和知识卡链路。", "例如：某主题 Java 后端复盘", 120, true),
             new PostContentTypeDTO(Post.TYPE_BLOG, "LEGACY_BLOG", "技术博客", "博客",
@@ -297,6 +297,7 @@ public class PostController {
         @Size(max = 20)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
         @Size(max = 20)
+        // Legacy request contract: private List<String> tagNames
         private List<@Size(max = 32) String> tagNames;
         private Long draftId;
 

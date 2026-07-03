@@ -118,7 +118,7 @@ public class GrowthInsightService {
             long seriesCount = seriesCountByDomain.getOrDefault(domain, 0L);
             long avgContentLength = asLong(row.get("avgContentLength"));
             int activityScore = clampScore(postCount * 14 + activeDays * 9);
-            int influenceScore = clampScore(interactionCount * 3 + featuredCount * 12 + Math.round(viewCount * 0.15));
+            int responseScore = clampScore(interactionCount * 3 + featuredCount * 12 + Math.round(viewCount * 0.15));
             int depthScore = clampScore(featuredCount * 15 + seriesCount * 18 + Math.round(avgContentLength / 40D));
             int consistencyScore = clampScore(activeDays * 15 + (postCount >= 3 ? 10 : 0) + (seriesCount > 0 ? 10 : 0));
             result.add(GrowthProfileDTO.DomainProfileDTO.builder()
@@ -132,8 +132,8 @@ public class GrowthInsightService {
                     .dimensions(List.of(
                             dimension("activity", "Activity", activityScore,
                                     "Published " + postCount + " posts across " + activeDays + " active days"),
-                            dimension("influence", "Influence", influenceScore,
-                                    "Captured " + interactionCount + " interactions, " + viewCount + " views, and " + featuredCount + " featured posts"),
+                            dimension("visible_feedback", "Visible feedback", responseScore,
+                                    "Captured " + interactionCount + " visible interactions, " + viewCount + " views, and " + featuredCount + " featured posts"),
                             dimension("depth", "Depth", depthScore,
                                     "Average content length is about " + avgContentLength + " chars with " + seriesCount + " series links"),
                             dimension("consistency", "Consistency", consistencyScore,
@@ -239,7 +239,7 @@ public class GrowthInsightService {
         long totalPosts = currentRows.stream().mapToLong(row -> asLong(row.get("postCount"))).sum();
         if (currentRows.size() == 1 && strongestDomain != null) {
             actions.add("Bridge your " + PostDomain.fromCode(strongestDomain).getDisplayName()
-                    + " experience into another domain to seed cross-domain recommendations.");
+                    + " experience into another domain as a follow-up direction readers can evaluate in context.");
         }
         if (strongestDomain != null && seriesCountByDomain.getOrDefault(strongestDomain, 0L) == 0L && totalPosts >= 2) {
             actions.add("Group your strongest " + PostDomain.fromCode(strongestDomain).getDisplayName()
@@ -321,7 +321,7 @@ public class GrowthInsightService {
                                                           boolean crossDomainConsumeReady) {
         List<String> reasons = baseDegradationReasons(growthEventReady, seriesReady);
         if (!crossDomainConsumeReady) {
-            reasons.add("cross-domain consume metrics fallback: trusted recommendation event chain not calibrated");
+            reasons.add("cross-domain consume metrics fallback: public feedback event chain not calibrated");
         }
         return reasons;
     }
