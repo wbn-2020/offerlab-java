@@ -1,6 +1,8 @@
 package com.offerlab.community.question.controller;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
@@ -81,13 +83,13 @@ public class QuestionController {
         query.setSort(sort);
         query.setPage(page);
         query.setPageSize(pageSize);
-        return Result.ok(questionFacade.searchQuestions(query, UserContext.get()));
+        return Result.ok(publicQuestionPage(questionFacade.searchQuestions(query, UserContext.get())));
     }
 
     @PublicApi
     @GetMapping("/questions/{id}")
     public Result<QuestionDetailDTO> detail(@PathVariable Long id) {
-        return Result.ok(questionFacade.getQuestionDetail(id, UserContext.get(), false));
+        return Result.ok(publicQuestionDetail(questionFacade.getQuestionDetail(id, UserContext.get(), false)));
     }
 
     @PostMapping("/questions/{id}/favorite")
@@ -105,13 +107,13 @@ public class QuestionController {
     @PutMapping("/questions/{id}/progress")
     @RateLimit(key = "'question:progress:' + #uid", rate = 120, per = 60)
     public Result<Map<String, Object>> progress(@PathVariable Long id, @Valid @RequestBody ProgressReq req) {
-        return Result.ok(questionFacade.updateProgress(id, UserContext.require(), req.getStatus()));
+        return disabledLegacyTrainingFeature();
     }
 
     @PutMapping("/questions/{id}/note")
     @RateLimit(key = "'question:note:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> note(@PathVariable Long id, @Valid @RequestBody NoteReq req) {
-        return Result.ok(questionFacade.updateNote(id, UserContext.require(), req.getNote(), req.getMistakeReason(), req.getAnswerDraft(), req.getStarStory()));
+        return disabledLegacyTrainingFeature();
     }
 
     @PublicApi
@@ -123,7 +125,7 @@ public class QuestionController {
     @PublicApi
     @GetMapping("/companies/{company}/prep-pack")
     public Result<CompanyPrepDTO> companyPrep(@PathVariable String company) {
-        return Result.ok(questionFacade.getCompanyPrep(company, UserContext.get()));
+        return disabledLegacyTrainingFeature();
     }
 
     @PublicApi
@@ -135,29 +137,89 @@ public class QuestionController {
 
     @GetMapping("/me/prep/overview")
     public Result<UserPrepOverviewDTO> myPrepOverview() {
-        return Result.ok(questionFacade.getMyPrepOverview(UserContext.require()));
+        return disabledLegacyTrainingFeature();
     }
 
     @GetMapping("/me/prep/weekly-report")
     public Result<UserWeeklyPrepReportDTO> myWeeklyPrepReport() {
-        return Result.ok(questionFacade.getMyWeeklyPrepReport(UserContext.require()));
+        return disabledLegacyTrainingFeature();
     }
 
     @GetMapping("/me/prep/targets")
     public Result<List<PrepTargetDTO>> myPrepTargets() {
-        return Result.ok(questionFacade.listPrepTargets(UserContext.require()));
+        return disabledLegacyTrainingFeature();
     }
 
     @PostMapping("/me/prep/targets")
     @RateLimit(key = "'prep:target:add:' + #uid", rate = 30, per = 60)
     public Result<PrepTargetDTO> addPrepTarget(@Valid @RequestBody PrepTargetCmd cmd) {
-        return Result.ok(questionFacade.addPrepTarget(UserContext.require(), cmd));
+        return disabledLegacyTrainingFeature();
     }
 
     @DeleteMapping("/me/prep/targets/{id}")
     @RateLimit(key = "'prep:target:delete:' + #uid", rate = 30, per = 60)
     public Result<Map<String, Object>> deletePrepTarget(@PathVariable Long id) {
-        return Result.ok(questionFacade.deletePrepTarget(UserContext.require(), id));
+        return disabledLegacyTrainingFeature();
+    }
+
+    private PageResult<QuestionDTO> publicQuestionPage(PageResult<QuestionDTO> page) {
+        if (page == null) {
+            return PageResult.empty();
+        }
+        return PageResult.<QuestionDTO>builder()
+                .items((page.getItems() == null ? List.<QuestionDTO>of() : page.getItems()).stream()
+                        .map(this::publicQuestion)
+                        .toList())
+                .nextCursor(page.getNextCursor())
+                .hasMore(page.getHasMore())
+                .total(page.getTotal())
+                .source(page.getSource())
+                .degraded(page.getDegraded())
+                .fallbackReason(page.getFallbackReason())
+                .scanLimit(page.getScanLimit())
+                .build();
+    }
+
+    private QuestionDetailDTO publicQuestionDetail(QuestionDetailDTO detail) {
+        if (detail == null) {
+            return null;
+        }
+        return QuestionDetailDTO.builder()
+                .question(publicQuestion(detail.getQuestion()))
+                .sourcePosts(detail.getSourcePosts())
+                .relatedQuestions((detail.getRelatedQuestions() == null ? List.<QuestionDTO>of() : detail.getRelatedQuestions()).stream()
+                        .map(this::publicQuestion)
+                        .toList())
+                .build();
+    }
+
+    private QuestionDTO publicQuestion(QuestionDTO question) {
+        if (question == null) {
+            return null;
+        }
+        return QuestionDTO.builder()
+                .id(question.getId())
+                .questionText(question.getQuestionText())
+                .highlightQuestionText(question.getHighlightQuestionText())
+                .answerHint(question.getAnswerHint())
+                .highlightAnswerHint(question.getHighlightAnswerHint())
+                .examPoint(question.getExamPoint())
+                .highlightExamPoint(question.getHighlightExamPoint())
+                .referenceAnswer(question.getReferenceAnswer())
+                .company(question.getCompany())
+                .position(question.getPosition())
+                .interviewRound(question.getInterviewRound())
+                .difficulty(question.getDifficulty())
+                .appearCount(question.getAppearCount())
+                .tags(question.getTags())
+                .sourcePostCount(question.getSourcePostCount())
+                .createTime(question.getCreateTime())
+                .updateTime(question.getUpdateTime())
+                .build();
+    }
+
+    private static <T> T disabledLegacyTrainingFeature() {
+        throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
     }
 
     @Data

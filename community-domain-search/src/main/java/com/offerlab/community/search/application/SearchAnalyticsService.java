@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -21,6 +22,11 @@ public class SearchAnalyticsService {
     private static final String EVENT_SEARCH = "SEARCH";
     private static final String EVENT_PREP_CLICK = "PREP_CLICK";
     private static final String EVENT_COMMUNITY_RECOMMEND_CLICK = "COMMUNITY_RECOMMEND_CLICK";
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("(?i)^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$");
+    private static final Pattern PHONE_PATTERN = Pattern.compile("^(?:\\+?\\d[\\d\\s().-]{7,}\\d)$");
+    private static final Pattern URL_PATTERN = Pattern.compile("(?i)^(?:https?://|www\\.)\\S+$");
+    private static final Pattern JWT_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{8,}$");
+    private static final Pattern TOKEN_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{24,}$");
 
     private final SearchAnalyticsMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
@@ -165,7 +171,19 @@ public class SearchAnalyticsService {
         if (text.isBlank()) {
             return null;
         }
+        if (looksSensitive(text)) {
+            return null;
+        }
         return text.length() <= maxLength ? text : text.substring(0, maxLength);
+    }
+
+    private static boolean looksSensitive(String text) {
+        String compact = text.replace(" ", "");
+        return EMAIL_PATTERN.matcher(text).find()
+                || PHONE_PATTERN.matcher(text).find()
+                || URL_PATTERN.matcher(text).find()
+                || JWT_PATTERN.matcher(text).find()
+                || TOKEN_PATTERN.matcher(compact).find();
     }
 
     private static String asText(Object value) {

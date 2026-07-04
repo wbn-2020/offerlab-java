@@ -67,7 +67,10 @@ public interface TagMapper extends BaseMapper<TagPO> {
             FROM (
                 SELECT r.post_id, t.id, t.tag_name, t.tag_type, t.use_count, t.is_official, t.tag_status, t.recommended, t.synonyms, t.merge_target_id
                 FROM t_post_tag_ref r
-                JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                JOIN t_tag t ON t.id = r.tag_id
+                    AND t.is_deleted = 0
+                    AND t.tag_status = 1
+                    AND t.merge_target_id IS NULL
                 WHERE r.post_id IN
                 <foreach collection="postIds" item="postId" open="(" separator="," close=")">
                     #{postId}

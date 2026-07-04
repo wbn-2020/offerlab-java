@@ -289,7 +289,7 @@ public class FeedFacadeImpl implements FeedFacade {
         for (long[] pair : idsAndScores) {
             PostBriefDTO p = posts.get(pair[0]);
             if (p == null || hiddenPostIds.contains(p.getId()) || !PublicContentFilter.isDistributablePost(p)) continue;
-            UserBriefDTO author = feedAuthor(p, authors);
+            UserBriefDTO author = feedAuthor(p, authors, viewerUid);
             PostCounterDTO counter = counters.get(p.getId());
             FeedItemVO.MyInteraction my = null;
             if (viewerUid != null) {
@@ -423,7 +423,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .collect(Collectors.toSet()));
         List<FeedItemVO> items = visiblePosts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
-                .author(feedAuthor(p, authors))
+                .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
                         .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
@@ -433,11 +433,14 @@ public class FeedFacadeImpl implements FeedFacade {
         return PageResult.of(items, nextCursor, hasMore);
     }
 
-    private UserBriefDTO feedAuthor(PostBriefDTO post, Map<Long, UserBriefDTO> authors) {
+    private UserBriefDTO feedAuthor(PostBriefDTO post, Map<Long, UserBriefDTO> authors, Long viewerUid) {
         if (post == null) {
             return null;
         }
-        return post.getAuthor() != null ? post.getAuthor() : authors.get(post.getAuthorId());
+        if (post.getAuthor() != null) {
+            return copyUserBrief(post.getAuthor());
+        }
+        return sanitizeAuthor(viewerUid, post.getAuthorId(), authors.get(post.getAuthorId()));
     }
 
     private PageResult<CrossDomainRecommendationVO> assembleCrossDomainPage(List<PostBriefDTO> posts,
@@ -465,7 +468,7 @@ public class FeedFacadeImpl implements FeedFacade {
             Integer targetDomain = effectiveDomain(post.getDomain());
             FeedItemVO feedItem = FeedItemVO.builder()
                     .post(post)
-                    .author(feedAuthor(post, authors))
+                    .author(feedAuthor(post, authors, viewerUid))
                     .counter(counter)
                     .recommendationReasons(reasons)
                     .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
@@ -503,7 +506,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .collect(Collectors.toSet()));
         List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
-                .author(authors.get(p.getAuthorId()))
+                .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
                 .recommendationReasons(recommendationReasons(p, counters.get(p.getId()), intent, publicPostCountByAuthor))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
@@ -512,6 +515,55 @@ public class FeedFacadeImpl implements FeedFacade {
                         .build())
                 .build()).toList();
         return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private UserBriefDTO sanitizeAuthor(Long viewerUid, Long targetUid, UserBriefDTO dto) {
+        UserBriefDTO copy = copyUserBrief(dto);
+        if (copy == null) {
+            return null;
+        }
+        Long effectiveTargetUid = targetUid != null ? targetUid : copy.getUid();
+        if (effectiveTargetUid == null) {
+            copy.setProfileVisible(false);
+            copy.setIntentVisible(false);
+            copy.setIsFollowing(false);
+            return copy;
+        }
+        boolean profileVisible = userFacade.isProfileVisible(viewerUid, effectiveTargetUid);
+        copy.setProfileVisible(profileVisible);
+        copy.setIntentVisible(userFacade.isIntentVisible(viewerUid, effectiveTargetUid));
+        if (viewerUid != null && effectiveTargetUid != null && !viewerUid.equals(effectiveTargetUid)) {
+            copy.setIsFollowing(userFacade.isFollowing(viewerUid, effectiveTargetUid));
+        }
+        if (!profileVisible) {
+            copy.setNickname("");
+            copy.setAvatarUrl("");
+            copy.setBio("");
+            copy.setFollowerCount(0L);
+            copy.setFollowingCount(0L);
+            copy.setPostCount(0L);
+            copy.setPrivacyReason("PROFILE_RESTRICTED");
+        }
+        return copy;
+    }
+
+    private static UserBriefDTO copyUserBrief(UserBriefDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        return UserBriefDTO.builder()
+                .uid(dto.getUid())
+                .nickname(dto.getNickname())
+                .avatarUrl(dto.getAvatarUrl())
+                .bio(dto.getBio())
+                .followerCount(dto.getFollowerCount())
+                .followingCount(dto.getFollowingCount())
+                .postCount(dto.getPostCount())
+                .isFollowing(dto.getIsFollowing())
+                .profileVisible(dto.getProfileVisible())
+                .intentVisible(dto.getIntentVisible())
+                .privacyReason(dto.getPrivacyReason())
+                .build();
     }
 
     private PageResult<CrossDomainRecommendationVO> fallbackCrossDomainRecommendations(Long uid,

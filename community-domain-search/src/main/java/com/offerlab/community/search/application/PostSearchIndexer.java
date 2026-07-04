@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
+import com.offerlab.community.post.api.PublicContentFilter;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -74,7 +76,16 @@ public class PostSearchIndexer {
                 || !Integer.valueOf(Post.VIS_PUBLIC).equals(post.getVisibility())) {
             return deletePostDocument(postId);
         }
-        boolean ok = elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(postId), toDocument(post));
+        PostExtensionPO extension = extensionMapper.selectById(postId);
+        PostCounterPO counter = counterMapper.selectById(postId);
+        List<TagDTO> tags = selectTagsByPostIds(List.of(postId)).stream()
+                .map(this::toTagDto)
+                .toList();
+        if (!isDistributableForIndex(post, extension, tags)) {
+            return deletePostDocument(postId);
+        }
+        boolean ok = elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(postId),
+                toDocument(post, extension, counter, tags));
         if (ok) {
             log.debug("post indexed to elasticsearch: postId={}", postId);
         }
@@ -208,11 +219,13 @@ public class PostSearchIndexer {
                 if (post.getId() != null && post.getId() > lastId) {
                     lastId = post.getId();
                 }
+                PostExtensionPO extension = extensions.get(post.getId());
+                List<TagDTO> postTags = tags.getOrDefault(post.getId(), List.of());
+                if (!isDistributableForIndex(post, extension, postTags)) {
+                    continue;
+                }
                 if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()),
-                        toDocument(post,
-                                extensions.get(post.getId()),
-                                counters.get(post.getId()),
-                                tags.getOrDefault(post.getId(), List.of())))) {
+                        toDocument(post, extension, counters.get(post.getId()), postTags))) {
                     indexed++;
                 } else {
                     failed++;
@@ -241,6 +254,21 @@ public class PostSearchIndexer {
                 .map(this::toTagDto)
                 .toList();
         return toDocument(post, extension, counter, tags);
+    }
+
+    private boolean isDistributableForIndex(PostPO post, PostExtensionPO extension, List<TagDTO> tags) {
+        if (post == null || post.getId() == null) {
+            return false;
+        }
+        PostBriefDTO brief = PostBriefDTO.builder()
+                .id(post.getId())
+                .title(post.getTitle())
+                .summary(summary(post.getContent()))
+                .extJson(extension == null ? null : extension.getExtJson())
+                .tags(tags == null ? List.of() : tags)
+                .build();
+        return PublicContentFilter.isDistributablePost(brief)
+                && !PublicContentFilter.isSyntheticText(post.getContent());
     }
 
     private Map<String, Object> toDocument(PostPO post, PostExtensionPO extension, PostCounterPO counter, List<TagDTO> tags) {

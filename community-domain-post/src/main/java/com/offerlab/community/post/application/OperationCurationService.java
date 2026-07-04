@@ -473,7 +473,7 @@ public class OperationCurationService {
                         .sourceId(item.getSourceId())
                         .status(item.getItemStatus())
                         .sortOrder(item.getSortOrder())
-                        .note(item.getNote())
+                        .note(publicOnly ? null : item.getNote())
                         .build();
             }
         } else if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
@@ -496,7 +496,7 @@ public class OperationCurationService {
                 .sourceId(item.getSourceId())
                 .status(item.getItemStatus())
                 .sortOrder(item.getSortOrder())
-                .note(item.getNote())
+                .note(publicOnly ? null : item.getNote())
                 .post(post)
                 .topic(topic)
                 .createTime(item.getCreateTime())

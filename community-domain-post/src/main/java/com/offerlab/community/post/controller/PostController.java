@@ -183,12 +183,11 @@ public class PostController {
                                                  @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(required = false) Boolean featured,
                                                  @RequestParam(required = false) Integer domain,
-                                                 @RequestParam(defaultValue = "false") boolean includeTestData,
                                                  @RequestParam(defaultValue = "0") long cursor,
                                                  @RequestParam(defaultValue = "20") int size) {
         Long effectiveTagId = tagId != null ? tagId : tag;
         return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured,
-                requireOptionalDomain(domain), cursor, size, includeTestData));
+                requireOptionalDomain(domain), cursor, size, false).publicView());
     }
 
     @PublicApi

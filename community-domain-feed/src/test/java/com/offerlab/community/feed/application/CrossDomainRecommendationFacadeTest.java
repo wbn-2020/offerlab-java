@@ -262,7 +262,7 @@ class CrossDomainRecommendationFacadeTest {
 
         @Override public UserBriefDTO getUserBrief(Long uid) { throw unsupported(); }
         @Override public Map<String, Long> findUserIdsByNicknames(Collection<String> nicknames) { throw unsupported(); }
-        @Override public boolean isFollowing(Long fromUid, Long toUid) { throw unsupported(); }
+        @Override public boolean isFollowing(Long fromUid, Long toUid) { return false; }
         @Override public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) { throw unsupported(); }
         @Override public List<Long> getFollowerIds(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<FollowCursorDTO> getFollowerPage(Long uid, long cursor, int size) { throw unsupported(); }
@@ -270,8 +270,8 @@ class CrossDomainRecommendationFacadeTest {
         @Override public List<FollowCursorDTO> getFollowingPage(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public long getFollowerCount(Long uid) { throw unsupported(); }
         @Override public boolean isBigV(Long uid) { throw unsupported(); }
-        @Override public boolean isProfileVisible(Long viewerUid, Long targetUid) { throw unsupported(); }
-        @Override public boolean isIntentVisible(Long viewerUid, Long targetUid) { throw unsupported(); }
+        @Override public boolean isProfileVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
+        @Override public boolean isIntentVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
         @Override public boolean isSearchable(Long uid) { throw unsupported(); }
         @Override public boolean allowsInteractionNotification(Long uid) { throw unsupported(); }
         @Override public boolean allowsSystemNotification(Long uid) { throw unsupported(); }

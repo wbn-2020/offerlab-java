@@ -89,7 +89,9 @@ public final class PublicContentFilter {
         return compact.contains("E2E")
                 || compact.contains("SMOKE")
                 || compact.contains("CODEX")
-                || compact.contains("TESTDATA");
+                || compact.contains("TESTDATA")
+                || compact.contains("DEMO")
+                || compact.contains("FIXTURE");
     }
 
     public static boolean isUnsafeSuggestionText(String value) {

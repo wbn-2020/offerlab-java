@@ -285,6 +285,10 @@ public interface PostMapper extends BaseMapper<PostPO> {
             </if>
             <if test="tagId != null">
             JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
+            JOIN t_tag t_filter ON t_filter.id = r.tag_id
+                AND t_filter.is_deleted = 0
+                AND t_filter.tag_status = 1
+                AND t_filter.merge_target_id IS NULL
             </if>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
@@ -451,9 +455,16 @@ public interface PostMapper extends BaseMapper<PostPO> {
     @Select("""
             SELECT p.*
             FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%DEMO%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%FIXTURE%'
               AND p.id > #{lastId}
             ORDER BY p.id ASC
             LIMIT #{limit}

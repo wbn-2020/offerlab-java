@@ -425,7 +425,7 @@ public class PostFacadeImpl implements PostFacade {
             return false;
         }
         Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.stream().map(Post::getId).toList());
-        Map<Long, com.offerlab.community.user.api.dto.UserBriefDTO> authors = userFacade.batchGetUserBriefs(
+        Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(
                 posts.stream()
                         .map(Post::getAuthorId)
                         .filter(Objects::nonNull)
@@ -433,7 +433,7 @@ public class PostFacadeImpl implements PostFacade {
         int visible = 0;
         for (Post post : posts) {
             PostBriefDTO brief = toBrief(post, tags.getOrDefault(post.getId(), List.of()));
-            brief.setAuthor(authors.get(post.getAuthorId()));
+            brief.setAuthor(sanitizeAuthor(null, post.getAuthorId(), authors.get(post.getAuthorId())));
             if (!PublicContentFilter.isSyntheticPost(brief) && ++visible >= pageSize) {
                 return true;
             }
@@ -491,7 +491,7 @@ public class PostFacadeImpl implements PostFacade {
         posts.forEach(p -> {
             p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
             boolean revealAuthor = !isAnonymousPost(p) || canViewRealAuthor(viewerUid, p.getAuthorId());
-            p.setAuthor(revealAuthor ? authors.get(p.getAuthorId()) : anonymousAuthor());
+            p.setAuthor(revealAuthor ? sanitizeAuthor(viewerUid, p.getAuthorId(), authors.get(p.getAuthorId())) : anonymousAuthor());
             if (!revealAuthor) {
                 p.setAuthorId(ANONYMOUS_AUTHOR_ID);
             }
@@ -506,7 +506,7 @@ public class PostFacadeImpl implements PostFacade {
         return PostDTO.builder()
                 .id(dto.getId())
                 .authorId(revealAuthor ? dto.getAuthorId() : ANONYMOUS_AUTHOR_ID)
-                .author(revealAuthor ? userFacade.getUserBrief(dto.getAuthorId()) : anonymousAuthor())
+                .author(revealAuthor ? sanitizeAuthor(viewerUid, dto.getAuthorId(), userFacade.getUserBrief(dto.getAuthorId())) : anonymousAuthor())
                 .postType(dto.getPostType())
                 .title(dto.getTitle())
                 .content(dto.getContent())
@@ -638,6 +638,55 @@ public class PostFacadeImpl implements PostFacade {
                 .build();
     }
 
+    private UserBriefDTO sanitizeAuthor(Long viewerUid, Long targetUid, UserBriefDTO dto) {
+        UserBriefDTO copy = copyUserBrief(dto);
+        if (copy == null) {
+            return null;
+        }
+        Long effectiveTargetUid = targetUid != null ? targetUid : copy.getUid();
+        if (effectiveTargetUid == null) {
+            copy.setProfileVisible(false);
+            copy.setIntentVisible(false);
+            copy.setIsFollowing(false);
+            return copy;
+        }
+        boolean profileVisible = userFacade.isProfileVisible(viewerUid, effectiveTargetUid);
+        copy.setProfileVisible(profileVisible);
+        copy.setIntentVisible(userFacade.isIntentVisible(viewerUid, effectiveTargetUid));
+        if (viewerUid != null && effectiveTargetUid != null && !viewerUid.equals(effectiveTargetUid)) {
+            copy.setIsFollowing(userFacade.isFollowing(viewerUid, effectiveTargetUid));
+        }
+        if (!profileVisible) {
+            copy.setNickname("");
+            copy.setAvatarUrl("");
+            copy.setBio("");
+            copy.setFollowerCount(0L);
+            copy.setFollowingCount(0L);
+            copy.setPostCount(0L);
+            copy.setPrivacyReason("PROFILE_RESTRICTED");
+        }
+        return copy;
+    }
+
+    private static UserBriefDTO copyUserBrief(UserBriefDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        return UserBriefDTO.builder()
+                .uid(dto.getUid())
+                .nickname(dto.getNickname())
+                .avatarUrl(dto.getAvatarUrl())
+                .bio(dto.getBio())
+                .followerCount(dto.getFollowerCount())
+                .followingCount(dto.getFollowingCount())
+                .postCount(dto.getPostCount())
+                .isFollowing(dto.getIsFollowing())
+                .profileVisible(dto.getProfileVisible())
+                .intentVisible(dto.getIntentVisible())
+                .privacyReason(dto.getPrivacyReason())
+                .build();
+    }
+
     private PostCounterDTO toCounterDto(PostCounterRedis.CounterValue value) {
         return PostCounterDTO.builder()
                 .postId(value.postId())
@@ -688,10 +737,7 @@ public class PostFacadeImpl implements PostFacade {
                 .tagType(tag.getTagType())
                 .useCount(tag.getUseCount())
                 .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
-                .status(tag.getTagStatus() == null ? 1 : tag.getTagStatus())
                 .recommended(tag.getRecommended() != null && tag.getRecommended() == 1)
-                .mergeTargetId(tag.getMergeTargetId())
-                .synonyms(parseSynonyms(tag.getSynonyms()))
                 .build();
     }
 
@@ -704,10 +750,7 @@ public class PostFacadeImpl implements PostFacade {
                 .tagType(tag.getTagType())
                 .useCount(tag.getUseCount())
                 .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
-                .status(tag.getTagStatus() == null ? 1 : tag.getTagStatus())
                 .recommended(tag.getRecommended() != null && tag.getRecommended() == 1)
-                .mergeTargetId(tag.getMergeTargetId())
-                .synonyms(parseSynonyms(tag.getSynonyms()))
                 .build();
     }
 
