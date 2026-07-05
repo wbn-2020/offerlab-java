@@ -1,7 +1,9 @@
 package com.offerlab.community.analytics.controller;
 
+import com.offerlab.community.analytics.api.dto.CreatorCurationFeedbackDTO;
 import com.offerlab.community.analytics.api.dto.CreatorGrowthWorkspaceDTO;
 import com.offerlab.community.analytics.api.dto.CreatorRepresentativePostCmd;
+import com.offerlab.community.analytics.application.CreatorCurationFeedbackService;
 import com.offerlab.community.analytics.application.CreatorGrowthService;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
@@ -21,6 +23,7 @@ import java.util.List;
 public class CreatorGrowthController {
 
     private final CreatorGrowthService creatorGrowthService;
+    private final CreatorCurationFeedbackService creatorCurationFeedbackService;
 
     @GetMapping("/workspace")
     public Result<CreatorGrowthWorkspaceDTO> workspace() {
@@ -30,6 +33,11 @@ public class CreatorGrowthController {
     @GetMapping("/feedback-summary")
     public Result<CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO> feedbackSummary() {
         return Result.ok(creatorGrowthService.feedbackSummary(UserContext.require()));
+    }
+
+    @GetMapping("/curation-feedback")
+    public Result<CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO> curationFeedback() {
+        return Result.ok(creatorCurationFeedbackService.summary(UserContext.require()));
     }
 
     @GetMapping("/topic-ideas")

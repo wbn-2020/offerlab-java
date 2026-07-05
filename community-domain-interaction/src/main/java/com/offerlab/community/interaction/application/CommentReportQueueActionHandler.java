@@ -1,18 +1,21 @@
 package com.offerlab.community.interaction.application;
 
 import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
-import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.util.Locale;
 
 @Component
-@RequiredArgsConstructor
 public class CommentReportQueueActionHandler implements ReviewQueueSourceActionHandler {
 
     private static final String SOURCE_TYPE = "COMMENT_REPORT";
 
     private final CommentReportService reportService;
+
+    public CommentReportQueueActionHandler(@Lazy CommentReportService reportService) {
+        this.reportService = reportService;
+    }
 
     @Override
     public boolean supports(String sourceType) {

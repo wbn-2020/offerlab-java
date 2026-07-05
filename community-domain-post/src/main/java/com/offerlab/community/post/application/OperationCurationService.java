@@ -5,8 +5,10 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.post.api.CreatorCurationFeedbackFacade;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.PublicContentFilter;
+import com.offerlab.community.post.api.dto.OperationCurationFeedbackDTO;
 import com.offerlab.community.post.api.dto.OperationCandidateDTO;
 import com.offerlab.community.post.api.dto.OperationCurationItemCmd;
 import com.offerlab.community.post.api.dto.OperationCurationItemDTO;
@@ -19,6 +21,7 @@ import com.offerlab.community.post.api.dto.OperationTopicDTO;
 import com.offerlab.community.post.api.dto.OperationTopicSectionCmd;
 import com.offerlab.community.post.api.dto.OperationTopicSectionDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import com.offerlab.community.post.api.event.OperationCurationSelectedEvent;
 import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.OperationCurationItemMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.OperationSlotItemMapper;
@@ -33,6 +36,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicP
 import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicSectionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -40,8 +44,9 @@ import org.springframework.util.StringUtils;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -50,7 +55,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-public class OperationCurationService {
+public class OperationCurationService implements CreatorCurationFeedbackFacade {
     public static final String SOURCE_POST = "POST";
     public static final String SOURCE_OPERATION_TOPIC = "OPERATION_TOPIC";
     public static final String STATUS_DRAFT = "DRAFT";
@@ -61,8 +66,18 @@ public class OperationCurationService {
     public static final String ITEM_PAUSED = "PAUSED";
     public static final String TYPE_TOPIC = "TOPIC";
     public static final String TYPE_EVENT = "EVENT";
+    public static final String HOME_FEATURED_SLOT_CODE = "HOME_FEATURED";
+    public static final String DISCOVERY_FEATURED_TOPICS_SLOT_CODE = "DISCOVERY_FEATURED_TOPICS";
+    private static final String OPERATION_SOURCE_REMOTE = "remote";
+    private static final String PLACEMENT_SLOT = "SLOT";
+    private static final String PLACEMENT_TOPIC = "TOPIC";
+    private static final String FEEDBACK_ENTRANCE_PREFIX = "/growth/profile";
 
     private static final int MAX_OPERATION_SLOTS = 2;
+    private static final List<String> SUPPORTED_OPERATION_SLOT_CODES = List.of(
+            HOME_FEATURED_SLOT_CODE,
+            DISCOVERY_FEATURED_TOPICS_SLOT_CODE
+    );
     private static final int MIN_SLOT_LIMIT = 3;
     private static final int MAX_SLOT_LIMIT = 5;
     private static final int MAX_ADMIN_LIST = 100;
@@ -78,6 +93,7 @@ public class OperationCurationService {
     private final AdminAuditService adminAuditService;
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     public List<OperationCandidateDTO> listCandidates(String keyword, Integer domain, Integer postType, int limit) {
         Integer activeDomain = requireOptionalDomain(domain);
@@ -108,6 +124,42 @@ public class OperationCurationService {
         return items.stream()
                 .map(item -> toCurationDto(item, posts.get(item.getSourceId())))
                 .filter(item -> !SOURCE_POST.equals(item.getSourceType()) || PublicContentFilter.isDistributablePost(item.getPost()))
+                .toList();
+    }
+
+    @Override
+    public List<OperationCurationFeedbackDTO> listCreatorCurationFeedback(Long authorUid, int limit) {
+        requireId(authorUid);
+        int safeLimit = adminLimit(limit <= 0 ? 20 : limit);
+        Map<String, OperationCurationFeedbackDTO> feedback = new LinkedHashMap<>();
+        for (OperationSlotPO slot : slotMapper.listSlots(STATUS_PUBLISHED, MAX_ADMIN_LIST)) {
+            if (!inWindow(slot.getStartsAt(), slot.getEndsAt())) {
+                continue;
+            }
+            OperationSlotDTO snapshot = filterSlotSnapshot(copySlotSnapshot(readSlotSnapshot(slot.getPublishedSnapshotJson())));
+            if (snapshot == null || !isRealRemotePlacement(snapshot.getSource(), snapshot.getFallbackReason())) {
+                continue;
+            }
+            for (OperationSlotItemDTO item : snapshot.getItems() == null ? List.<OperationSlotItemDTO>of() : snapshot.getItems()) {
+                addSlotFeedback(feedback, authorUid, slot, item);
+            }
+        }
+        for (OperationTopicPO topic : topicMapper.listTopics(STATUS_PUBLISHED, null, null, MAX_ADMIN_LIST)) {
+            if (!inWindow(topic.getStartsAt(), topic.getEndsAt())) {
+                continue;
+            }
+            OperationTopicDTO snapshot = filterTopicSnapshot(copyTopicSnapshot(readSnapshot(topic.getPublishedSnapshotJson())));
+            if (snapshot == null) {
+                continue;
+            }
+            for (OperationTopicSectionDTO section : snapshot.getSections() == null ? List.<OperationTopicSectionDTO>of() : snapshot.getSections()) {
+                addTopicFeedback(feedback, authorUid, topic, snapshot, section);
+            }
+        }
+        return feedback.values().stream()
+                .sorted(Comparator.comparing(OperationCurationFeedbackDTO::getUpdateTime,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(safeLimit)
                 .toList();
     }
 
@@ -160,12 +212,16 @@ public class OperationCurationService {
 
     public OperationSlotDTO getPublicSlot(String slotCode, int limit) {
         OperationSlotPO slot = slotMapper.selectByCode(requireCode(slotCode, 64));
+        requireSupportedOperationSlot(slot == null ? slotCode : slot.getSlotCode());
         if (slot == null || !STATUS_PUBLISHED.equals(slot.getSlotStatus()) || !inWindow(slot.getStartsAt(), slot.getEndsAt())) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         int displayLimit = slotLimit(limit <= 0 ? slot.getDefaultLimit() : limit);
-        List<OperationSlotItemPO> items = slotItemMapper.listBySlot(slot.getId(), ITEM_ACTIVE, MAX_ADMIN_LIST);
-        OperationSlotDTO dto = toSlotDto(slot, items, true);
+        OperationSlotDTO snapshot = readSlotSnapshot(slot.getPublishedSnapshotJson());
+        OperationSlotDTO dto = snapshot == null ? null : filterSlotSnapshot(copySlotSnapshot(snapshot));
+        if (dto == null || dto.getItems() == null || dto.getItems().isEmpty()) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         dto.setItems(dto.getItems().stream().limit(displayLimit).toList());
         return dto;
     }
@@ -173,6 +229,7 @@ public class OperationCurationService {
     @Transactional
     public OperationSlotDTO upsertSlot(OperationSlotCmd cmd, Long operatorUid) {
         String code = requireCode(cmd == null ? null : cmd.getSlotCode(), 64);
+        requireSupportedOperationSlot(code);
         OperationSlotPO existing = slotMapper.selectByCode(code);
         if (existing == null && slotMapper.countActiveRows() >= MAX_OPERATION_SLOTS) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "operation slots are limited to two in P0");
@@ -186,7 +243,8 @@ public class OperationCurationService {
         }
         po.setSlotName(requireCleanText(cmd.getName(), 64, "slot name required"));
         po.setDescription(limit(clean(cmd.getDescription()), 500));
-        po.setSlotStatus(normalizeWorkflowStatus(cmd.getStatus(), false));
+        String lifecycleStatus = existing == null ? STATUS_DRAFT : existing.getSlotStatus();
+        po.setSlotStatus(lifecycleStatus);
         po.setSortOrder(cmd.getSortOrder() == null ? 100 : cmd.getSortOrder());
         po.setDefaultLimit(slotLimit(cmd.getDefaultLimit()));
         po.setStartsAt(cmd.getStartsAt());
@@ -194,6 +252,9 @@ public class OperationCurationService {
         po.setUpdatedBy(operatorUid);
         if (!StringUtils.hasText(po.getPreviewToken())) {
             po.setPreviewToken(token());
+        }
+        if (po.getCurrentVersion() == null) {
+            po.setCurrentVersion(0);
         }
         validateDisplayText(po.getSlotName(), po.getDescription());
         if (existing == null) {
@@ -210,6 +271,7 @@ public class OperationCurationService {
     @Transactional
     public OperationSlotItemDTO upsertSlotItem(Long slotId, OperationSlotItemCmd cmd, Long operatorUid) {
         OperationSlotPO slot = requireSlot(slotId);
+        requireSupportedOperationSlot(slot.getSlotCode());
         String sourceType = normalizeSourceType(cmd == null ? null : cmd.getSourceType(), false);
         Long sourceId = requireId(cmd == null ? null : cmd.getSourceId());
         validateSourceOperable(sourceType, sourceId, SOURCE_OPERATION_TOPIC.equals(sourceType));
@@ -244,9 +306,86 @@ public class OperationCurationService {
         if (existing == null || existing.getIsDeleted() != null && existing.getIsDeleted() == 1) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        OperationSlotPO slot = requireSlot(existing.getSlotId());
+        requireSupportedOperationSlot(slot.getSlotCode());
         slotItemMapper.deleteById(itemId);
         adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_ITEM_DELETE",
                 "OPERATION_SLOT_ITEM", itemId, existing, Map.of("deleted", true), limit(clean(note), 500));
+    }
+
+    @Transactional
+    public OperationSlotDTO publishSlot(Long slotId, Long operatorUid, String note) {
+        OperationSlotPO slot = requireSlot(slotId);
+        requireSupportedOperationSlot(slot.getSlotCode());
+        OperationSlotDTO before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
+        OperationSlotDTO current = filterSlotSnapshot(copySlotSnapshot(before));
+        if (current == null || current.getItems() == null || current.getItems().isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "operation slot publish requires at least one governed public item");
+        }
+        slot.setRollbackSnapshotJson(slot.getPublishedSnapshotJson());
+        slot.setSlotStatus(STATUS_PUBLISHED);
+        slot.setCurrentVersion((slot.getCurrentVersion() == null ? 0 : slot.getCurrentVersion()) + 1);
+        current.setStatus(STATUS_PUBLISHED);
+        current.setCurrentVersion(slot.getCurrentVersion());
+        current.setSource(OPERATION_SOURCE_REMOTE);
+        current.setDegraded(false);
+        current.setFallbackReason(null);
+        slot.setPublishedSnapshotJson(writeJson(current));
+        slot.setUpdatedBy(operatorUid);
+        slotMapper.updateById(slot);
+        OperationSlotDTO dto = getPublicSlot(slot.getSlotCode(), slot.getDefaultLimit() == null ? 0 : slot.getDefaultLimit());
+        adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_PUBLISH",
+                "OPERATION_SLOT", slotId, before, dto, limit(clean(note), 500));
+        publishCreatorCurationSelectedEvents(current);
+        return dto;
+    }
+
+    @Transactional
+    public OperationSlotDTO offlineSlot(Long slotId, Long operatorUid, String note) {
+        OperationSlotPO slot = requireSlot(slotId);
+        requireSupportedOperationSlot(slot.getSlotCode());
+        OperationSlotDTO before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
+        slot.setSlotStatus(STATUS_OFFLINE);
+        slot.setUpdatedBy(operatorUid);
+        slotMapper.updateById(slot);
+        OperationSlotDTO dto = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
+        adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_OFFLINE",
+                "OPERATION_SLOT", slotId, before, dto, limit(clean(note), 500));
+        return dto;
+    }
+
+    @Transactional
+    public OperationSlotDTO rollbackSlot(Long slotId, Long operatorUid, String note) {
+        OperationSlotPO slot = requireSlot(slotId);
+        requireSupportedOperationSlot(slot.getSlotCode());
+        OperationSlotDTO rollback = readSlotSnapshot(slot.getRollbackSnapshotJson());
+        if (rollback == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "no operation slot rollback snapshot");
+        }
+        OperationSlotDTO before = readSlotSnapshot(slot.getPublishedSnapshotJson());
+        if (before == null) {
+            before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
+        }
+        OperationSlotDTO dto = filterSlotSnapshot(copySlotSnapshot(rollback));
+        if (dto == null || dto.getItems() == null || dto.getItems().isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "rollback snapshot has no governed public items");
+        }
+        slot.setSlotStatus(STATUS_PUBLISHED);
+        slot.setCurrentVersion((slot.getCurrentVersion() == null ? 0 : slot.getCurrentVersion()) + 1);
+        dto.setStatus(STATUS_PUBLISHED);
+        dto.setCurrentVersion(slot.getCurrentVersion());
+        dto.setSource(OPERATION_SOURCE_REMOTE);
+        dto.setDegraded(false);
+        dto.setFallbackReason(null);
+        slot.setPublishedSnapshotJson(writeJson(dto));
+        slot.setRollbackSnapshotJson(writeJson(before));
+        slot.setUpdatedBy(operatorUid);
+        slotMapper.updateById(slot);
+        OperationSlotDTO publicDto = getPublicSlot(slot.getSlotCode(), slot.getDefaultLimit() == null ? 0 : slot.getDefaultLimit());
+        adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_ROLLBACK",
+                "OPERATION_SLOT", slotId, before, publicDto, limit(clean(note), 500));
+        publishCreatorCurationSelectedEvents(dto);
+        return publicDto;
     }
 
     public List<OperationTopicDTO> listAdminTopics(String status, String operationType, String keyword, int limit) {
@@ -348,6 +487,7 @@ public class OperationCurationService {
         OperationTopicDTO dto = getPublicTopic(po.getSlug());
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_PUBLISH",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
+        publishCreatorCurationSelectedEvents(dto);
         return dto;
     }
 
@@ -391,6 +531,7 @@ public class OperationCurationService {
         topicMapper.updateById(po);
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_ROLLBACK",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
+        publishCreatorCurationSelectedEvents(dto);
         return dto;
     }
 
@@ -455,6 +596,10 @@ public class OperationCurationService {
                 .startsAt(slot.getStartsAt())
                 .endsAt(slot.getEndsAt())
                 .previewToken(publicOnly ? null : slot.getPreviewToken())
+                .currentVersion(slot.getCurrentVersion())
+                .source(OPERATION_SOURCE_REMOTE)
+                .degraded(false)
+                .fallbackReason(null)
                 .items(itemDtos)
                 .createTime(slot.getCreateTime())
                 .updateTime(slot.getUpdateTime())
@@ -474,6 +619,13 @@ public class OperationCurationService {
                         .status(item.getItemStatus())
                         .sortOrder(item.getSortOrder())
                         .note(publicOnly ? null : item.getNote())
+                        .contentId(item.getSourceId())
+                        .contentType(item.getSourceType())
+                        .reasonText(item.getNote())
+                        .rank(item.getSortOrder())
+                        .source(OPERATION_SOURCE_REMOTE)
+                        .blocked(true)
+                        .blockReasons(List.of("ITEM_NOT_PUBLIC"))
                         .build();
             }
         } else if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
@@ -497,6 +649,13 @@ public class OperationCurationService {
                 .status(item.getItemStatus())
                 .sortOrder(item.getSortOrder())
                 .note(publicOnly ? null : item.getNote())
+                .contentId(item.getSourceId())
+                .contentType(item.getSourceType())
+                .reasonText(item.getNote())
+                .rank(item.getSortOrder())
+                .source(OPERATION_SOURCE_REMOTE)
+                .blocked(false)
+                .blockReasons(List.of())
                 .post(post)
                 .topic(topic)
                 .createTime(item.getCreateTime())
@@ -519,6 +678,9 @@ public class OperationCurationService {
                 .domain(topic.getDomain())
                 .status(topic.getTopicStatus())
                 .sortOrder(topic.getSortOrder())
+                .source(OPERATION_SOURCE_REMOTE)
+                .degraded(false)
+                .fallbackReason(null)
                 .startsAt(topic.getStartsAt())
                 .endsAt(topic.getEndsAt())
                 .previewToken(publicOnly ? null : topic.getPreviewToken())
@@ -541,6 +703,8 @@ public class OperationCurationService {
                     .status(section.getSectionStatus())
                     .sortOrder(section.getSortOrder())
                     .note(section.getNote())
+                    .reasonText(publicOnly ? null : section.getNote())
+                    .items(List.of())
                     .build();
         }
         return OperationTopicSectionDTO.builder()
@@ -551,7 +715,9 @@ public class OperationCurationService {
                 .status(section.getSectionStatus())
                 .sortOrder(section.getSortOrder())
                 .note(publicOnly ? null : section.getNote())
+                .reasonText(section.getNote())
                 .post(post)
+                .items(List.of())
                 .build();
     }
 
@@ -569,6 +735,118 @@ public class OperationCurationService {
                 .build();
     }
 
+    private void addSlotFeedback(Map<String, OperationCurationFeedbackDTO> feedback, Long authorUid,
+                                 OperationSlotPO slot, OperationSlotItemDTO item) {
+        if (item == null || !SOURCE_POST.equals(item.getSourceType()) || !ITEM_ACTIVE.equals(item.getStatus())) {
+            return;
+        }
+        PostBriefDTO post = safeAuthorVisiblePost(item.getSourceId(), authorUid);
+        if (post == null) {
+            return;
+        }
+        OperationCurationFeedbackDTO dto = OperationCurationFeedbackDTO.builder()
+                .contentId(post.getId())
+                .contentTitle(post.getTitle())
+                .placementType(PLACEMENT_SLOT)
+                .placementId(slot.getId())
+                .placementKey(slot.getSlotCode())
+                .sectionKey(null)
+                .reason(publicCurationReason("Selected for a public operation slot.",
+                        item.getReasonText(), item.getNote()))
+                .entrance(FEEDBACK_ENTRANCE_PREFIX + "?section=curation-feedback&placementType=SLOT&placementKey=" + slot.getSlotCode())
+                .status(STATUS_PUBLISHED)
+                .updateTime(slot.getUpdateTime())
+                .build();
+        feedback.putIfAbsent(feedbackKey(dto), dto);
+    }
+
+    private void addTopicFeedback(Map<String, OperationCurationFeedbackDTO> feedback, Long authorUid,
+                                  OperationTopicPO topic, OperationTopicDTO snapshot,
+                                  OperationTopicSectionDTO section) {
+        if (section == null || !SOURCE_POST.equals(section.getSourceType()) || !ITEM_ACTIVE.equals(section.getStatus())) {
+            return;
+        }
+        PostBriefDTO post = safeAuthorVisiblePost(section.getSourceId(), authorUid);
+        if (post == null) {
+            return;
+        }
+        String sectionKey = StringUtils.hasText(section.getTitle()) ? section.getTitle() : String.valueOf(section.getId());
+        OperationCurationFeedbackDTO dto = OperationCurationFeedbackDTO.builder()
+                .contentId(post.getId())
+                .contentTitle(post.getTitle())
+                .placementType(PLACEMENT_TOPIC)
+                .placementId(topic.getId())
+                .placementKey(topic.getSlug())
+                .sectionKey(sectionKey)
+                .reason(publicCurationReason("Selected for a public operation topic.",
+                        section.getReasonText(), section.getNote(), snapshot.getDescription()))
+                .entrance("/topics/" + topic.getSlug())
+                .status(STATUS_PUBLISHED)
+                .updateTime(topic.getUpdateTime())
+                .build();
+        feedback.putIfAbsent(feedbackKey(dto), dto);
+    }
+
+    private void publishCreatorCurationSelectedEvents(OperationSlotDTO slot) {
+        if (slot == null || !STATUS_PUBLISHED.equals(slot.getStatus())
+                || !isRealRemotePlacement(slot.getSource(), slot.getFallbackReason())) {
+            return;
+        }
+        for (OperationSlotItemDTO item : slot.getItems() == null ? List.<OperationSlotItemDTO>of() : slot.getItems()) {
+            if (item == null || !SOURCE_POST.equals(item.getSourceType()) || !ITEM_ACTIVE.equals(item.getStatus())) {
+                continue;
+            }
+            PostBriefDTO post = safeLoadPublicSlotPost(item.getSourceId());
+            if (!isAuthorVisibleFeedbackPost(post)) {
+                continue;
+            }
+            applicationEventPublisher.publishEvent(OperationCurationSelectedEvent.builder()
+                    .authorUid(post.getAuthorId())
+                    .contentId(post.getId())
+                    .contentTitle(post.getTitle())
+                    .placementType(PLACEMENT_SLOT)
+                    .placementId(slot.getId())
+                    .placementKey(slot.getSlotCode())
+                    .sectionKey(null)
+                    .reason(publicCurationReason("Selected for a public operation slot.",
+                            item.getReasonText(), item.getNote()))
+                    .entrance(FEEDBACK_ENTRANCE_PREFIX + "?section=curation-feedback&placementType=SLOT&placementKey=" + slot.getSlotCode())
+                    .status(STATUS_PUBLISHED)
+                    .eventType(OperationCurationSelectedEvent.OPERATION_CURATION_SELECTED)
+                    .build());
+        }
+    }
+
+    private void publishCreatorCurationSelectedEvents(OperationTopicDTO topic) {
+        if (topic == null || !STATUS_PUBLISHED.equals(topic.getStatus())) {
+            return;
+        }
+        for (OperationTopicSectionDTO section : topic.getSections() == null ? List.<OperationTopicSectionDTO>of() : topic.getSections()) {
+            if (section == null || !SOURCE_POST.equals(section.getSourceType()) || !ITEM_ACTIVE.equals(section.getStatus())) {
+                continue;
+            }
+            PostBriefDTO post = safeLoadPublicSlotPost(section.getSourceId());
+            if (!isAuthorVisibleFeedbackPost(post)) {
+                continue;
+            }
+            String sectionKey = StringUtils.hasText(section.getTitle()) ? section.getTitle() : String.valueOf(section.getId());
+            applicationEventPublisher.publishEvent(OperationCurationSelectedEvent.builder()
+                    .authorUid(post.getAuthorId())
+                    .contentId(post.getId())
+                    .contentTitle(post.getTitle())
+                    .placementType(PLACEMENT_TOPIC)
+                    .placementId(topic.getId())
+                    .placementKey(topic.getSlug())
+                    .sectionKey(sectionKey)
+                    .reason(publicCurationReason("Selected for a public operation topic.",
+                            section.getReasonText(), section.getNote(), topic.getDescription()))
+                    .entrance("/topics/" + topic.getSlug())
+                    .status(STATUS_PUBLISHED)
+                    .eventType(OperationCurationSelectedEvent.OPERATION_CURATION_SELECTED)
+                    .build());
+        }
+    }
+
     private OperationTopicDTO filterTopicSnapshot(OperationTopicDTO snapshot) {
         if (snapshot == null) {
             return null;
@@ -583,6 +861,7 @@ public class OperationCurationService {
                         return null;
                     }
                     section.setPost(post);
+                    section.setReasonText(section.getReasonText() == null ? section.getNote() : section.getReasonText());
                     section.setNote(null);
                     return section;
                 })
@@ -591,7 +870,133 @@ public class OperationCurationService {
         snapshot.setSections(sections);
         snapshot.setNote(null);
         snapshot.setPreviewToken(null);
+        snapshot.setSource(OPERATION_SOURCE_REMOTE);
+        snapshot.setDegraded(false);
+        snapshot.setFallbackReason(null);
         return snapshot;
+    }
+
+    private OperationSlotDTO filterSlotSnapshot(OperationSlotDTO snapshot) {
+        if (snapshot == null) {
+            return null;
+        }
+        List<OperationSlotItemDTO> items = snapshot.getItems() == null ? List.of() : snapshot.getItems().stream()
+                .filter(this::isPublishablePublicSlotItem)
+                .map(item -> {
+                    if (SOURCE_POST.equals(item.getSourceType())) {
+                        PostBriefDTO post = safeLoadPublicSlotPost(item.getSourceId());
+                        if (post == null) {
+                            return null;
+                        }
+                        item.setPost(post);
+                    } else if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
+                        OperationTopicPO topicPO = topicMapper.selectById(item.getSourceId());
+                        try {
+                            item.setTopic(topicPO == null ? null : getPublicTopic(topicPO.getSlug()));
+                        } catch (BizException ignored) {
+                            return null;
+                        }
+                    }
+                    item.setReasonText(item.getReasonText() == null ? item.getNote() : item.getReasonText());
+                    item.setNote(null);
+                    item.setContentId(item.getSourceId());
+                    item.setContentType(item.getSourceType());
+                    item.setSource(OPERATION_SOURCE_REMOTE);
+                    item.setBlocked(false);
+                    item.setBlockReasons(List.of());
+                    return item;
+                })
+                .filter(Objects::nonNull)
+                .toList();
+        snapshot.setSlotCode(requireSupportedOperationSlot(snapshot.getSlotCode()));
+        snapshot.setPreviewToken(null);
+        snapshot.setSource(OPERATION_SOURCE_REMOTE);
+        snapshot.setDegraded(false);
+        snapshot.setFallbackReason(null);
+        snapshot.setItems(items);
+        return snapshot;
+    }
+
+    private boolean isPublishablePublicSlotItem(OperationSlotItemDTO item) {
+        if (item == null || !ITEM_ACTIVE.equals(item.getStatus())) {
+            return false;
+        }
+        if (SOURCE_POST.equals(item.getSourceType())) {
+            PostBriefDTO post = safeLoadPublicSlotPost(item.getSourceId());
+            return post != null && PublicContentFilter.isDistributablePost(post);
+        }
+        if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
+            try {
+                OperationTopicPO topic = topicMapper.selectById(item.getSourceId());
+                return topic != null && STATUS_PUBLISHED.equals(topic.getTopicStatus())
+                        && getPublicTopic(topic.getSlug()) != null;
+            } catch (BizException ignored) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private boolean isRealRemotePlacement(String source, String fallbackReason) {
+        String normalizedSource = source == null ? "" : source.toLowerCase(Locale.ROOT);
+        String normalizedReason = fallbackReason == null ? "" : fallbackReason.toLowerCase(Locale.ROOT);
+        return OPERATION_SOURCE_REMOTE.equals(normalizedSource)
+                && !normalizedReason.contains("fallback")
+                && !normalizedReason.contains("demo")
+                && !normalizedReason.contains("fixture");
+    }
+
+    private PostBriefDTO safeAuthorVisiblePost(Long postId, Long authorUid) {
+        PostBriefDTO post = safeLoadPublicSlotPost(postId);
+        if (!isAuthorVisibleFeedbackPost(post) || !Objects.equals(post.getAuthorId(), authorUid)) {
+            return null;
+        }
+        return post;
+    }
+
+    private boolean isAuthorVisibleFeedbackPost(PostBriefDTO post) {
+        return PublicContentFilter.isDistributablePost(post)
+                && post.getAuthorId() != null
+                && !Boolean.TRUE.equals(post.getAnonymous());
+    }
+
+    private static String feedbackKey(OperationCurationFeedbackDTO dto) {
+        return String.join(":",
+                String.valueOf(dto.getContentId()),
+                String.valueOf(dto.getPlacementType()),
+                String.valueOf(dto.getPlacementId()),
+                String.valueOf(dto.getPlacementKey()),
+                String.valueOf(dto.getSectionKey()));
+    }
+
+    private static String firstText(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private static String publicCurationReason(String fallback, String... values) {
+        String candidate = firstText(values);
+        if (!StringUtils.hasText(candidate)
+                || PublicContentFilter.isSyntheticText(candidate)
+                || PublicContentFilter.isUnsafeSuggestionText(candidate)) {
+            return fallback;
+        }
+        return limit(candidate, 120);
+    }
+
+    private PostBriefDTO safeLoadPublicSlotPost(Long postId) {
+        try {
+            return loadPost(postId);
+        } catch (BizException ignored) {
+            return null;
+        }
     }
 
     private void validateSourceOperable(String sourceType, Long sourceId, boolean topicMustBePublished) {
@@ -657,8 +1062,23 @@ public class OperationCurationService {
         }
     }
 
+    private OperationSlotDTO readSlotSnapshot(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, OperationSlotDTO.class);
+        } catch (Exception e) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid operation slot snapshot");
+        }
+    }
+
     private OperationTopicDTO copyTopicSnapshot(OperationTopicDTO source) {
         return source == null ? null : objectMapper.convertValue(source, OperationTopicDTO.class);
+    }
+
+    private OperationSlotDTO copySlotSnapshot(OperationSlotDTO source) {
+        return source == null ? null : objectMapper.convertValue(source, OperationSlotDTO.class);
     }
 
     private String writeJson(Object value) {
@@ -758,6 +1178,14 @@ public class OperationCurationService {
         String value = limit(clean(code), max);
         if (!StringUtils.hasText(value) || !value.matches("[a-zA-Z0-9][a-zA-Z0-9_-]{1," + (max - 1) + "}")) {
             throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return value;
+    }
+
+    private static String requireSupportedOperationSlot(String slotCode) {
+        String value = requireCode(slotCode, 64);
+        if (!SUPPORTED_OPERATION_SLOT_CODES.contains(value)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "V3 P0 only supports HOME_FEATURED and DISCOVERY_FEATURED_TOPICS");
         }
         return value;
     }

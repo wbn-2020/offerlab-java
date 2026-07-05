@@ -23,6 +23,10 @@ public class OperationSlotDTO {
     private LocalDateTime startsAt;
     private LocalDateTime endsAt;
     private String previewToken;
+    private Integer currentVersion;
+    private String source;
+    private Boolean degraded;
+    private String fallbackReason;
     private List<OperationSlotItemDTO> items;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

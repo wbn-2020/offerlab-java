@@ -11,7 +11,7 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
   $ConfigPath = Join-Path $repoRoot "scripts\kafka\offerlab-server-local.properties"
 }
 
-$kafkaHome = Join-Path $Root "kafka_2.13-3.6.2"
+$kafkaHome = Join-Path (Join-Path $Root "kafka") "kafka_2.13-3.6.2"
 $startBat = Join-Path $kafkaHome "bin\windows\kafka-server-start.bat"
 
 if (-not (Test-Path -LiteralPath $startBat)) {

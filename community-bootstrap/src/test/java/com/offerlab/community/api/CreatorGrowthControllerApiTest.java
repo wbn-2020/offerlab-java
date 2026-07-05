@@ -1,7 +1,9 @@
 package com.offerlab.community.api;
 
+import com.offerlab.community.analytics.api.dto.CreatorCurationFeedbackDTO;
 import com.offerlab.community.analytics.api.dto.CreatorGrowthWorkspaceDTO;
 import com.offerlab.community.analytics.api.dto.CreatorRepresentativePostCmd;
+import com.offerlab.community.analytics.application.CreatorCurationFeedbackService;
 import com.offerlab.community.analytics.application.CreatorGrowthService;
 import com.offerlab.community.analytics.controller.CreatorGrowthController;
 import com.offerlab.community.common.result.ErrorCode;
@@ -32,13 +34,15 @@ class CreatorGrowthControllerApiTest {
     @Mock
     private CreatorGrowthService creatorGrowthService;
     @Mock
+    private CreatorCurationFeedbackService creatorCurationFeedbackService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new CreatorGrowthController(creatorGrowthService), jwtService);
+        mvc = ApiTestSupport.mvc(new CreatorGrowthController(creatorGrowthService, creatorCurationFeedbackService), jwtService);
     }
 
     @Test
@@ -119,6 +123,43 @@ class CreatorGrowthControllerApiTest {
                 .andExpect(jsonPath("$.data.creatorDigestNotification.frequency").value("weekly_digest_only"));
 
         verify(creatorGrowthService).workspace(18L);
+    }
+
+    @Test
+    void authenticatedCreatorCanReadCurationFeedback() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(18L);
+        when(creatorCurationFeedbackService.summary(eq(18L))).thenReturn(
+                CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO.builder()
+                        .degraded(false)
+                        .fallbackReason(null)
+                        .total(1)
+                        .items(List.of(CreatorCurationFeedbackDTO.builder()
+                                .contentId(1001L)
+                                .contentTitle("Spring cache fallback review")
+                                .placementType("SLOT")
+                                .placementId(2001L)
+                                .placementLabel("HOME_FEATURED")
+                                .reasonText("Selected for a public operation slot.")
+                                .href("/api/v1/creator-growth/curation-feedback?placementType=SLOT&placementKey=HOME_FEATURED")
+                                .status("PUBLISHED")
+                                .source("operation-curation")
+                                .build()))
+                        .recentItems(List.of())
+                        .build());
+
+        mvc.perform(get("/api/v1/creator-growth/curation-feedback")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].contentId").value(1001L))
+                .andExpect(jsonPath("$.data.items[0].placementType").value("SLOT"))
+                .andExpect(jsonPath("$.data.items[0].placementLabel").value("HOME_FEATURED"))
+                .andExpect(jsonPath("$.data.items[0].reasonText").value("Selected for a public operation slot."))
+                .andExpect(jsonPath("$.data.items[0].href").value("/api/v1/creator-growth/curation-feedback?placementType=SLOT&placementKey=HOME_FEATURED"))
+                .andExpect(jsonPath("$.data.items[0].status").value("PUBLISHED"));
+
+        verify(creatorCurationFeedbackService).summary(18L);
     }
 
     @Test

@@ -80,20 +80,38 @@ public class OperationCurationController {
 
     @PostMapping("/admin/slots")
     public Result<OperationSlotDTO> upsertSlot(@Valid @RequestBody OperationSlotCmd cmd) {
-        return Result.ok(operationCurationService.upsertSlot(cmd, requireOps()));
+        return Result.ok(operationCurationService.upsertSlot(cmd, requireOpsMutation()));
     }
 
     @PostMapping("/admin/slots/{slotId}/items")
     public Result<OperationSlotItemDTO> upsertSlotItem(@PathVariable Long slotId,
                                                        @Valid @RequestBody OperationSlotItemCmd cmd) {
-        return Result.ok(operationCurationService.upsertSlotItem(slotId, cmd, requireOps()));
+        return Result.ok(operationCurationService.upsertSlotItem(slotId, cmd, requireOpsMutation()));
     }
 
     @DeleteMapping("/admin/slots/items/{itemId}")
     public Result<Void> deleteSlotItem(@PathVariable Long itemId,
                                        @RequestParam(required = false) String note) {
-        operationCurationService.deleteSlotItem(itemId, requireOps(), note);
+        operationCurationService.deleteSlotItem(itemId, requireOpsMutation(), note);
         return Result.ok();
+    }
+
+    @PostMapping("/admin/slots/{slotId}/publish")
+    public Result<OperationSlotDTO> publishSlot(@PathVariable Long slotId,
+                                                @Valid @RequestBody(required = false) NoteReq req) {
+        return Result.ok(operationCurationService.publishSlot(slotId, requireOpsMutation(), requireCriticalNote(req)));
+    }
+
+    @PostMapping("/admin/slots/{slotId}/offline")
+    public Result<OperationSlotDTO> offlineSlot(@PathVariable Long slotId,
+                                                @Valid @RequestBody(required = false) NoteReq req) {
+        return Result.ok(operationCurationService.offlineSlot(slotId, requireOpsMutation(), requireCriticalNote(req)));
+    }
+
+    @PostMapping("/admin/slots/{slotId}/rollback")
+    public Result<OperationSlotDTO> rollbackSlot(@PathVariable Long slotId,
+                                                 @Valid @RequestBody(required = false) NoteReq req) {
+        return Result.ok(operationCurationService.rollbackSlot(slotId, requireOpsMutation(), requireCriticalNote(req)));
     }
 
     @GetMapping("/admin/topics")

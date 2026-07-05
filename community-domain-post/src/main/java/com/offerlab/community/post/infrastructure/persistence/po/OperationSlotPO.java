@@ -22,6 +22,9 @@ public class OperationSlotPO {
     private LocalDateTime startsAt;
     private LocalDateTime endsAt;
     private String previewToken;
+    private Integer currentVersion;
+    private String publishedSnapshotJson;
+    private String rollbackSnapshotJson;
     private Long createdBy;
     private Long updatedBy;
     private LocalDateTime createTime;

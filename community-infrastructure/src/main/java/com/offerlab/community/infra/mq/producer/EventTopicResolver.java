@@ -69,6 +69,10 @@ public class EventTopicResolver {
             return new TopicMapping("user.registered", readLong(event, "getUid"), "USER_REGISTERED");
         }
 
+        if ("OperationCurationSelectedEvent".equals(className)) {
+            return new TopicMapping("operation.curation.selected", readLong(event, "getContentId"), "OPERATION_CURATION_SELECTED");
+        }
+
         String topic = className.replaceAll("([A-Z])", "_$1").toLowerCase().replaceFirst("^_", "");
         log.warn("Unknown event type: {}, using topic: {}", className, topic);
         return new TopicMapping(topic, 0L, className);

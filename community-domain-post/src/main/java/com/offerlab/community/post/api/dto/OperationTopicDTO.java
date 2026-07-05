@@ -22,6 +22,9 @@ public class OperationTopicDTO {
     private Integer domain;
     private String status;
     private Integer sortOrder;
+    private String source;
+    private Boolean degraded;
+    private String fallbackReason;
     private LocalDateTime startsAt;
     private LocalDateTime endsAt;
     private String previewToken;
