@@ -16,6 +16,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
+import com.offerlab.community.search.api.dto.SearchStatusDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -142,6 +143,38 @@ public class PostSearchIndexer {
         return status;
     }
 
+    public SearchStatusDTO publicStatus() {
+        boolean enabled = elasticsearch.enabled();
+        boolean available = elasticsearch.available();
+        boolean exists = available && elasticsearch.indexExists(elasticsearch.postIndex());
+        if (!exists) {
+            indexReady.set(false);
+        }
+        boolean indexUsable = enabled && available && indexReady.get() && exists;
+        DbFallbackStatus fallback = dbFallbackStatus();
+        boolean publicSearchAvailable = indexUsable || fallback.available();
+        boolean publicSearchDegraded = publicSearchAvailable && !indexUsable;
+        return SearchStatusDTO.builder()
+                .status(indexUsable ? "UP" : fallback.available() ? "DEGRADED" : "DOWN")
+                .enabled(enabled)
+                .available(available)
+                .indexName("public-posts")
+                .indexExists(exists)
+                .indexReady(indexReady.get() && exists)
+                .publicSearchAvailable(publicSearchAvailable)
+                .publicSearchDegraded(publicSearchDegraded)
+                .publicSearchSource(indexUsable ? "elasticsearch" : fallback.available() ? "mysql" : "unavailable")
+                .dbFallbackAvailable(fallback.available())
+                .fallbackSource("mysql")
+                .fallbackMode(fallback.mode())
+                .fallbackScanLimit(MYSQL_FALLBACK_MAX_SCAN)
+                .fallbackSchemaReady(fallback.schemaReady())
+                .message(searchStatusMessage(indexUsable, fallback))
+                .diagnosticMessage(publicSearchDiagnostic(indexUsable, fallback))
+                .action(indexUsable ? null : publicSearchAction(fallback))
+                .build();
+    }
+
     private DbFallbackStatus dbFallbackStatus() {
         try {
             boolean tagGovernanceReady = migrationCheckService.tagGovernanceReady();
@@ -180,6 +213,26 @@ public class PostSearchIndexer {
             return "Restore Elasticsearch and apply tag governance migration to enable full tag synonym recall.";
         }
         return "Restore Elasticsearch and replay search index retry tasks after the index is healthy.";
+    }
+
+    private String publicSearchDiagnostic(boolean indexUsable, DbFallbackStatus fallback) {
+        if (indexUsable) {
+            return "public_search_index_ready";
+        }
+        if (fallback.available()) {
+            return "public_search_using_database_fallback";
+        }
+        return "public_search_unavailable";
+    }
+
+    private String publicSearchAction(DbFallbackStatus fallback) {
+        if (!fallback.available()) {
+            return "请稍后重试，或先从发现页、问答页继续浏览。";
+        }
+        if (!fallback.schemaReady()) {
+            return "当前为兼容兜底模式，部分标签同义词召回可能受限。";
+        }
+        return "当前为数据库兜底模式，排序和召回完整性可能受限。";
     }
 
     private record DbFallbackStatus(boolean available, boolean schemaReady, String mode) {

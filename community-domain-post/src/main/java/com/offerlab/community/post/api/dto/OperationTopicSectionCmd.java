@@ -12,5 +12,10 @@ public class OperationTopicSectionCmd {
     private String status;
     private Integer sortOrder;
     @Size(max = 500)
+    private String reasonText;
+    private Boolean reasonConfirmed;
+    @Size(max = 500)
+    private String reasonDraftText;
+    @Size(max = 500)
     private String note;
 }

@@ -26,6 +26,11 @@ public class DiscoveryMapService {
     public static final String SOURCE_PUBLIC_CONTENT_QUERY = "public-content-query";
     public static final String SOURCE_FALLBACK_DEMO = "fallback-demo";
     public static final String SOURCE_UNAVAILABLE = "unavailable";
+    public static final String ASSET_STATUS_ACTIVE = "active";
+    public static final String ASSET_STATUS_ARCHIVED = "archived";
+    public static final String VISIBILITY_VISIBLE = "visible";
+    public static final String VISIBILITY_ARCHIVED = "archived";
+    public static final String PREVIEW_REMOTE = "remote";
 
     private static final List<String> FORBIDDEN_DISCOVERY_TEXT = List.of(
             "CodeCoachAI",
@@ -137,6 +142,12 @@ public class DiscoveryMapService {
                     .sourceId(topic.getId())
                     .reason(item.getReasonText())
                     .reasonText(item.getReasonText())
+                    .assetStatus(OperationCurationService.STATUS_ARCHIVED.equals(topic.getStatus())
+                            ? ASSET_STATUS_ARCHIVED : ASSET_STATUS_ACTIVE)
+                    .visibilityState(OperationCurationService.STATUS_ARCHIVED.equals(topic.getStatus())
+                            ? VISIBILITY_ARCHIVED : VISIBILITY_VISIBLE)
+                    .previewSource(PREVIEW_REMOTE)
+                    .updatedAt(topic.getUpdateTime())
                     .build();
         }
         PostBriefDTO post = item.getPost();
@@ -154,6 +165,10 @@ public class DiscoveryMapService {
                 .domain(post.getDomain())
                 .reason(item.getReasonText())
                 .reasonText(item.getReasonText())
+                .assetStatus(ASSET_STATUS_ACTIVE)
+                .visibilityState(VISIBILITY_VISIBLE)
+                .previewSource(PREVIEW_REMOTE)
+                .updatedAt(post.getCreateTime())
                 .build();
     }
 
@@ -174,6 +189,10 @@ public class DiscoveryMapService {
                         .toList())
                 .reason(topic.getPostCount() == null ? null : topic.getPostCount() + " public posts")
                 .reasonText(topic.getPostCount() == null ? null : topic.getPostCount() + " public posts")
+                .assetStatus(ASSET_STATUS_ACTIVE)
+                .visibilityState(VISIBILITY_VISIBLE)
+                .previewSource(PREVIEW_REMOTE)
+                .updatedAt(topic.getUpdateTime())
                 .build();
     }
 
@@ -183,7 +202,7 @@ public class DiscoveryMapService {
                 channel("career-experience", "职场经验", "求职经验、工作复盘和职场选择。", "/search?domain=2&sort=hot", "2"),
                 channel("learning-growth", "学习成长", "学习方法、读书笔记和技能提升。", "/search?domain=3&sort=hot", "3"),
                 channel("lifestyle", "生活方式", "租房、城市生活、消费经验和健康日常。", "/search?domain=4&sort=hot", "4"),
-                channel("resources", "资源推荐", "工具、书单、课程、模板和资料合集。", "/search?type=4&sort=hot", "R"),
+                channel("resources", "资源推荐", "工具、书单、公开资料索引和模板经验。", "/search?type=4&sort=hot", "R"),
                 channel("qa-discussion", "问答讨论", "求建议、观点讨论和经验征集。", "/search?type=2&sort=hot", "Q")
         );
     }
@@ -197,6 +216,9 @@ public class DiscoveryMapService {
                 .href(href)
                 .source(SOURCE_PUBLIC_CONTENT_QUERY)
                 .icon(icon)
+                .assetStatus(ASSET_STATUS_ACTIVE)
+                .visibilityState(VISIBILITY_VISIBLE)
+                .previewSource(PREVIEW_REMOTE)
                 .build();
     }
 
@@ -219,6 +241,9 @@ public class DiscoveryMapService {
                 .summary(summary)
                 .href(href)
                 .source(SOURCE_SEARCH_ANALYTICS)
+                .assetStatus(ASSET_STATUS_ACTIVE)
+                .visibilityState(VISIBILITY_VISIBLE)
+                .previewSource(PREVIEW_REMOTE)
                 .build();
     }
 

@@ -268,6 +268,9 @@ public class NotificationEventListener {
     }
 
     private String operationCurationDedupKey(OperationCurationSelectedEvent event) {
+        if (event.getDedupKey() != null && !event.getDedupKey().isBlank()) {
+            return event.getDedupKey();
+        }
         return String.join(":",
                 "operation_curation_selected",
                 String.valueOf(event.getAuthorUid()),

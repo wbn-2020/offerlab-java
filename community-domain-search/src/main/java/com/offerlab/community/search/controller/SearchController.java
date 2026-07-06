@@ -8,6 +8,8 @@ import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.api.dto.SearchAnalyticsTrackCmd;
+import com.offerlab.community.search.api.dto.SearchStatusDTO;
+import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -36,6 +38,7 @@ public class SearchController {
     private final SearchFacade facade;
     private final SearchAnalyticsService searchAnalyticsService;
     private final PostFacade postFacade;
+    private final PostSearchIndexer postSearchIndexer;
 
     @GetMapping("/posts")
     public Result<PageResult<PostBriefDTO>> searchPosts(@RequestParam(name = "q", required = false) @Size(max = 100) String keyword,
@@ -57,6 +60,11 @@ public class SearchController {
     @GetMapping("/hot")
     public Result<List<String>> hot(@RequestParam(defaultValue = "10") @Min(1) @Max(20) int size) {
         return Result.ok(facade.getHotKeywords(size));
+    }
+
+    @GetMapping("/status")
+    public Result<SearchStatusDTO> status() {
+        return Result.ok(postSearchIndexer.publicStatus());
     }
 
     @PostMapping("/analytics/track")

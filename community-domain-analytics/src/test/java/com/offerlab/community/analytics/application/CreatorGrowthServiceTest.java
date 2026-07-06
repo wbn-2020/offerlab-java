@@ -2,6 +2,7 @@ package com.offerlab.community.analytics.application;
 
 import com.offerlab.community.analytics.api.dto.CreatorGrowthWorkspaceDTO;
 import com.offerlab.community.analytics.api.dto.CreatorRepresentativePostCmd;
+import com.offerlab.community.analytics.api.dto.CreatorCurationFeedbackDTO;
 import com.offerlab.community.analytics.infrastructure.persistence.mapper.CreatorRepresentativePostMapper;
 import com.offerlab.community.analytics.infrastructure.persistence.mapper.GrowthInsightMapper;
 import com.offerlab.community.common.exception.BizException;
@@ -40,6 +41,8 @@ class CreatorGrowthServiceTest {
     @Mock
     private CreatorRepresentativePostMapper representativePostMapper;
     @Mock
+    private CreatorCurationFeedbackService creatorCurationFeedbackService;
+    @Mock
     private SnowflakeIdGenerator idGenerator;
 
     private CreatorGrowthService creatorGrowthService;
@@ -47,7 +50,7 @@ class CreatorGrowthServiceTest {
     @BeforeEach
     void setUp() {
         creatorGrowthService = new CreatorGrowthService(growthInsightMapper, contentSeriesMapper,
-                representativePostMapper, idGenerator);
+                representativePostMapper, creatorCurationFeedbackService, idGenerator);
     }
 
     @Test
@@ -99,9 +102,37 @@ class CreatorGrowthServiceTest {
         series.setVisibility(1);
         when(contentSeriesMapper.tableExists()).thenReturn(1);
         when(contentSeriesMapper.selectPublicByCreatorUid(8L, 0L, 3)).thenReturn(List.of(series));
+        when(creatorCurationFeedbackService.summary(8L)).thenReturn(CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO.builder()
+                .updatedAt(LocalDateTime.of(2026, 7, 6, 0, 0))
+                .degraded(false)
+                .total(1)
+                .items(List.of(CreatorCurationFeedbackDTO.builder()
+                        .contentId(1001L)
+                        .contentTitle("Spring cache fallback review")
+                        .placementType("SLOT")
+                        .placementLabel("HOME_FEATURED")
+                        .reasonText("Selected for a public operation slot.")
+                        .href("/post/1001")
+                        .status("PUBLISHED")
+                        .source("operation-curation")
+                        .publicVisible(true)
+                        .anonymousProtected(true)
+                        .build()))
+                .recentItems(List.of())
+                .build());
 
         CreatorGrowthWorkspaceDTO workspace = creatorGrowthService.workspace(8L);
 
+        assertEquals("remote", workspace.getSource());
+        assertEquals(30, workspace.getPeriodDays());
+        assertFalse(workspace.isDegraded());
+        assertNull(workspace.getFallbackReason());
+        assertEquals(6L, workspace.getSummary().getPublicPostCount());
+        assertEquals(1, workspace.getSummary().getCurationInclusionCount());
+        assertEquals(1, workspace.getMaintainablePosts().size());
+        assertEquals("public", workspace.getMaintainablePosts().get(0).getVisibility());
+        assertEquals(1, workspace.getCurationFeedback().size());
+        assertFalse(workspace.getActions().isEmpty());
         assertEquals(2, workspace.getCreatorFeedbackSummary().getWindows().size());
         assertEquals("last_7_days", workspace.getCreatorFeedbackSummary().getWindows().get(0).getKey());
         assertEquals(16L, workspace.getCreatorFeedbackSummary().getWindows().get(0).getFeedbackCount());
@@ -161,6 +192,13 @@ class CreatorGrowthServiceTest {
                         "interactionCount", 4L)));
         when(growthInsightMapper.selectCreatorReplyOpportunities(eq(9L), any(LocalDateTime.class), eq(5))).thenReturn(List.of());
         when(contentSeriesMapper.tableExists()).thenReturn(0);
+        when(creatorCurationFeedbackService.summary(9L)).thenReturn(CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO.builder()
+                .updatedAt(LocalDateTime.of(2026, 7, 6, 0, 0))
+                .degraded(false)
+                .total(0)
+                .items(List.of())
+                .recentItems(List.of())
+                .build());
 
         CreatorGrowthWorkspaceDTO workspace = creatorGrowthService.workspace(9L);
         String allCopy = String.join(" ",

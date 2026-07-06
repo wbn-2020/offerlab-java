@@ -2,6 +2,7 @@ package com.offerlab.community.infra.moderation;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
@@ -53,7 +54,7 @@ public class ContentModerationService {
         } catch (BizException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("user moderation check failed open: uid={}", uid, e);
+            log.warn("user moderation check failed open: uid={}", LogMask.id(uid), e);
         }
     }
 
@@ -128,7 +129,7 @@ public class ContentModerationService {
                 ));
             }
         } catch (Exception e) {
-            log.warn("moderation keyword hit log failed open: scope={} uid={}", scope, uid, e);
+            log.warn("moderation keyword hit log failed open: scope={} uid={}", scope, LogMask.id(uid), e);
         }
     }
 

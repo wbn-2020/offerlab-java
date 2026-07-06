@@ -45,6 +45,8 @@ class CreatorGrowthGuardTest {
         assertTrue(mapper.contains("p.post_status = 1"), "representative posts must require published posts");
         assertTrue(mapper.contains("p.visibility = 1"), "representative posts must require public posts");
         assertTrue(mapper.contains("p.author_id = #{authorId}"), "representative posts must be owned by the creator");
+        assertTrue(mapper.contains("JSON_EXTRACT(e.ext_json, '$.anonymous')"),
+                "representative posts and workspace feedback must exclude anonymous posts");
         assertTrue(service.contains("Representative posts must be your public visible posts"),
                 "manual representative updates must reject hidden, deleted, restricted, or foreign posts");
     }

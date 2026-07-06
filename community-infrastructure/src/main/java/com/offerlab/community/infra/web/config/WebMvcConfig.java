@@ -24,7 +24,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     @PostConstruct
     void validateCorsOrigins() {
-        if (!environment.matchesProfiles("prod")) {
+        if (!requiresStrictCorsOrigins()) {
             return;
         }
         for (String origin : parseAllowedOrigins()) {
@@ -33,9 +33,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
                     || normalized.contains("localhost")
                     || normalized.contains("127.0.0.1")
                     || normalized.contains("0.0.0.0")) {
-                throw new IllegalStateException("Production CORS origins must be explicitly configured and must not use local or wildcard origins");
+                throw new IllegalStateException("Production or acceptance CORS origins must be explicitly configured and must not use local or wildcard origins");
             }
         }
+    }
+
+    private boolean requiresStrictCorsOrigins() {
+        return environment.matchesProfiles("prod") || environment.matchesProfiles("acceptance");
     }
 
     @Override

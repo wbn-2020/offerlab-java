@@ -60,7 +60,8 @@ class SearchControllerApiTest {
         mvc = ApiTestSupport.mvc(new SearchController(
                 searchFacade,
                 searchAnalyticsService,
-                postFacade
+                postFacade,
+                indexer
         ), jwtService);
     }
 

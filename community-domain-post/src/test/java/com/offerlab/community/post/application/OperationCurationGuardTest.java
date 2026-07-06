@@ -49,9 +49,9 @@ class OperationCurationGuardTest {
                 "public operation topics must not leak preview tokens from live DTOs");
         assertTrue(service.contains("snapshot.setPreviewToken(null)"),
                 "public operation topic snapshots must not leak preview tokens");
-        assertTrue(service.contains(".reasonText(section.getNote())"),
+        assertTrue(service.contains(".reasonText(publicCurationReason(null, section.getNote()))"),
                 "public operation topic sections must expose safe curation reasons separately from admin notes");
-        assertTrue(service.contains("section.setReasonText(section.getReasonText() == null ? section.getNote() : section.getReasonText())"),
+        assertTrue(service.contains("section.setReasonText(publicCurationReason(null, section.getReasonText(), section.getNote()))"),
                 "published operation topic snapshots must preserve curation reasons while filtering admin notes");
         assertTrue(service.contains("MAX_OPERATION_SLOTS = 2"), "P0 must cap operation slots to one or two slots");
         assertTrue(service.contains("MIN_SLOT_LIMIT = 3"), "slot display must default to at least three items");

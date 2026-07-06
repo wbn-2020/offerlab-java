@@ -30,6 +30,7 @@ public interface GrowthInsightMapper {
               AND p.visibility = 1
               AND p.author_id = #{authorId}
               AND p.create_time &gt;= #{since}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
@@ -53,6 +54,7 @@ public interface GrowthInsightMapper {
               AND p.author_id = #{authorId}
               AND p.create_time &gt;= #{since}
               AND p.create_time &lt; #{until}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
@@ -80,6 +82,7 @@ public interface GrowthInsightMapper {
               AND p.visibility = 1
               AND p.author_id = #{authorId}
               AND p.create_time &gt;= #{since}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
@@ -106,6 +109,7 @@ public interface GrowthInsightMapper {
               AND p.post_status = 1
               AND p.visibility = 1
               AND p.author_id = #{authorId}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
               AND p.id IN
               <foreach collection="postIds" item="postId" open="(" separator="," close=")">
                 #{postId}
@@ -141,6 +145,7 @@ public interface GrowthInsightMapper {
               AND p.author_id = #{authorId}
               AND (c.author_id IS NULL OR c.author_id != #{authorId})
               AND c.create_time &gt;= #{since}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'

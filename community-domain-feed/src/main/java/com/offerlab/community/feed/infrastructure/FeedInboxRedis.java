@@ -1,5 +1,6 @@
 package com.offerlab.community.feed.infrastructure;
 
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.redis.lua.LuaScriptLoader;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,7 +50,8 @@ public class FeedInboxRedis {
                     String.valueOf(inboxTtlSeconds)
             );
         } catch (Exception e) {
-            log.warn("addToInbox failed: uid={} postId={} err={}", uid, postId, e.getMessage());
+            log.warn("addToInbox failed: uid={} postId={} err={}",
+                    LogMask.id(uid), LogMask.id(postId), LogMask.message(e));
             throw new IllegalStateException("add feed inbox failed", e);
         }
     }
@@ -61,7 +63,8 @@ public class FeedInboxRedis {
             redis.opsForZSet().removeRange(key, 0, -501); // 保最近 500
             redis.expire(key, java.time.Duration.ofDays(30));
         } catch (Exception e) {
-            log.warn("addToAuthorTimeline failed: uid={} postId={}", authorUid, postId, e);
+            log.warn("addToAuthorTimeline failed: uid={} postId={} err={}",
+                    LogMask.id(authorUid), LogMask.id(postId), LogMask.message(e), e);
             throw new IllegalStateException("add author timeline failed", e);
         }
     }

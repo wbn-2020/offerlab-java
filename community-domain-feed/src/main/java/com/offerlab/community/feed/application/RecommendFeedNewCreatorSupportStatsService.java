@@ -1,5 +1,6 @@
 package com.offerlab.community.feed.application;
 
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.infrastructure.persistence.mapper.RecommendFeedNewCreatorSupportStatMapper;
 import com.offerlab.community.feed.infrastructure.persistence.po.RecommendFeedNewCreatorSupportStatPO;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
@@ -35,7 +36,7 @@ public class RecommendFeedNewCreatorSupportStatsService implements RecommendFeed
             mapper.insert(record);
         } catch (RuntimeException e) {
             log.warn("recommend feed new creator support stats write failed, viewerUid={}, domain={}, deliveredItemCount={}, supportHitItemCount={}",
-                    viewerUid, domain, deliveredItemCount, supportHitItemCount, e);
+                    LogMask.id(viewerUid), domain, deliveredItemCount, supportHitItemCount, e);
         }
     }
 

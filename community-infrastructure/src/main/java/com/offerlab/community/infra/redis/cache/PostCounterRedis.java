@@ -1,4 +1,5 @@
 package com.offerlab.community.infra.redis.cache;
+import com.offerlab.community.common.utils.LogMask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.HashOperations;
@@ -100,7 +101,7 @@ public class PostCounterRedis {
                     parseLong(entries.get(FIELD_SHARE))
             );
         } catch (Exception e) {
-            log.warn("post counter redis read degraded, postId={} reason={}", postId, e.getMessage());
+            log.warn("post counter redis read degraded, postId={} reason={}", LogMask.id(postId), LogMask.message(e));
             return null;
         }
     }
@@ -136,7 +137,7 @@ public class PostCounterRedis {
             hashOps.putIfAbsent(key, FIELD_FAVORITE, "0");
             hashOps.putIfAbsent(key, FIELD_SHARE, "0");
         } catch (Exception e) {
-            log.warn("post counter redis init degraded, postId={} reason={}", postId, e.getMessage());
+            log.warn("post counter redis init degraded, postId={} reason={}", LogMask.id(postId), LogMask.message(e));
         }
     }
 
@@ -156,7 +157,7 @@ public class PostCounterRedis {
             HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
             hashOps.putAll(key, map);
         } catch (Exception e) {
-            log.warn("post counter redis fill degraded, postId={} reason={}", postId, e.getMessage());
+            log.warn("post counter redis fill degraded, postId={} reason={}", LogMask.id(postId), LogMask.message(e));
         }
     }
 
@@ -166,7 +167,7 @@ public class PostCounterRedis {
             redisTemplate.opsForHash().increment(key, field, delta);
         } catch (Exception e) {
             log.warn("post counter redis increment degraded, postId={} field={} delta={} reason={}",
-                    postId, field, delta, e.getMessage());
+                    LogMask.id(postId), field, delta, LogMask.message(e));
         }
     }
 

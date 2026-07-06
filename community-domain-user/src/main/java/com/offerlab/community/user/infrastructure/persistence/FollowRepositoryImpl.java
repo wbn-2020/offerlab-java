@@ -1,6 +1,7 @@
 package com.offerlab.community.user.infrastructure.persistence;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.offerlab.community.common.utils.SqlLimits;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.domain.repository.FollowRepository;
@@ -61,7 +62,7 @@ public class FollowRepositoryImpl implements FollowRepository {
                 .eq(UserFollowPO::getFromUid, fromUid)
                 .eq(UserFollowPO::getToUid, toUid)
                 .eq(UserFollowPO::getIsDeleted, 0)
-                .last("LIMIT 1"));
+                .last(SqlLimits.limitOne()));
         if (existing == null) return false;
         if (followMapper.softDeleteById(existing.getId()) <= 0) {
             return false;
@@ -91,7 +92,7 @@ public class FollowRepositoryImpl implements FollowRepository {
                 .eq(UserFollowPO::getFromUid, uid)
                 .eq(UserFollowPO::getIsDeleted, 0)
                 .orderByDesc(UserFollowPO::getId)
-                .last("LIMIT " + pageLimit(size));
+                .last(SqlLimits.limit(pageLimit(size), 1, MAX_PAGE_LIMIT));
         if (cursor > 0) {
             q.lt(UserFollowPO::getId, cursor);
         }
@@ -114,7 +115,7 @@ public class FollowRepositoryImpl implements FollowRepository {
                 .eq(UserFollowPO::getToUid, uid)
                 .eq(UserFollowPO::getIsDeleted, 0)
                 .orderByDesc(UserFollowPO::getId)
-                .last("LIMIT " + pageLimit(size));
+                .last(SqlLimits.limit(pageLimit(size), 1, MAX_PAGE_LIMIT));
         if (cursor > 0) {
             q.lt(UserFollowPO::getId, cursor);
         }

@@ -1,5 +1,6 @@
 package com.offerlab.community.analytics.application;
 
+import com.offerlab.community.analytics.api.dto.CreatorCurationFeedbackDTO;
 import com.offerlab.community.analytics.api.dto.CreatorGrowthWorkspaceDTO;
 import com.offerlab.community.analytics.api.dto.CreatorRepresentativePostCmd;
 import com.offerlab.community.analytics.infrastructure.persistence.mapper.CreatorRepresentativePostMapper;
@@ -36,6 +37,7 @@ public class CreatorGrowthService {
     private final GrowthInsightMapper growthInsightMapper;
     private final ContentSeriesMapper contentSeriesMapper;
     private final CreatorRepresentativePostMapper representativePostMapper;
+    private final CreatorCurationFeedbackService creatorCurationFeedbackService;
     private final SnowflakeIdGenerator idGenerator;
 
     public CreatorGrowthWorkspaceDTO workspace(Long uid) {
@@ -50,11 +52,29 @@ public class CreatorGrowthService {
                 replyOpportunities,
                 publicSeries,
                 safeRows(growthInsightMapper.selectAuthorDomainStats(uid, since30)));
+        List<CreatorGrowthWorkspaceDTO.RepresentativePostDTO> representativePosts =
+                representativePosts(uid, topPosts, REPRESENTATIVE_DISPLAY_LIMIT);
+        CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO curationSummary = curationFeedbackSummary(uid);
+        List<CreatorCurationFeedbackDTO> curationFeedback = safeList(curationSummary.getRecentItems()).isEmpty()
+                ? safeList(curationSummary.getItems())
+                : safeList(curationSummary.getRecentItems());
+        List<CreatorGrowthWorkspaceDTO.MaintainablePostDTO> maintainablePosts =
+                maintainablePosts(topPosts, replyOpportunities);
+        List<CreatorGrowthWorkspaceDTO.WorkspaceActionDTO> actions =
+                workspaceActions(maintainablePosts, replyOpportunities, topicIdeas, curationFeedback);
         return CreatorGrowthWorkspaceDTO.builder()
+                .source(workspaceSource(summary, curationSummary, topPosts, replyOpportunities, curationFeedback))
+                .periodDays(30)
+                .degraded(curationSummary.isDegraded())
+                .fallbackReason(workspaceFallbackReason(summary, curationSummary, topPosts, replyOpportunities, curationFeedback))
+                .summary(workspaceSummary(summary, curationSummary, representativePosts, replyOpportunities))
+                .maintainablePosts(maintainablePosts)
+                .curationFeedback(curationFeedback)
+                .actions(actions)
                 .creatorFeedbackSummary(summary)
                 .creatorTopPosts(topPosts)
                 .creatorReplyOpportunities(replyOpportunities)
-                .representativePosts(representativePosts(uid, topPosts, REPRESENTATIVE_DISPLAY_LIMIT))
+                .representativePosts(representativePosts)
                 .publicSeries(publicSeries)
                 .creatorTopicIdeas(topicIdeas)
                 .creatorDigestNotification(CreatorGrowthWorkspaceDTO.CreatorDigestNotificationDTO.builder()
@@ -239,6 +259,195 @@ public class CreatorGrowthService {
         } catch (RuntimeException ignored) {
             return List.of();
         }
+    }
+
+    private CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO curationFeedbackSummary(Long uid) {
+        try {
+            return creatorCurationFeedbackService.summary(uid);
+        } catch (RuntimeException ignored) {
+            return CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO.builder()
+                    .updatedAt(LocalDateTime.now())
+                    .degraded(true)
+                    .fallbackReason("FEEDBACK_SOURCE_UNAVAILABLE")
+                    .total(0)
+                    .items(List.of())
+                    .recentItems(List.of())
+                    .build();
+        }
+    }
+
+    private static CreatorGrowthWorkspaceDTO.CreatorWorkspaceSummaryDTO workspaceSummary(
+            CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary,
+            CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO curationSummary,
+            List<CreatorGrowthWorkspaceDTO.RepresentativePostDTO> representativePosts,
+            List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities) {
+        CreatorGrowthWorkspaceDTO.FeedbackWindowDTO thirtyDays = window(summary, "last_30_days");
+        return CreatorGrowthWorkspaceDTO.CreatorWorkspaceSummaryDTO.builder()
+                .publicPostCount(thirtyDays.getPostCount())
+                .recentFavoriteCount(thirtyDays.getFavoriteCount())
+                .recentCommentCount(thirtyDays.getCommentCount())
+                .curationInclusionCount(curationSummary.getTotal())
+                .representativePostCount(safeList(representativePosts).size())
+                .replyOpportunityCount(safeList(replyOpportunities).size())
+                .updatedAt(curationSummary.getUpdatedAt() == null ? LocalDateTime.now() : curationSummary.getUpdatedAt())
+                .build();
+    }
+
+    private static List<CreatorGrowthWorkspaceDTO.MaintainablePostDTO> maintainablePosts(
+            List<CreatorGrowthWorkspaceDTO.CreatorTopPostDTO> topPosts,
+            List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities) {
+        return safeList(topPosts).stream()
+                .limit(5)
+                .map(post -> CreatorGrowthWorkspaceDTO.MaintainablePostDTO.builder()
+                        .postId(post.getPostId())
+                        .title(post.getTitle())
+                        .type("post")
+                        .visibility("public")
+                        .href(post.getPostId() == null ? null : "/post/" + post.getPostId())
+                        .editHref(post.getPostId() == null ? null : "/editor?source=creator_workbench&postId=" + post.getPostId())
+                        .primarySignal(hasReplyOpportunity(post.getPostId(), replyOpportunities)
+                                ? "recent_comments"
+                                : (post.isFeatured() ? "curation_inclusion" : "visible_feedback"))
+                        .signalText(maintainableSignalText(post, replyOpportunities))
+                        .suggestedAction(hasReplyOpportunity(post.getPostId(), replyOpportunities) ? "reply" : "update")
+                        .reasonText(post.getReason())
+                        .updatedAt(LocalDateTime.now())
+                        .build())
+                .toList();
+    }
+
+    private static List<CreatorGrowthWorkspaceDTO.WorkspaceActionDTO> workspaceActions(
+            List<CreatorGrowthWorkspaceDTO.MaintainablePostDTO> maintainablePosts,
+            List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities,
+            List<CreatorGrowthWorkspaceDTO.CreatorTopicIdeaDTO> topicIdeas,
+            List<CreatorCurationFeedbackDTO> curationFeedback) {
+        List<CreatorGrowthWorkspaceDTO.WorkspaceActionDTO> actions = new ArrayList<>();
+        if (!safeList(replyOpportunities).isEmpty()) {
+            CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO reply = replyOpportunities.get(0);
+            actions.add(CreatorGrowthWorkspaceDTO.WorkspaceActionDTO.builder()
+                    .actionId("reply-" + reply.getCommentId())
+                    .type("reply")
+                    .label("Reply to a public discussion")
+                    .href(reply.getPostId() == null ? null : "/post/" + reply.getPostId() + "#comment-" + reply.getCommentId())
+                    .postId(reply.getPostId())
+                    .source("public_comment")
+                    .reasonText(reply.getReason())
+                    .build());
+        }
+        if (!safeList(curationFeedback).isEmpty()) {
+            CreatorCurationFeedbackDTO feedback = curationFeedback.get(0);
+            actions.add(CreatorGrowthWorkspaceDTO.WorkspaceActionDTO.builder()
+                    .actionId("curation-" + feedback.getContentId())
+                    .type("review_curation")
+                    .label("Review where a public post was included")
+                    .href(feedback.getHref())
+                    .postId(feedback.getContentId())
+                    .source("operation-curation")
+                    .reasonText(feedback.getReasonText())
+                    .build());
+        }
+        if (!safeList(maintainablePosts).isEmpty()) {
+            CreatorGrowthWorkspaceDTO.MaintainablePostDTO post = maintainablePosts.get(0);
+            actions.add(CreatorGrowthWorkspaceDTO.WorkspaceActionDTO.builder()
+                    .actionId("maintain-" + post.getPostId())
+                    .type(post.getSuggestedAction())
+                    .label("Improve a public post")
+                    .href(post.getEditHref())
+                    .postId(post.getPostId())
+                    .source("creator_workbench")
+                    .reasonText(post.getReasonText())
+                    .build());
+        }
+        if (!safeList(topicIdeas).isEmpty()) {
+            CreatorGrowthWorkspaceDTO.CreatorTopicIdeaDTO idea = topicIdeas.get(0);
+            actions.add(CreatorGrowthWorkspaceDTO.WorkspaceActionDTO.builder()
+                    .actionId(idea.getIdeaId())
+                    .type("continue_writing")
+                    .label("Continue with a public note")
+                    .href("/editor?source=creator_workbench&ideaId=" + idea.getIdeaId())
+                    .ideaId(idea.getIdeaId())
+                    .source(idea.getSource())
+                    .reasonText(idea.getReason())
+                    .build());
+        }
+        return actions.stream()
+                .collect(LinkedHashMap<String, CreatorGrowthWorkspaceDTO.WorkspaceActionDTO>::new,
+                        (map, item) -> map.putIfAbsent(item.getActionId(), item),
+                        LinkedHashMap::putAll)
+                .values()
+                .stream()
+                .limit(4)
+                .toList();
+    }
+
+    private static String workspaceSource(CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary,
+                                          CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO curationSummary,
+                                          List<CreatorGrowthWorkspaceDTO.CreatorTopPostDTO> topPosts,
+                                          List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities,
+                                          List<CreatorCurationFeedbackDTO> curationFeedback) {
+        if (curationSummary.isDegraded()) {
+            return "fallback";
+        }
+        return hasPublicWorkspaceData(summary, topPosts, replyOpportunities, curationFeedback) ? "remote" : "empty";
+    }
+
+    private static String workspaceFallbackReason(CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary,
+                                                  CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO curationSummary,
+                                                  List<CreatorGrowthWorkspaceDTO.CreatorTopPostDTO> topPosts,
+                                                  List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities,
+                                                  List<CreatorCurationFeedbackDTO> curationFeedback) {
+        if (curationSummary.isDegraded()) {
+            return curationSummary.getFallbackReason();
+        }
+        return hasPublicWorkspaceData(summary, topPosts, replyOpportunities, curationFeedback) ? null : "NO_PUBLIC_CONTENT";
+    }
+
+    private static boolean hasPublicWorkspaceData(CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary,
+                                                  List<CreatorGrowthWorkspaceDTO.CreatorTopPostDTO> topPosts,
+                                                  List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities,
+                                                  List<CreatorCurationFeedbackDTO> curationFeedback) {
+        return window(summary, "last_30_days").getPostCount() > 0
+                || !safeList(topPosts).isEmpty()
+                || !safeList(replyOpportunities).isEmpty()
+                || !safeList(curationFeedback).isEmpty();
+    }
+
+    private static CreatorGrowthWorkspaceDTO.FeedbackWindowDTO window(
+            CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary,
+            String key) {
+        return safeList(summary == null ? null : summary.getWindows()).stream()
+                .filter(item -> key.equals(item.getKey()))
+                .findFirst()
+                .orElse(CreatorGrowthWorkspaceDTO.FeedbackWindowDTO.builder()
+                        .key(key)
+                        .days(30)
+                        .postCount(0L)
+                        .favoriteCount(0L)
+                        .commentCount(0L)
+                        .feedbackCount(0L)
+                        .build());
+    }
+
+    private static boolean hasReplyOpportunity(
+            Long postId,
+            List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities) {
+        return postId != null && safeList(replyOpportunities).stream()
+                .anyMatch(reply -> postId.equals(reply.getPostId()));
+    }
+
+    private static String maintainableSignalText(
+            CreatorGrowthWorkspaceDTO.CreatorTopPostDTO post,
+            List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities) {
+        if (hasReplyOpportunity(post.getPostId(), replyOpportunities)) {
+            return "Recent public discussion can be answered.";
+        }
+        if (post.isFeatured()) {
+            return "This public post has been included in a curated surface.";
+        }
+        long feedbackCount = post.getFeedbackCount() == null ? 0L : post.getFeedbackCount();
+        return feedbackCount > 0
+                ? feedbackCount + " visible feedback signals in the recent window."
+                : "Public post available for a calm update.";
     }
 
     private List<CreatorGrowthWorkspaceDTO.CreatorTopicIdeaDTO> topicIdeasFrom(

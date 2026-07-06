@@ -15,6 +15,7 @@ import java.util.List;
 @AllArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class CreatorCurationFeedbackDTO {
+    private String eventType;
     private String eventId;
     private Long contentId;
     private String contentTitle;
@@ -28,6 +29,10 @@ public class CreatorCurationFeedbackDTO {
     private LocalDateTime triggeredAt;
     private String status;
     private String source;
+    private String visibilityScope;
+    private String governanceStatus;
+    private Boolean publicVisible;
+    private Boolean anonymousProtected;
     private CreatorCurationMetricsDTO publicMetrics;
 
     @Data

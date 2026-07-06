@@ -56,5 +56,10 @@ public class DiscoveryMapDTO {
         private List<String> tags;
         private String reason;
         private String reasonText;
+        private String assetStatus;
+        private String visibilityState;
+        private String previewSource;
+        private String excludedReason;
+        private LocalDateTime updatedAt;
     }
 }

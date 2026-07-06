@@ -28,6 +28,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -118,6 +119,40 @@ public class ContentSeriesService {
         Map<Long, ContentSeriesProgressDTO> progressBySeriesId = publicProgressBySeriesIds(
                 series.stream().map(ContentSeriesPO::getId).toList());
         return series.stream()
+                .map(item -> toDto(item, progressBySeriesId.get(item.getId())))
+                .toList();
+    }
+
+    public List<ContentSeriesDTO> listPublicByPostIds(Collection<Long> postIds, int limit) {
+        if (postIds == null || postIds.isEmpty() || !schemaReady()) {
+            return List.of();
+        }
+        List<Long> publicPostIds = postIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .collect(java.util.stream.Collectors.collectingAndThen(
+                        java.util.stream.Collectors.toCollection(LinkedHashSet::new),
+                        List::copyOf));
+        if (publicPostIds.isEmpty()) {
+            return List.of();
+        }
+        List<ContentSeriesPO> series = contentSeriesMapper.selectByPostIds(
+                publicPostIds,
+                normalizePageSize(limit)
+        );
+        if (series == null || series.isEmpty()) {
+            return List.of();
+        }
+        List<ContentSeriesPO> visibleSeries = series.stream()
+                .filter(item -> item != null && !Objects.equals(item.getIsDeleted(), 1))
+                .filter(item -> Objects.equals(item.getVisibility(), VISIBILITY_PUBLIC))
+                .toList();
+        if (visibleSeries.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, ContentSeriesProgressDTO> progressBySeriesId = publicProgressBySeriesIds(
+                visibleSeries.stream().map(ContentSeriesPO::getId).toList());
+        return visibleSeries.stream()
                 .map(item -> toDto(item, progressBySeriesId.get(item.getId())))
                 .toList();
     }

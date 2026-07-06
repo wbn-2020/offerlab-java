@@ -23,4 +23,5 @@ public class OperationCurationSelectedEvent {
     private String entrance;
     private String status;
     private String eventType;
+    private String dedupKey;
 }

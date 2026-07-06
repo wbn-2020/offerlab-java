@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -16,6 +17,15 @@ import java.util.Map;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class CreatorGrowthWorkspaceDTO {
 
+    private String source;
+    private Integer periodDays;
+    private boolean degraded;
+    private String fallbackReason;
+    private CreatorWorkspaceSummaryDTO summary;
+    private List<MaintainablePostDTO> maintainablePosts;
+    private List<CreatorCurationFeedbackDTO> curationFeedback;
+    private List<WorkspaceActionDTO> actions;
+
     private CreatorFeedbackSummaryDTO creatorFeedbackSummary;
     private List<CreatorTopPostDTO> creatorTopPosts;
     private List<CreatorReplyOpportunityDTO> creatorReplyOpportunities;
@@ -24,6 +34,56 @@ public class CreatorGrowthWorkspaceDTO {
     private List<CreatorTopicIdeaDTO> creatorTopicIdeas;
     private CreatorDigestNotificationDTO creatorDigestNotification;
     private List<String> nonPaymentIncentiveCopy;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class CreatorWorkspaceSummaryDTO {
+        private Long publicPostCount;
+        private Long recentFavoriteCount;
+        private Long recentCommentCount;
+        private Integer curationInclusionCount;
+        private Integer representativePostCount;
+        private Integer replyOpportunityCount;
+        private LocalDateTime updatedAt;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class MaintainablePostDTO {
+        private Long postId;
+        private String title;
+        private String type;
+        private String visibility;
+        private String href;
+        private String editHref;
+        private String primarySignal;
+        private String signalText;
+        private String suggestedAction;
+        private String reasonText;
+        private LocalDateTime updatedAt;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class WorkspaceActionDTO {
+        private String actionId;
+        private String type;
+        private String label;
+        private String href;
+        private Long postId;
+        private String ideaId;
+        private String source;
+        private String reasonText;
+    }
 
     @Data
     @Builder

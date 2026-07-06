@@ -18,5 +18,6 @@ CREATE TABLE t_outbox_message (
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     KEY idx_status_time (msg_status, next_retry_time),
+    KEY idx_status_retry_create (msg_status, next_retry_time, create_time),
     KEY idx_lock_owner (lock_owner, lock_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='transactional outbox messages';

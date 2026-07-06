@@ -6,6 +6,7 @@ import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.offerlab.community.common.utils.LogMask;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -42,10 +43,14 @@ public class JwtService {
 
     @PostConstruct
     void validateSecret() {
-        if (environment.matchesProfiles("prod")
+        if (requiresStrongSecret()
                 && (DEFAULT_SECRET.equals(secret) || APP_DEFAULT_SECRET.equals(secret))) {
-            throw new IllegalStateException("生产环境必须通过 JWT_SECRET 配置非默认 JWT 密钥");
+            throw new IllegalStateException("Production or acceptance profile must configure a non-default JWT_SECRET");
         }
+    }
+
+    private boolean requiresStrongSecret() {
+        return environment.matchesProfiles("prod") || environment.matchesProfiles("acceptance");
     }
 
     private SecretKey key() {
@@ -94,7 +99,8 @@ public class JwtService {
                     return JwtAuthResult.invalid();
                 }
             } catch (Exception redisFailure) {
-                log.warn("jwt redis revocation check degraded: uid={} reason={}", uid, redisFailure.getMessage());
+                log.warn("jwt redis revocation check degraded: uid={} reason={}",
+                        LogMask.id(uid), LogMask.message(redisFailure));
                 return JwtAuthResult.degraded(uid);
             }
             return JwtAuthResult.authenticated(uid);
@@ -110,7 +116,7 @@ public class JwtService {
         try {
             redis.opsForValue().set("auth:blacklist:" + token, "1", Duration.ofHours(ttlHours));
         } catch (Exception e) {
-            log.warn("jwt token invalidation degraded: reason={}", e.getMessage());
+            log.warn("jwt token invalidation degraded: reason={}", LogMask.message(e));
         }
     }
 
@@ -118,7 +124,7 @@ public class JwtService {
         try {
             redis.opsForValue().set(revokedBeforeKey(uid), String.valueOf(System.currentTimeMillis()), Duration.ofHours(ttlHours));
         } catch (Exception e) {
-            log.warn("jwt user revocation degraded: uid={} reason={}", uid, e.getMessage());
+            log.warn("jwt user revocation degraded: uid={} reason={}", LogMask.id(uid), LogMask.message(e));
         }
     }
 

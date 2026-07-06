@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.SqlLimits;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
@@ -445,7 +446,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (names.size() < limit) {
             companyAliasMapper.selectList(new LambdaQueryWrapper<CompanyAliasPO>()
                     .eq(CompanyAliasPO::getStatus, 1)
-                    .last("LIMIT " + (limit * 2)))
+                    .last(SqlLimits.limit(limit * 2, 1, 40)))
                     .forEach(alias -> {
                         addIfMatches(names, alias.getAlias(), p);
                         addIfMatches(names, alias.getCanonicalCompany(), p);

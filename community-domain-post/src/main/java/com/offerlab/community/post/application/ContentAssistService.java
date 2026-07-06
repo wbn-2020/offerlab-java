@@ -34,6 +34,7 @@ import java.util.Set;
 public class ContentAssistService {
 
     private static final int MAX_LIST_ITEMS = 6;
+    private static final String PRIVATE_CAREER_BOUNDARY_ERROR = "PRIVATE_CAREER_TRAINING_BOUNDARY";
 
     private final ObjectMapper objectMapper;
     private final ContentAssistAiClient aiClient;
@@ -46,6 +47,12 @@ public class ContentAssistService {
         String title = limit(clean(cmd == null ? null : cmd.getTitle()), 255);
         String content = requireContent(cmd == null ? null : cmd.getContent());
         List<String> tagNames = normalizeTagNames(cmd == null ? null : cmd.getTagNames());
+        if (isPrivateCareerTrainingContent(title, content, tagNames)) {
+            ContentAssistWritingDTO result = boundaryWriting();
+            record(uid, ContentAssistScene.WRITING, "rules", "RULE_BOUNDARY", domain, content,
+                    0, 0, 0L, PRIVATE_CAREER_BOUNDARY_ERROR);
+            return result;
+        }
         ContentAssistWritingDTO rule = ruleWriting(domain, cmd == null ? null : cmd.getPostType(), title, content, tagNames);
         AssistExecution<ContentAssistWritingDTO> execution = tryAiWriting(domain, cmd == null ? null : cmd.getPostType(),
                 title, content, tagNames, rule);
@@ -60,6 +67,12 @@ public class ContentAssistService {
         String title = limit(clean(cmd == null ? null : cmd.getTitle()), 255);
         String content = requireContent(cmd == null ? null : cmd.getContent());
         List<String> tagNames = normalizeTagNames(cmd == null ? null : cmd.getTagNames());
+        if (isPrivateCareerTrainingContent(title, content, tagNames)) {
+            ContentAssistQualityScoreDTO result = boundaryQuality();
+            record(uid, ContentAssistScene.QUALITY_SCORE, "rules", "RULE_BOUNDARY", domain, content,
+                    0, 0, 0L, PRIVATE_CAREER_BOUNDARY_ERROR);
+            return result;
+        }
         ContentAssistQualityScoreDTO rule = ruleQuality(domain, cmd == null ? null : cmd.getPostType(), title, content, tagNames);
         AssistExecution<ContentAssistQualityScoreDTO> execution = tryAiQuality(domain, cmd == null ? null : cmd.getPostType(),
                 title, content, tagNames, rule);
@@ -72,6 +85,12 @@ public class ContentAssistService {
         Integer domain = normalizeOptionalDomain(cmd == null ? null : cmd.getDomain());
         String title = limit(clean(cmd == null ? null : cmd.getTitle()), 255);
         String content = requireContent(cmd == null ? null : cmd.getContent());
+        if (isPrivateCareerTrainingContent(title, content, List.of())) {
+            ContentAssistTagTopicSuggestionsDTO result = boundaryTagTopicSuggestions(domain);
+            record(uid, ContentAssistScene.TAG_TOPIC_SUGGESTIONS, "rules", "RULE_BOUNDARY", domain, content,
+                    0, 0, 0L, PRIVATE_CAREER_BOUNDARY_ERROR);
+            return result;
+        }
         ContentAssistTagTopicSuggestionsDTO result = ruleTagTopicSuggestions(domain, title, content);
         record(uid, ContentAssistScene.TAG_TOPIC_SUGGESTIONS, "rules", "RULE_ONLY", domain, content, 0, 0, 0L, null);
         return result;
@@ -154,7 +173,7 @@ public class ContentAssistService {
         if (content.length() < 120) {
             suggestions.add("正文建议补充背景、步骤、结果，方便读者复用经验。");
         }
-        if (!containsAny(content, List.of("结果", "收益", "指标", "复盘", "结论"))) {
+        if (!containsAny(content, List.of("结果", "效果", "指标", "复盘", "结论"))) {
             suggestions.add("补充结果或指标，帮助内容形成闭环。");
         }
         if (tagNames.isEmpty()) {
@@ -177,6 +196,22 @@ public class ContentAssistService {
                 .outline(outline)
                 .suggestions(limitList(suggestions, MAX_LIST_ITEMS, 80))
                 .riskHints(limitList(riskHints, 4, 80))
+                .build();
+    }
+
+    private ContentAssistWritingDTO boundaryWriting() {
+        return ContentAssistWritingDTO.builder()
+                .provider("rules")
+                .fallbackUsed(true)
+                .promptTokens(0)
+                .completionTokens(0)
+                .estimatedCostMicros(0L)
+                .errorCode(PRIVATE_CAREER_BOUNDARY_ERROR)
+                .suggestedTitle(null)
+                .summary("编辑器助手只服务公共内容生产，涉及私人求职准备记录时不生成写作、标签、话题或系列建议。")
+                .outline(List.of())
+                .suggestions(List.of())
+                .riskHints(List.of("请移除私人材料后，再继续编辑公开经验内容。", "公共内容生产建议不处理个人求职准备记录。"))
                 .build();
     }
 
@@ -211,7 +246,7 @@ public class ContentAssistService {
                 ContentAssistQualityScoreDTO.DimensionDTO.builder()
                         .dimension("domain")
                         .score(domainScore)
-                        .reason(PostDomain.isValid(domain) ? "已绑定现有领域，便于后续推荐与归档。" : "未绑定明确领域，建议发布前确认内容归属。")
+                        .reason(PostDomain.isValid(domain) ? "已绑定现有领域，便于后续检索与归档。" : "未绑定明确领域，建议发布前确认内容归属。")
                         .build());
         List<String> suggestions = new ArrayList<>();
         if (contentScore < 28) {
@@ -241,6 +276,27 @@ public class ContentAssistService {
                 .build();
     }
 
+    private ContentAssistQualityScoreDTO boundaryQuality() {
+        return ContentAssistQualityScoreDTO.builder()
+                .score(0)
+                .level("NEEDS_WORK")
+                .advisoryOnly(true)
+                .summary("命中公共内容生产边界，当前仅返回边界提示，不进入质量评分。")
+                .suggestions(List.of())
+                .explanations(List.of(ContentAssistQualityScoreDTO.DimensionDTO.builder()
+                        .dimension("safety")
+                        .score(0)
+                        .reason("涉及私人求职准备记录时，编辑器助手不会生成质量建议。")
+                        .build()))
+                .provider("rules")
+                .fallbackUsed(true)
+                .promptTokens(0)
+                .completionTokens(0)
+                .estimatedCostMicros(0L)
+                .errorCode(PRIVATE_CAREER_BOUNDARY_ERROR)
+                .build();
+    }
+
     private ContentAssistTagTopicSuggestionsDTO ruleTagTopicSuggestions(Integer domain, String title, String content) {
         List<TagDTO> tags = taxonomyService.listTags();
         List<CommunityTopicDTO> topics = taxonomyService.listTopics();
@@ -262,7 +318,7 @@ public class ContentAssistService {
                             .comparing((TagDTO tag) -> Boolean.TRUE.equals(tag.getRecommended())).reversed()
                             .thenComparing(tag -> Boolean.TRUE.equals(tag.getOfficial()), Comparator.reverseOrder()))
                     .limit(3)
-                    .map(tag -> new MatchedTag(tag, 1, "结合当前领域推荐已有标签"))
+                    .map(tag -> new MatchedTag(tag, 1, "结合当前领域补全已有标签"))
                     .toList();
         }
         Set<Long> matchedTagIds = matchedTags.stream()
@@ -274,6 +330,7 @@ public class ContentAssistService {
                 .filter(StringUtils::hasText)
                 .collect(java.util.stream.Collectors.toSet());
         List<ContentAssistTagTopicSuggestionsDTO.TopicSuggestionDTO> topicDtos = topics.stream()
+                .filter(this::isActiveTopic)
                 .map(topic -> matchTopic(topic, text, matchedTagIds, matchedTagNames))
                 .filter(Objects::nonNull)
                 .sorted(Comparator.comparingInt(TopicMatch::score).reversed())
@@ -293,6 +350,17 @@ public class ContentAssistService {
                         .recommended(Boolean.TRUE.equals(match.tag().getRecommended()))
                         .build()).toList())
                 .topics(topicDtos)
+                .build();
+    }
+
+    private ContentAssistTagTopicSuggestionsDTO boundaryTagTopicSuggestions(Integer domain) {
+        return ContentAssistTagTopicSuggestionsDTO.builder()
+                .provider("rules")
+                .fallbackUsed(true)
+                .domain(domain)
+                .domainName(PostDomain.isValid(domain) ? PostDomain.fromCode(domain).getDisplayName() : null)
+                .tags(List.of())
+                .topics(List.of())
                 .build();
     }
 
@@ -442,7 +510,7 @@ public class ContentAssistService {
         if (Boolean.TRUE.equals(tag.getOfficial())) {
             score++;
         }
-        return new MatchedTag(tag, score, reason == null ? "结合当前领域推荐已有标签" : reason);
+        return new MatchedTag(tag, score, reason == null ? "结合当前领域补全已有标签" : reason);
     }
 
     private TopicMatch matchTopic(CommunityTopicDTO topic,
@@ -468,6 +536,9 @@ public class ContentAssistService {
             if (tag == null) {
                 continue;
             }
+            if (!isActiveTag(tag)) {
+                continue;
+            }
             if (tag.getId() != null && matchedTagIds.contains(tag.getId())) {
                 score += 3;
                 reason = "匹配到已存在专题标签";
@@ -489,7 +560,46 @@ public class ContentAssistService {
     }
 
     private boolean isActiveTag(TagDTO tag) {
-        return tag != null && !Objects.equals(tag.getStatus(), 0) && StringUtils.hasText(tag.getName());
+        return tag != null
+                && !Objects.equals(tag.getStatus(), 0)
+                && StringUtils.hasText(tag.getName())
+                && isAllowedSuggestionSource(tag.getName(), tag.getSlug(), tag.getCategory(),
+                tag.getSynonyms() == null ? null : String.join(" ", tag.getSynonyms()));
+    }
+
+    private boolean isActiveTopic(CommunityTopicDTO topic) {
+        return topic != null
+                && !Objects.equals(topic.getStatus(), 0)
+                && StringUtils.hasText(topic.getName())
+                && isAllowedSuggestionSource(topic.getName(), topic.getSlug(), topic.getDescription(), topic.getTopicType());
+    }
+
+    private boolean isPrivateCareerTrainingContent(String title, String content, List<String> tagNames) {
+        String source = (clean(title) + "\n" + clean(content) + "\n" + String.join("\n", tagNames)).toLowerCase(Locale.ROOT);
+        int sensitive = 0;
+        if (source.contains("简历")) {
+            sensitive++;
+        }
+        if (source.contains("jd")) {
+            sensitive++;
+        }
+        if (source.contains("投递")) {
+            sensitive++;
+        }
+        if (source.contains("模拟面试")) {
+            sensitive++;
+        }
+        boolean privateCue = source.contains("私人") || source.contains("个人") || source.contains("训练");
+        return sensitive >= 1 && (privateCue || sensitive >= 2);
+    }
+
+    private boolean isAllowedSuggestionSource(String... values) {
+        String source = String.join("\n", values == null ? new String[0] : values).toLowerCase(Locale.ROOT);
+        return !source.contains("简历")
+                && !source.contains("jd")
+                && !source.contains("投递")
+                && !source.contains("模拟面试")
+                && !source.contains("私人训练");
     }
 
     private JsonNode readJsonObject(String json) {
@@ -567,7 +677,7 @@ public class ContentAssistService {
             case Post.TYPE_PROJECT_REVIEW -> List.of("背景", "难点", "方案", "结果");
             case Post.TYPE_PITFALL -> List.of("现象", "根因", "修复方案", "指标结果");
             case Post.TYPE_SYSTEM_DESIGN -> List.of("目标与约束", "核心模块", "数据流", "取舍");
-            case Post.TYPE_INTERVIEW_RECAP -> List.of("面试背景", "问题与追问", "回答卡点", "补强计划");
+            case Post.TYPE_INTERVIEW_RECAP -> List.of("公开背景", "问题与追问", "表达卡点", "复盘结论");
             default -> List.of("背景", "问题", "方案", "结果复盘");
         };
     }
@@ -722,7 +832,7 @@ public class ContentAssistService {
         if (size == 1) {
             return "已有基础标签，建议再补充 1 个主题标签。";
         }
-        return "标签数量合适，便于推荐与检索。";
+        return "标签数量合适，便于检索与归档。";
     }
 
     private String level(int score) {

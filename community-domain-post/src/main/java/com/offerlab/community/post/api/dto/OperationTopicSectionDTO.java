@@ -20,6 +20,8 @@ public class OperationTopicSectionDTO {
     private Integer sortOrder;
     private String note;
     private String reasonText;
+    private String reasonDraftText;
+    private Boolean reasonConfirmed;
     private PostBriefDTO post;
     private List<OperationTopicSectionDTO> items;
 }

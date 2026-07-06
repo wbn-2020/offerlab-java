@@ -2,6 +2,7 @@ package com.offerlab.community.infra.web.interceptor;
 
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.security.JwtAuthResult;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.UserContext;
@@ -30,9 +31,12 @@ public class AuthInterceptor implements HandlerInterceptor {
     private static final String PREFIX = "Bearer ";
     private static final String[] STRICT_REVOCATION_PREFIXES = {
             "/api/v1/admin",
+            "/api/v1/expert-certifications/admin",
             "/api/v1/search/admin",
+            "/api/v1/operations/admin",
             "/api/v1/ops",
             "/api/v1/posts/admin",
+            "/api/v1/tags/admin",
             "/api/v1/comments/admin"
     };
 
@@ -72,7 +76,8 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
 
         if (uid != null && revocationCheckDegraded && requiresStrictRevocation(request)) {
-            log.warn("jwt revocation check degraded for sensitive path: uid={} path={}", uid, request.getRequestURI());
+            log.warn("jwt revocation check degraded for sensitive path: uid={} path={}",
+                    LogMask.id(uid), request.getRequestURI());
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
 

@@ -180,6 +180,92 @@ class ContentAssistServiceTest {
     }
 
     @Test
+    void privateCareerTrainingInputReturnsBoundaryFallbackWithoutCallingAi() {
+        InMemoryRecordGateway records = new InMemoryRecordGateway();
+        StubAiClient aiClient = StubAiClient.withResponse("""
+                {"suggestedTitle":"完整训练计划","summary":"私人训练安排","suggestions":["每天模拟面试"]}
+                """);
+        ContentAssistService service = new ContentAssistService(
+                objectMapper,
+                aiClient,
+                new StubTaxonomyService(List.of(), List.of()),
+                records);
+
+        ContentAssistWritingDTO result = service.assistWriting(21L, ContentAssistWritingCmd.builder()
+                .domain(2)
+                .postType(15)
+                .title("需要优化简历并匹配 JD")
+                .content("请根据我的简历、JD、投递记录和私人模拟面试记录安排训练计划。")
+                .build());
+
+        assertEquals(0, aiClient.calls);
+        assertEquals("rules", result.getProvider());
+        assertTrue(result.getFallbackUsed());
+        assertEquals("PRIVATE_CAREER_TRAINING_BOUNDARY", result.getErrorCode());
+        assertTrue(result.getSuggestions().isEmpty());
+        assertTrue(result.getRiskHints().stream().anyMatch(item -> item.contains("公共内容生产")));
+        assertEquals("RULE_BOUNDARY", records.last().status());
+        assertEquals("PRIVATE_CAREER_TRAINING_BOUNDARY", records.last().errorCode());
+    }
+
+    @Test
+    void tagTopicSuggestionsFilterDisabledAndPrivateCareerTrainingSources() {
+        TagDTO redis = TagDTO.builder()
+                .id(101L)
+                .name("Redis")
+                .official(false)
+                .recommended(true)
+                .status(1)
+                .synonyms(List.of("缓存"))
+                .build();
+        TagDTO privateTraining = TagDTO.builder()
+                .id(102L)
+                .name("JD 匹配")
+                .official(true)
+                .recommended(true)
+                .status(1)
+                .synonyms(List.of("简历优化"))
+                .build();
+        TagDTO disabled = TagDTO.builder()
+                .id(103L)
+                .name("投递建议")
+                .official(true)
+                .recommended(true)
+                .status(0)
+                .build();
+        CommunityTopicDTO publicTopic = CommunityTopicDTO.builder()
+                .id(301L)
+                .slug("backend-stability")
+                .name("后端稳定性")
+                .status(1)
+                .tags(List.of(redis))
+                .build();
+        CommunityTopicDTO disabledTopic = CommunityTopicDTO.builder()
+                .id(302L)
+                .slug("private-mock-interview")
+                .name("私人模拟面试训练")
+                .status(0)
+                .tags(List.of(privateTraining))
+                .build();
+        ContentAssistService service = new ContentAssistService(
+                objectMapper,
+                StubAiClient.disabled(),
+                new StubTaxonomyService(List.of(redis, privateTraining, disabled), List.of(publicTopic, disabledTopic)),
+                new InMemoryRecordGateway());
+
+        ContentAssistTagTopicSuggestionsDTO result = service.suggestTagsAndTopics(22L, ContentAssistTagTopicSuggestionsCmd.builder()
+                .domain(1)
+                .title("Redis 后端稳定性复盘")
+                .content("Redis 缓存链路复盘，重点整理后端稳定性、缓存回源和结果复盘。")
+                .build());
+
+        assertTrue(result.getTags().stream().anyMatch(item -> "Redis".equals(item.getName())));
+        assertTrue(result.getTopics().stream().anyMatch(item -> "backend-stability".equals(item.getSlug())));
+        assertFalse(result.getTags().stream().anyMatch(item -> item.getName().contains("JD") || item.getName().contains("投递")));
+        assertFalse(result.getTopics().stream().anyMatch(item -> item.getName().contains("模拟面试")));
+    }
+
+    @Test
     void missingDomainDoesNotPretendToBeTechDomain() {
         InMemoryRecordGateway records = new InMemoryRecordGateway();
         ContentAssistService service = new ContentAssistService(

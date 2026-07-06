@@ -22,6 +22,7 @@ import com.offerlab.community.user.infrastructure.persistence.mapper.UserProfile
 import com.offerlab.community.user.infrastructure.persistence.po.UserPrivacySettingPO;
 import com.offerlab.community.user.infrastructure.persistence.po.UserProfilePO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.offerlab.community.common.utils.SqlLimits;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -257,7 +258,7 @@ public class UserApplicationService {
         LambdaQueryWrapper<UserProfilePO> query = new LambdaQueryWrapper<UserProfilePO>()
                 .eq(UserProfilePO::getIsDeleted, 0)
                 .orderByDesc(UserProfilePO::getUpdateTime)
-                .last("LIMIT " + Math.min(limit * 3, 60));
+                .last(SqlLimits.limit(limit * 3, 1, 60));
         if (StringUtils.hasText(keyword)) {
             query.like(UserProfilePO::getNickname, keyword.trim());
         }

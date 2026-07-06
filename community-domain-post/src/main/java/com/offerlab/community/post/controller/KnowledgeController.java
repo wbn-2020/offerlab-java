@@ -2,7 +2,13 @@ package com.offerlab.community.post.controller;
 
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.post.api.dto.ContentSeriesDTO;
+import com.offerlab.community.post.api.dto.DiscoveryMapDTO;
+import com.offerlab.community.post.api.dto.KnowledgeAssetOverviewDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationGraphDTO;
+import com.offerlab.community.post.api.dto.KnowledgeRelationNodeDTO;
+import com.offerlab.community.post.application.ContentSeriesService;
+import com.offerlab.community.post.application.DiscoveryMapService;
 import com.offerlab.community.post.application.KnowledgeRelationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,12 +16,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/knowledge")
 @RequiredArgsConstructor
 public class KnowledgeController {
 
     private final KnowledgeRelationService knowledgeRelationService;
+    private final DiscoveryMapService discoveryMapService;
+    private final ContentSeriesService contentSeriesService;
 
     @PublicApi
     @GetMapping("/relations")
@@ -25,5 +35,43 @@ public class KnowledgeController {
                                                        @RequestParam(required = false) Integer domain,
                                                        @RequestParam(defaultValue = "8") int limit) {
         return Result.ok(knowledgeRelationService.explore(postId, tagId, topicId, domain, limit));
+    }
+
+    @PublicApi
+    @GetMapping("/assets")
+    public Result<KnowledgeAssetOverviewDTO> assets(@RequestParam(required = false) Long postId,
+                                                    @RequestParam(required = false) Long tagId,
+                                                    @RequestParam(required = false) Long topicId,
+                                                    @RequestParam(required = false) String assetId,
+                                                    @RequestParam(required = false) String assetType,
+                                                    @RequestParam(required = false) Integer domain,
+                                                    @RequestParam(defaultValue = "8") int limit) {
+        Long resolvedPostId = postId;
+        if (resolvedPostId == null && "post".equals(assetType)) {
+            resolvedPostId = parseAssetNumericId(assetId);
+        }
+        KnowledgeRelationGraphDTO graph = knowledgeRelationService.explore(resolvedPostId, tagId, topicId, domain, limit);
+        List<Long> postIds = graph.getNodes() == null ? List.of() : graph.getNodes().stream()
+                .filter(node -> "post".equals(node.getType()))
+                .map(KnowledgeRelationNodeDTO::getKey)
+                .map(KnowledgeController::parseAssetNumericId)
+                .filter(id -> id != null && id > 0)
+                .toList();
+        List<ContentSeriesDTO> series = contentSeriesService.listPublicByPostIds(postIds, limit);
+        DiscoveryMapDTO discoveryMap = discoveryMapService.getPublicMap(limit, limit);
+        return Result.ok(knowledgeRelationService.aggregatePublicKnowledge(graph, series, discoveryMap, limit));
+    }
+
+    private static Long parseAssetNumericId(String key) {
+        if (key == null) {
+            return null;
+        }
+        int index = key.indexOf(':');
+        String id = index >= 0 && index + 1 < key.length() ? key.substring(index + 1) : key;
+        try {
+            return Long.parseLong(id);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 }

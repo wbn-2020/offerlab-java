@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.SqlLimits;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
@@ -108,7 +109,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getTargetType, TARGET_POST)
                 .eq(LikePO::getTargetId, postId)
                 .eq(LikePO::getIsDeleted, 0)
-                .last("LIMIT 1"));
+                .last(SqlLimits.limitOne()));
         if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
         if (likeMapper.softDeleteById(po.getId()) <= 0) {
             throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
@@ -190,7 +191,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getTargetType, TARGET_COMMENT)
                 .eq(LikePO::getTargetId, commentId)
                 .eq(LikePO::getIsDeleted, 0)
-                .last("LIMIT 1"));
+                .last(SqlLimits.limitOne()));
         if (po == null) throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
         if (likeMapper.softDeleteById(po.getId()) <= 0) {
             throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
@@ -240,7 +241,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(FavoritePO::getUserId, uid)
                 .eq(FavoritePO::getPostId, postId)
                 .eq(FavoritePO::getIsDeleted, 0)
-                .last("LIMIT 1"));
+                .last(SqlLimits.limitOne()));
         if (po == null) throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
         if (favoriteMapper.softDeleteById(po.getId()) <= 0) {
             throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
@@ -310,7 +311,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(CommentPO::getRootId, 0L)             // 仅一级
                 .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
                 .orderByDesc(CommentPO::getCreateTime)
-                .last("LIMIT " + (limit + 1));
+                .last(SqlLimits.limit(limit + 1, 1, 51));
         if (cursor > 0) {
             q.lt(CommentPO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
@@ -383,7 +384,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(LikePO::getTargetType, TARGET_POST)
                 .eq(LikePO::getIsDeleted, 0)
                 .orderByDesc(LikePO::getCreateTime)
-                .last("LIMIT " + (limit + 1));
+                .last(SqlLimits.limit(limit + 1, 1, 51));
         if (cursor > 0) {
             q.lt(LikePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
@@ -398,7 +399,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(FavoritePO::getUserId, uid)
                 .eq(FavoritePO::getIsDeleted, 0)
                 .orderByDesc(FavoritePO::getCreateTime)
-                .last("LIMIT " + (limit + 1));
+                .last(SqlLimits.limit(limit + 1, 1, 51));
         if (cursor > 0) {
             q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }

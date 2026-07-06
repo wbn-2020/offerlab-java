@@ -29,6 +29,8 @@ public class OperationTopicDTO {
     private LocalDateTime endsAt;
     private String previewToken;
     private Integer currentVersion;
+    private String schemaVersion;
+    private Integer sourceVersion;
     private String note;
     private List<OperationTopicSectionDTO> sections;
     private LocalDateTime createTime;

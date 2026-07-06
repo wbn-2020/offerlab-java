@@ -24,6 +24,8 @@ public class OperationSlotDTO {
     private LocalDateTime endsAt;
     private String previewToken;
     private Integer currentVersion;
+    private String schemaVersion;
+    private Integer sourceVersion;
     private String source;
     private Boolean degraded;
     private String fallbackReason;

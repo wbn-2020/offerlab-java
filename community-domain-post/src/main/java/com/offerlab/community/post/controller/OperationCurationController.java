@@ -16,6 +16,7 @@ import com.offerlab.community.post.api.dto.OperationSlotItemCmd;
 import com.offerlab.community.post.api.dto.OperationSlotItemDTO;
 import com.offerlab.community.post.api.dto.OperationTopicCmd;
 import com.offerlab.community.post.api.dto.OperationTopicDTO;
+import com.offerlab.community.post.api.dto.OperationTopicCandidateHintCmd;
 import com.offerlab.community.post.application.OperationCurationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
@@ -32,6 +33,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/operations")
@@ -49,6 +51,23 @@ public class OperationCurationController {
                                                           @RequestParam(defaultValue = "50") int limit) {
         requireOps();
         return Result.ok(operationCurationService.listCandidates(keyword, domain, postType, limit));
+    }
+
+    @GetMapping("/admin/topics/{topicId}/candidates")
+    public Result<List<OperationCandidateDTO>> topicCandidates(@PathVariable Long topicId,
+                                                               @RequestParam(required = false) String keyword,
+                                                               @RequestParam(required = false) Integer domain,
+                                                               @RequestParam(required = false) Integer postType,
+                                                               @RequestParam(defaultValue = "50") int limit) {
+        requireOps();
+        return Result.ok(operationCurationService.listTopicCandidates(topicId, keyword, domain, postType, limit));
+    }
+
+    @PostMapping("/admin/topics/{topicId}/candidate-hints")
+    public Result<List<OperationCandidateDTO>> receiveTopicCandidateHints(
+            @PathVariable Long topicId,
+            @Valid @RequestBody List<OperationTopicCandidateHintCmd> hints) {
+        return Result.ok(operationCurationService.receiveTopicCandidateHints(topicId, hints, requireOpsMutation()));
     }
 
     @GetMapping("/admin/curation-pool")
@@ -123,6 +142,12 @@ public class OperationCurationController {
         return Result.ok(operationCurationService.listAdminTopics(status, operationType, keyword, limit));
     }
 
+    @GetMapping("/admin/topics/{topicId}")
+    public Result<OperationTopicDTO> adminTopic(@PathVariable Long topicId) {
+        requireOps();
+        return Result.ok(operationCurationService.getAdminTopic(topicId));
+    }
+
     @GetMapping("/admin/audit-logs")
     public Result<List<AdminAuditLog>> auditLogs(@RequestParam(defaultValue = "50") int limit) {
         requireOps();
@@ -157,6 +182,12 @@ public class OperationCurationController {
         return Result.ok(operationCurationService.markPreview(topicId, requireOps(), req == null ? null : req.getNote()));
     }
 
+    @PostMapping("/admin/topics/{topicId}/publish-check")
+    public Result<Map<String, Object>> checkTopicPublish(@PathVariable Long topicId) {
+        requireOps();
+        return Result.ok(operationCurationService.checkTopicPublish(topicId));
+    }
+
     @PostMapping("/admin/topics/{topicId}/publish")
     public Result<OperationTopicDTO> publishTopic(@PathVariable Long topicId,
                                                   @Valid @RequestBody(required = false) NoteReq req) {
@@ -173,6 +204,12 @@ public class OperationCurationController {
     public Result<OperationTopicDTO> rollbackTopic(@PathVariable Long topicId,
                                                    @Valid @RequestBody(required = false) NoteReq req) {
         return Result.ok(operationCurationService.rollbackTopic(topicId, requireOpsMutation(), requireCriticalNote(req)));
+    }
+
+    @PostMapping("/admin/topics/{topicId}/archive")
+    public Result<OperationTopicDTO> archiveTopic(@PathVariable Long topicId,
+                                                  @Valid @RequestBody(required = false) NoteReq req) {
+        return Result.ok(operationCurationService.archiveTopic(topicId, requireOpsMutation(), requireCriticalNote(req)));
     }
 
     @PublicApi

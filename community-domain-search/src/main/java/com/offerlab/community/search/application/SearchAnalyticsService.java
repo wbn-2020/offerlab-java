@@ -3,6 +3,7 @@ package com.offerlab.community.search.application;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
 import com.offerlab.community.search.api.dto.SearchAnalyticsItemDTO;
+import com.offerlab.community.search.api.dto.SearchContentGapDTO;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchAnalyticsMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.SearchAnalyticsEventPO;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ public class SearchAnalyticsService {
 
     private final SearchAnalyticsMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
+    private final SearchContentGapService searchContentGapService;
 
     public void recordSearch(String keyword, String company, String position,
                              Integer postType, String sortType, int resultCount, boolean firstPage) {
@@ -105,6 +107,14 @@ public class SearchAnalyticsService {
                 .prepClicks(prepClicks)
                 .recommendClicks(recommendClicks)
                 .build();
+    }
+
+    public List<SearchContentGapDTO> contentGaps(int days, int limit) {
+        return contentGaps(days, limit, false);
+    }
+
+    public List<SearchContentGapDTO> contentGaps(int days, int limit, boolean includeTestData) {
+        return searchContentGapService.candidates(days, limit, includeTestData);
     }
 
     private SearchAnalyticsEventPO baseEvent(String eventType) {

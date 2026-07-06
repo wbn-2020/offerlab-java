@@ -1,6 +1,7 @@
 package com.offerlab.community.feed.application;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.api.FeedFacade;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
@@ -118,7 +119,8 @@ public class FeedFacadeImpl implements FeedFacade {
                         .forEach(candidates::add);
             } catch (RuntimeException e) {
                 failedDomains.add(domainName(targetDomain));
-                log.warn("cross-domain recommendation candidate load failed, viewerUid={}, targetDomain={}", uid, targetDomain, e);
+                log.warn("cross-domain recommendation candidate load failed, viewerUid={}, targetDomain={}",
+                        LogMask.id(uid), targetDomain, e);
             }
         }
         if (!candidates.isEmpty()) {
@@ -386,7 +388,7 @@ public class FeedFacadeImpl implements FeedFacade {
         try {
             return new long[]{Long.parseLong(tuple.getValue()), tuple.getScore() == null ? 0L : tuple.getScore().longValue()};
         } catch (NumberFormatException e) {
-            log.warn("feed redis tuple skipped: invalid postId={}", tuple.getValue());
+            log.warn("feed redis tuple skipped: invalid postId={}", LogMask.id(tuple.getValue()));
             return null;
         }
     }
@@ -784,7 +786,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     supportHitItemCount);
         } catch (RuntimeException e) {
             log.warn("recommend feed new creator support stats skipped, viewerUid={}, domain={}, deliveredItemCount={}, supportHitItemCount={}",
-                    viewerUid, domain, deliveredItemCount, supportHitItemCount, e);
+                    LogMask.id(viewerUid), domain, deliveredItemCount, supportHitItemCount, e);
         }
     }
 
