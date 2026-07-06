@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$redisHome = Join-Path $Root "redis6.2.18"
+$redisHome = Join-Path $Root "redis"
 $redisExe = Join-Path $redisHome "redis-server.exe"
 $redisConfig = Join-Path $redisHome "redis.conf"
 

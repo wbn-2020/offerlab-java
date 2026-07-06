@@ -71,4 +71,13 @@ public class PageResult<T> {
         this.diagnostics.putAll(values);
         return this;
     }
+
+    public PageResult<T> publicView() {
+        return PageResult.<T>builder()
+                .items(items == null ? List.of() : items)
+                .nextCursor(nextCursor)
+                .hasMore(Boolean.TRUE.equals(hasMore))
+                .total(total == null ? 0L : total)
+                .build();
+    }
 }

@@ -1,9 +1,9 @@
 package com.offerlab.community.search.application;
 
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
-import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
 import com.offerlab.community.search.api.dto.SearchAnalyticsItemDTO;
+import com.offerlab.community.search.api.dto.SearchContentGapDTO;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchAnalyticsMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.SearchAnalyticsEventPO;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -22,9 +23,15 @@ public class SearchAnalyticsService {
     private static final String EVENT_SEARCH = "SEARCH";
     private static final String EVENT_PREP_CLICK = "PREP_CLICK";
     private static final String EVENT_COMMUNITY_RECOMMEND_CLICK = "COMMUNITY_RECOMMEND_CLICK";
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("(?i)^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$");
+    private static final Pattern PHONE_PATTERN = Pattern.compile("^(?:\\+?\\d[\\d\\s().-]{7,}\\d)$");
+    private static final Pattern URL_PATTERN = Pattern.compile("(?i)^(?:https?://|www\\.)\\S+$");
+    private static final Pattern JWT_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{12,}\\.[A-Za-z0-9_-]{8,}$");
+    private static final Pattern TOKEN_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{24,}$");
 
     private final SearchAnalyticsMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
+    private final SearchContentGapService searchContentGapService;
 
     public void recordSearch(String keyword, String company, String position,
                              Integer postType, String sortType, int resultCount, boolean firstPage) {
@@ -86,6 +93,10 @@ public class SearchAnalyticsService {
         }
         int safeDays = Math.max(1, Math.min(days, 90));
         int safeLimit = Math.max(1, Math.min(limit, 50));
+        List<SearchAnalyticsItemDTO> prepClicks = mapper.topPrepClicks(safeDays, safeLimit, includeTestData)
+                .stream()
+                .map(this::toPrepItem)
+                .toList();
         List<SearchAnalyticsItemDTO> recommendClicks = mapper.topRecommendationClicks(safeDays, safeLimit, includeTestData)
                 .stream()
                 .map(this::toRecommendItem)
@@ -93,16 +104,24 @@ public class SearchAnalyticsService {
         return SearchAnalyticsDTO.builder()
                 .hotKeywords(mapper.topSearchKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
                 .noResultKeywords(mapper.topNoResultKeywords(safeDays, safeLimit, includeTestData).stream().map(this::toKeywordItem).toList())
-                .prepClicks(recommendClicks)
+                .prepClicks(prepClicks)
                 .recommendClicks(recommendClicks)
                 .build();
+    }
+
+    public List<SearchContentGapDTO> contentGaps(int days, int limit) {
+        return contentGaps(days, limit, false);
+    }
+
+    public List<SearchContentGapDTO> contentGaps(int days, int limit, boolean includeTestData) {
+        return searchContentGapService.candidates(days, limit, includeTestData);
     }
 
     private SearchAnalyticsEventPO baseEvent(String eventType) {
         SearchAnalyticsEventPO event = new SearchAnalyticsEventPO();
         event.setId(idGenerator.nextId());
         event.setEventType(eventType);
-        event.setUid(UserContext.get());
+        event.setUid(null);
         return event;
     }
 
@@ -162,7 +181,19 @@ public class SearchAnalyticsService {
         if (text.isBlank()) {
             return null;
         }
+        if (looksSensitive(text)) {
+            return null;
+        }
         return text.length() <= maxLength ? text : text.substring(0, maxLength);
+    }
+
+    private static boolean looksSensitive(String text) {
+        String compact = text.replace(" ", "");
+        return EMAIL_PATTERN.matcher(text).find()
+                || PHONE_PATTERN.matcher(text).find()
+                || URL_PATTERN.matcher(text).find()
+                || JWT_PATTERN.matcher(text).find()
+                || TOKEN_PATTERN.matcher(compact).find();
     }
 
     private static String asText(Object value) {

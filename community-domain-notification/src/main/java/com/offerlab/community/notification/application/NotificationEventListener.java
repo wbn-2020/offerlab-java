@@ -5,6 +5,7 @@ import com.offerlab.community.interaction.api.event.CommentLikedEvent;
 import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
 import com.offerlab.community.notification.api.NotificationFacade;
+import com.offerlab.community.post.api.event.OperationCurationSelectedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.user.api.event.UserFollowedEvent;
 import com.offerlab.community.user.api.UserFacade;
@@ -112,6 +113,20 @@ public class NotificationEventListener {
                 Map.of("action", "favorite", "postId", event.getPostId()));
     }
 
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onOperationCurationSelected(OperationCurationSelectedEvent event) {
+        String skippedReason = operationCurationSkippedReason(event);
+        if (skippedReason != null) {
+            log.debug("operation curation notification skipped: reason={} authorUid={} contentId={}",
+                    skippedReason, event == null ? null : event.getAuthorUid(), event == null ? null : event.getContentId());
+            return;
+        }
+        Map<String, Object> content = operationCurationSelectedContent(event);
+        runQuietly(() -> notificationFacade.notifySystem(event.getAuthorUid(), (long) TARGET_POST, event.getContentId(), content),
+                "operation curation selected", event.getAuthorUid(), 0L, TYPE_SYSTEM, TARGET_POST, event.getContentId(), content);
+    }
+
     private void runQuietly(Runnable runnable, String scene, Long receiverUid, Long senderUid,
                             Integer notifType, Integer targetType, Long targetId, Map<String, Object> content) {
         try {
@@ -197,6 +212,74 @@ public class NotificationEventListener {
             content.put("topics", topicData);
         }
         return content;
+    }
+
+    private Map<String, Object> operationCurationSelectedContent(OperationCurationSelectedEvent event) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        String placementLabel = event.getPlacementKey();
+        String href = sanitizeOperationCurationHref(event.getEntrance(), event.getContentId());
+        content.put("action", "creator_curation_feedback");
+        content.put("notificationCategory", "system");
+        content.put("eventType", event.getEventType());
+        content.put("source", "operation-curation");
+        content.put("eventId", operationCurationDedupKey(event));
+        content.put("authorUid", event.getAuthorUid());
+        content.put("contentId", event.getContentId());
+        content.put("contentTitle", event.getContentTitle());
+        content.put("placementType", event.getPlacementType());
+        content.put("placementId", event.getPlacementId());
+        content.put("placementKey", event.getPlacementKey());
+        content.put("placementLabel", placementLabel);
+        content.put("topicSlug", "TOPIC".equals(event.getPlacementType()) ? event.getPlacementKey() : null);
+        content.put("sectionKey", event.getSectionKey());
+        content.put("reason", event.getReason());
+        content.put("reasonText", event.getReason());
+        content.put("entrance", event.getEntrance());
+        content.put("href", href);
+        content.put("status", event.getStatus());
+        content.put("dedupKey", operationCurationDedupKey(event));
+        return content;
+    }
+
+    private String sanitizeOperationCurationHref(String href, Long contentId) {
+        if (href != null && href.startsWith("/") && !href.startsWith("//") && !href.startsWith("/api/") && !href.contains(" ")) {
+            return href;
+        }
+        return contentId == null ? null : "/post/" + contentId;
+    }
+
+    private String operationCurationSkippedReason(OperationCurationSelectedEvent event) {
+        if (event == null) {
+            return "NULL_EVENT";
+        }
+        if (event.getAuthorUid() == null || event.getAuthorUid() <= 0) {
+            return "MISSING_AUTHOR";
+        }
+        if (event.getContentId() == null || event.getContentId() <= 0) {
+            return "MISSING_CONTENT";
+        }
+        if (!"PUBLISHED".equals(event.getStatus())) {
+            return "NOT_PUBLISHED";
+        }
+        if (!OperationCurationSelectedEvent.OPERATION_CURATION_SELECTED.equals(event.getEventType())) {
+            return "UNSUPPORTED_EVENT_TYPE";
+        }
+        return null;
+    }
+
+    private String operationCurationDedupKey(OperationCurationSelectedEvent event) {
+        if (event.getDedupKey() != null && !event.getDedupKey().isBlank()) {
+            return event.getDedupKey();
+        }
+        return String.join(":",
+                "operation_curation_selected",
+                String.valueOf(event.getAuthorUid()),
+                String.valueOf(event.getContentId()),
+                String.valueOf(event.getPlacementType()),
+                String.valueOf(event.getPlacementId()),
+                String.valueOf(event.getPlacementKey()),
+                String.valueOf(event.getSectionKey()),
+                String.valueOf(event.getEventType()));
     }
 
     private Set<String> extractMentionNames(String text) {

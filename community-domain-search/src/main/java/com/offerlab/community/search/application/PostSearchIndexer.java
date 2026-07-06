@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
+import com.offerlab.community.post.api.PublicContentFilter;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -14,6 +16,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
+import com.offerlab.community.search.api.dto.SearchStatusDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -74,7 +77,16 @@ public class PostSearchIndexer {
                 || !Integer.valueOf(Post.VIS_PUBLIC).equals(post.getVisibility())) {
             return deletePostDocument(postId);
         }
-        boolean ok = elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(postId), toDocument(post));
+        PostExtensionPO extension = extensionMapper.selectById(postId);
+        PostCounterPO counter = counterMapper.selectById(postId);
+        List<TagDTO> tags = selectTagsByPostIds(List.of(postId)).stream()
+                .map(this::toTagDto)
+                .toList();
+        if (!isDistributableForIndex(post, extension, tags)) {
+            return deletePostDocument(postId);
+        }
+        boolean ok = elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(postId),
+                toDocument(post, extension, counter, tags));
         if (ok) {
             log.debug("post indexed to elasticsearch: postId={}", postId);
         }
@@ -131,6 +143,38 @@ public class PostSearchIndexer {
         return status;
     }
 
+    public SearchStatusDTO publicStatus() {
+        boolean enabled = elasticsearch.enabled();
+        boolean available = elasticsearch.available();
+        boolean exists = available && elasticsearch.indexExists(elasticsearch.postIndex());
+        if (!exists) {
+            indexReady.set(false);
+        }
+        boolean indexUsable = enabled && available && indexReady.get() && exists;
+        DbFallbackStatus fallback = dbFallbackStatus();
+        boolean publicSearchAvailable = indexUsable || fallback.available();
+        boolean publicSearchDegraded = publicSearchAvailable && !indexUsable;
+        return SearchStatusDTO.builder()
+                .status(indexUsable ? "UP" : fallback.available() ? "DEGRADED" : "DOWN")
+                .enabled(enabled)
+                .available(available)
+                .indexName("public-posts")
+                .indexExists(exists)
+                .indexReady(indexReady.get() && exists)
+                .publicSearchAvailable(publicSearchAvailable)
+                .publicSearchDegraded(publicSearchDegraded)
+                .publicSearchSource(indexUsable ? "elasticsearch" : fallback.available() ? "mysql" : "unavailable")
+                .dbFallbackAvailable(fallback.available())
+                .fallbackSource("mysql")
+                .fallbackMode(fallback.mode())
+                .fallbackScanLimit(MYSQL_FALLBACK_MAX_SCAN)
+                .fallbackSchemaReady(fallback.schemaReady())
+                .message(searchStatusMessage(indexUsable, fallback))
+                .diagnosticMessage(publicSearchDiagnostic(indexUsable, fallback))
+                .action(indexUsable ? null : publicSearchAction(fallback))
+                .build();
+    }
+
     private DbFallbackStatus dbFallbackStatus() {
         try {
             boolean tagGovernanceReady = migrationCheckService.tagGovernanceReady();
@@ -171,6 +215,26 @@ public class PostSearchIndexer {
         return "Restore Elasticsearch and replay search index retry tasks after the index is healthy.";
     }
 
+    private String publicSearchDiagnostic(boolean indexUsable, DbFallbackStatus fallback) {
+        if (indexUsable) {
+            return "public_search_index_ready";
+        }
+        if (fallback.available()) {
+            return "public_search_using_database_fallback";
+        }
+        return "public_search_unavailable";
+    }
+
+    private String publicSearchAction(DbFallbackStatus fallback) {
+        if (!fallback.available()) {
+            return "请稍后重试，或先从发现页、问答页继续浏览。";
+        }
+        if (!fallback.schemaReady()) {
+            return "当前为兼容兜底模式，部分标签同义词召回可能受限。";
+        }
+        return "当前为数据库兜底模式，排序和召回完整性可能受限。";
+    }
+
     private record DbFallbackStatus(boolean available, boolean schemaReady, String mode) {
     }
 
@@ -208,11 +272,13 @@ public class PostSearchIndexer {
                 if (post.getId() != null && post.getId() > lastId) {
                     lastId = post.getId();
                 }
+                PostExtensionPO extension = extensions.get(post.getId());
+                List<TagDTO> postTags = tags.getOrDefault(post.getId(), List.of());
+                if (!isDistributableForIndex(post, extension, postTags)) {
+                    continue;
+                }
                 if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()),
-                        toDocument(post,
-                                extensions.get(post.getId()),
-                                counters.get(post.getId()),
-                                tags.getOrDefault(post.getId(), List.of())))) {
+                        toDocument(post, extension, counters.get(post.getId()), postTags))) {
                     indexed++;
                 } else {
                     failed++;
@@ -241,6 +307,21 @@ public class PostSearchIndexer {
                 .map(this::toTagDto)
                 .toList();
         return toDocument(post, extension, counter, tags);
+    }
+
+    private boolean isDistributableForIndex(PostPO post, PostExtensionPO extension, List<TagDTO> tags) {
+        if (post == null || post.getId() == null) {
+            return false;
+        }
+        PostBriefDTO brief = PostBriefDTO.builder()
+                .id(post.getId())
+                .title(post.getTitle())
+                .summary(summary(post.getContent()))
+                .extJson(extension == null ? null : extension.getExtJson())
+                .tags(tags == null ? List.of() : tags)
+                .build();
+        return PublicContentFilter.isDistributablePost(brief)
+                && !PublicContentFilter.isSyntheticText(post.getContent());
     }
 
     private Map<String, Object> toDocument(PostPO post, PostExtensionPO extension, PostCounterPO counter, List<TagDTO> tags) {

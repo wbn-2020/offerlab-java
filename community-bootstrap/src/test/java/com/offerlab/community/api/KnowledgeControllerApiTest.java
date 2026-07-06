@@ -4,6 +4,8 @@ import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.post.api.dto.KnowledgeRelationEdgeDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationGraphDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationNodeDTO;
+import com.offerlab.community.post.application.ContentSeriesService;
+import com.offerlab.community.post.application.DiscoveryMapService;
 import com.offerlab.community.post.application.KnowledgeRelationService;
 import com.offerlab.community.post.controller.KnowledgeController;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,13 +29,21 @@ class KnowledgeControllerApiTest {
     @Mock
     private KnowledgeRelationService knowledgeRelationService;
     @Mock
+    private DiscoveryMapService discoveryMapService;
+    @Mock
+    private ContentSeriesService contentSeriesService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new KnowledgeController(knowledgeRelationService), jwtService);
+        mvc = ApiTestSupport.mvc(new KnowledgeController(
+                knowledgeRelationService,
+                discoveryMapService,
+                contentSeriesService
+        ), jwtService);
     }
 
     @Test

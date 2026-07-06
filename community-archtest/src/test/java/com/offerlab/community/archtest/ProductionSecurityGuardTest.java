@@ -16,18 +16,25 @@ import com.offerlab.community.question.controller.QuestionController;
 import com.offerlab.community.search.controller.SearchAdminController;
 import com.offerlab.community.user.controller.AuthController;
 import com.offerlab.community.user.controller.UserController;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
+import java.util.Locale;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -125,8 +132,13 @@ class ProductionSecurityGuardTest {
     void devProfileAllowsExplicitLocalOpenAdminModeForBootstrap() {
         AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), devEnvironment());
 
-        assertEquals("LOCAL_OPEN", service.mode());
-        service.requireAdmin(10001L);
+        bindRequest("127.0.0.1");
+        try {
+            assertEquals("LOCAL_OPEN", service.mode());
+            service.requireAdmin(10001L);
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
     }
 
     @Test
@@ -251,6 +263,55 @@ class ProductionSecurityGuardTest {
     }
 
     private static StringRedisTemplate nullRedis() {
+        return null;
+    }
+
+    private static void bindRequest(String remoteAddr) {
+        HttpServletRequest request = (HttpServletRequest) Proxy.newProxyInstance(
+                HttpServletRequest.class.getClassLoader(),
+                new Class[]{HttpServletRequest.class},
+                (proxy, method, args) -> requestValue(method, remoteAddr));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    }
+
+    private static Object requestValue(Method method, String remoteAddr) {
+        return switch (method.getName()) {
+            case "getRemoteAddr" -> remoteAddr;
+            case "getMethod" -> "GET";
+            case "getRequestURI" -> "/admin";
+            case "getContextPath", "getServletPath" -> "";
+            case "getLocale" -> Locale.getDefault();
+            case "getLocales" -> Collections.enumeration(java.util.List.of(Locale.getDefault()));
+            case "getAttribute", "getHeader", "getSession" -> null;
+            case "getAttributeNames", "getHeaderNames", "getParameterNames" -> Collections.emptyEnumeration();
+            case "getParameterMap" -> Map.of();
+            case "setAttribute", "removeAttribute" -> null;
+            default -> defaultValue(method.getReturnType());
+        };
+    }
+
+    private static Object defaultValue(Class<?> returnType) {
+        if (!returnType.isPrimitive() || returnType == Void.TYPE) {
+            return null;
+        }
+        if (returnType == boolean.class) {
+            return false;
+        }
+        if (returnType == int.class || returnType == short.class || returnType == byte.class) {
+            return 0;
+        }
+        if (returnType == long.class) {
+            return 0L;
+        }
+        if (returnType == float.class) {
+            return 0F;
+        }
+        if (returnType == double.class) {
+            return 0D;
+        }
+        if (returnType == char.class) {
+            return '\0';
+        }
         return null;
     }
 

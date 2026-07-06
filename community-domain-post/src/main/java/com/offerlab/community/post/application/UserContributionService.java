@@ -81,7 +81,7 @@ public class UserContributionService {
     }
 
     private static String level(int score) {
-        if (score >= 500) return "L5 社区专家";
+        if (score >= 500) return "L5 领域作者";
         if (score >= 240) return "L4 深度作者";
         if (score >= 120) return "L3 经验沉淀者";
         if (score >= 40) return "L2 活跃分享者";

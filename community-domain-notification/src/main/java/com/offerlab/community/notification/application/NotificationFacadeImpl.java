@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
@@ -226,7 +227,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
         po.setIsDeleted(0);
         int inserted = dedupKeyColumnReady() ? mapper.insertIgnore(po) : mapper.insertLegacy(po);
         if (inserted <= 0) {
-            log.debug("duplicate notification skipped: dedupKey={}", po.getDedupKey());
+            log.debug("duplicate notification skipped: dedupKey={}", LogMask.key(po.getDedupKey()));
         }
     }
 

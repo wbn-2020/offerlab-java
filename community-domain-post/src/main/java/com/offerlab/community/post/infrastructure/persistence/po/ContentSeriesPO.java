@@ -18,6 +18,7 @@ public class ContentSeriesPO {
     private String description;
     private Integer domain;
     private String coverUrl;
+    private Integer visibility;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
     @TableLogic

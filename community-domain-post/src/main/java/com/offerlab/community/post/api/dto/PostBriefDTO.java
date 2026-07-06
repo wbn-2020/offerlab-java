@@ -28,5 +28,6 @@ public class PostBriefDTO {
     private Boolean anonymous;
     private List<TagDTO> tags;
     private PostCounterDTO counter;
+    private List<String> recommendationReasons;
     private LocalDateTime createTime;
 }

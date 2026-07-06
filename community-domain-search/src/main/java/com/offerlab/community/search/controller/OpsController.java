@@ -30,6 +30,7 @@ import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.api.dto.SearchAnalyticsDTO;
+import com.offerlab.community.search.api.dto.SearchContentGapDTO;
 import com.offerlab.community.search.application.SearchIndexRetryService;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
@@ -369,6 +370,14 @@ public class OpsController {
                                                       @RequestParam(defaultValue = "false") boolean includeTestData) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         return Result.ok(searchAnalyticsService.summary(days, limit, includeTestData));
+    }
+
+    @GetMapping("/search/content-gaps")
+    public Result<List<SearchContentGapDTO>> searchContentGaps(@RequestParam(defaultValue = "30") int days,
+                                                               @RequestParam(defaultValue = "10") int limit,
+                                                               @RequestParam(defaultValue = "false") boolean includeTestData) {
+        adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
+        return Result.ok(searchAnalyticsService.contentGaps(days, limit, includeTestData));
     }
 
     @GetMapping("/search/post-diagnostics/{postId}")

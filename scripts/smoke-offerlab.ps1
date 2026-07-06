@@ -4,7 +4,7 @@ param(
   [string]$AdminEmail = "",
   [string]$AdminPassword = "password123",
   [string]$KafkaBootstrap = "localhost:9092",
-  [string]$KafkaHome = "C:\codeware\kafka_2.13-3.6.2",
+  [string]$KafkaHome = "C:\codeware\kafka\kafka_2.13-3.6.2",
   [string]$KafkaTopic = "post.published",
   [string]$KafkaConsumerGroup = "offerlab-feed-fanout",
   [string]$ElasticsearchUrl = "http://127.0.0.1:9200",

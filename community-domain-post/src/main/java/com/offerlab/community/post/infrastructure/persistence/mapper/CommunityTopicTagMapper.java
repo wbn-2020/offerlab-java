@@ -16,9 +16,12 @@ public interface CommunityTopicTagMapper extends BaseMapper<CommunityTopicTagPO>
 
     @Select("""
             <script>
-            SELECT t.id, t.tag_name, t.tag_type, t.use_count, t.is_official
+            SELECT t.id, t.tag_name, t.tag_type, t.use_count, t.is_official,
+                   t.tag_status, t.recommended, t.synonyms, t.merge_target_id
             FROM t_community_topic_tag r
             JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+              AND t.tag_status = 1
+              AND t.merge_target_id IS NULL
             WHERE r.topic_id = #{topicId}
             ORDER BY t.is_official DESC, t.use_count DESC, t.id ASC
             </script>
@@ -27,9 +30,12 @@ public interface CommunityTopicTagMapper extends BaseMapper<CommunityTopicTagPO>
 
     @Select("""
             <script>
-            SELECT r.topic_id, t.id, t.tag_name, t.tag_type, t.use_count, t.is_official
+            SELECT r.topic_id, t.id, t.tag_name, t.tag_type, t.use_count, t.is_official,
+                   t.tag_status, t.recommended, t.synonyms, t.merge_target_id
             FROM t_community_topic_tag r
             JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+              AND t.tag_status = 1
+              AND t.merge_target_id IS NULL
             WHERE r.topic_id IN
             <foreach collection="topicIds" item="topicId" open="(" separator="," close=")">
                 #{topicId}

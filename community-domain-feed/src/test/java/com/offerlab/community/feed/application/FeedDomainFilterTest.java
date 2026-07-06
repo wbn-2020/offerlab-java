@@ -42,7 +42,7 @@ class FeedDomainFilterTest {
         PostBriefDTO careerPost = post(702L, 72L, Post.DOMAIN_CAREER);
         FeedFacadeImpl facade = new FeedFacadeImpl(
                 new EmptyFeedInboxRedis(),
-                new FeedFeedbackStore(null),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
                 new FakePostFacade(PageResult.of(List.of(legacyTechPost, careerPost), null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
@@ -68,7 +68,7 @@ class FeedDomainFilterTest {
         anonymousPost.setAuthor(anonymousAuthor);
         FeedFacadeImpl facade = new FeedFacadeImpl(
                 new EmptyFeedInboxRedis(),
-                new FeedFeedbackStore(null),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
                 new FakePostFacade(PageResult.of(List.of(anonymousPost), null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
@@ -97,7 +97,7 @@ class FeedDomainFilterTest {
 
         FeedFacadeImpl facade = new FeedFacadeImpl(
                 new ScriptedFeedInboxRedis(tuples),
-                new FeedFeedbackStore(null),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
                 new FakePostFacade(PageResult.of(posts, null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
@@ -123,7 +123,7 @@ class FeedDomainFilterTest {
 
         FeedFacadeImpl facade = new FeedFacadeImpl(
                 new ScriptedFeedInboxRedis(tuples),
-                new FeedFeedbackStore(null),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
                 new FakePostFacade(PageResult.of(posts, null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
@@ -137,6 +137,46 @@ class FeedDomainFilterTest {
         assertEquals(null, page.getNextCursor());
         assertEquals(1000, page.getDiagnostics().get("domainInboxScanRows"));
         assertEquals(true, page.getDiagnostics().get("domainInboxScanLimited"));
+    }
+
+    @Test
+    void latestFeedFiltersPostsHiddenByFeedFeedback() {
+        PostBriefDTO hidden = post(911L, 1911L, Post.DOMAIN_TECH);
+        PostBriefDTO visible = post(912L, 1912L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(911L)),
+                new FakePostFacade(PageResult.of(List.of(hidden, visible), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> page = facade.getLatestFeed(7L, null, 2, null);
+
+        assertEquals(List.of(912L), postIds(page));
+    }
+
+    @Test
+    void followingFeedFiltersPostsHiddenByFeedFeedback() {
+        List<PostBriefDTO> posts = List.of(
+                post(921L, 1921L, Post.DOMAIN_TECH),
+                post(922L, 1922L, Post.DOMAIN_TECH));
+        List<ZSetOperations.TypedTuple<String>> tuples = List.of(
+                tuple("921", 2_000D),
+                tuple("922", 1_999D));
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new ScriptedFeedInboxRedis(tuples),
+                new FixedHiddenFeedFeedbackStore(Set.of(921L)),
+                new FakePostFacade(PageResult.of(posts, null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(922L), postIds(page));
     }
 
     private static PostBriefDTO post(Long id, Long authorId, Integer domain) {
@@ -192,6 +232,20 @@ class FeedDomainFilterTest {
                 }
             }
             return page;
+        }
+    }
+
+    private static class FixedHiddenFeedFeedbackStore extends FeedFeedbackStore {
+        private final Set<Long> hiddenPostIds;
+
+        FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds) {
+            super(null);
+            this.hiddenPostIds = hiddenPostIds;
+        }
+
+        @Override
+        public Set<Long> hiddenPostIds(Long uid) {
+            return hiddenPostIds;
         }
     }
 
@@ -268,7 +322,7 @@ class FeedDomainFilterTest {
 
         @Override public UserBriefDTO getUserBrief(Long uid) { throw unsupported(); }
         @Override public Map<String, Long> findUserIdsByNicknames(Collection<String> nicknames) { throw unsupported(); }
-        @Override public boolean isFollowing(Long fromUid, Long toUid) { throw unsupported(); }
+        @Override public boolean isFollowing(Long fromUid, Long toUid) { return false; }
         @Override public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) { throw unsupported(); }
         @Override public List<Long> getFollowerIds(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<FollowCursorDTO> getFollowerPage(Long uid, long cursor, int size) { throw unsupported(); }
@@ -277,8 +331,8 @@ class FeedDomainFilterTest {
         @Override public long getFollowerCount(Long uid) { throw unsupported(); }
         @Override public boolean isBigV(Long uid) { throw unsupported(); }
         @Override public UserIntentDTO getUserIntent(Long uid) { throw unsupported(); }
-        @Override public boolean isProfileVisible(Long viewerUid, Long targetUid) { throw unsupported(); }
-        @Override public boolean isIntentVisible(Long viewerUid, Long targetUid) { throw unsupported(); }
+        @Override public boolean isProfileVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
+        @Override public boolean isIntentVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
         @Override public boolean isSearchable(Long uid) { throw unsupported(); }
         @Override public boolean allowsInteractionNotification(Long uid) { throw unsupported(); }
         @Override public boolean allowsSystemNotification(Long uid) { throw unsupported(); }

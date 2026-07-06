@@ -1,6 +1,7 @@
 package com.offerlab.community.post.infrastructure.persistence;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.offerlab.community.common.utils.SqlLimits;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.domain.repository.PostRepository;
@@ -110,7 +111,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
                 .orderByDesc(PostPO::getCreateTime)
-                .last("LIMIT " + limit);
+                .last(SqlLimits.limit(limit, 1, 101));
         if (cursor > 0) {
             q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }
@@ -148,7 +149,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
                 .orderByDesc(PostPO::getCreateTime)
-                .last("LIMIT " + limit);
+                .last(SqlLimits.limit(limit, 1, 101));
         if (cursor > 0) {
             q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
         }

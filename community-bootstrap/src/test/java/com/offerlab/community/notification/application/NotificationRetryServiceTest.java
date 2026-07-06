@@ -1,6 +1,7 @@
 package com.offerlab.community.notification.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationRetryTaskMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationRetryTaskPO;
@@ -95,7 +96,7 @@ class NotificationRetryServiceTest {
         Map<String, Object> diagnostics = (Map<String, Object>) status.get("diagnostics");
         @SuppressWarnings("unchecked")
         Map<String, Object> failedSample = (Map<String, Object>) diagnostics.get("failedSample");
-        assertEquals(2001L, failedSample.get("id"));
+        assertEquals(LogMask.id(2001L), failedSample.get("id"));
         assertEquals("comment", failedSample.get("scene"));
         assertEquals("notification table locked", diagnostics.get("latestError"));
         assertEquals("Open /api/v1/notification-ops/retry-tasks?status=2, confirm notification dependencies, then replay failed test records first.",

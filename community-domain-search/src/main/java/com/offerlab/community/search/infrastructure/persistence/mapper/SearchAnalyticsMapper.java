@@ -143,7 +143,7 @@ public interface SearchAnalyticsMapper extends BaseMapper<SearchAnalyticsEventPO
                    COUNT(*) AS count,
                    MAX(create_time) AS lastSearchedAt
             FROM t_search_analytics_event
-            WHERE event_type IN ('COMMUNITY_RECOMMEND_CLICK', 'PREP_CLICK')
+            WHERE event_type = 'COMMUNITY_RECOMMEND_CLICK'
               AND company IS NOT NULL
               AND company <> ''
               AND create_time >= DATE_SUB(NOW(3), INTERVAL #{days} DAY)

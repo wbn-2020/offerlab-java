@@ -1,5 +1,6 @@
 package com.offerlab.community.feed.application;
 
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.infra.mq.idempotent.IdempotentChecker;
 import com.offerlab.community.post.domain.model.Post;
@@ -28,13 +29,14 @@ public class FeedFanoutService {
         Long postId = event == null ? null : event.getPostId();
         Long authorId = event == null ? null : event.getAuthorId();
         if (postId == null || authorId == null) {
-            log.warn("feed fanout skipped: invalid post published event source={} event={}", source, event);
+            log.warn("feed fanout skipped: invalid post published event source={}", source);
             return true;
         }
 
         String idempotentKey = "post.published:" + postId;
         if (!idempotentChecker.tryConsume(idempotentKey, CONSUMER_NAME)) {
-            log.info("feed fanout skipped duplicate: source={} postId={} authorId={}", source, postId, authorId);
+            log.info("feed fanout skipped duplicate: source={} postId={} authorId={}",
+                    source, LogMask.id(postId), LogMask.id(authorId));
             return false;
         }
 
@@ -70,11 +72,12 @@ public class FeedFanoutService {
                 cursor = nextCursor;
             }
             log.info("feed fanout done: source={} postId={} authorId={} followers={} batches={} batchSize={}",
-                    source, postId, authorId, followerCount, batches, FANOUT_BATCH_SIZE);
+                    source, LogMask.id(postId), LogMask.id(authorId), followerCount, batches, FANOUT_BATCH_SIZE);
             return true;
         } catch (Exception e) {
             idempotentChecker.release(idempotentKey, CONSUMER_NAME);
-            log.error("feed fanout failed: source={} postId={} authorId={}", source, postId, authorId, e);
+            log.error("feed fanout failed: source={} postId={} authorId={}",
+                    source, LogMask.id(postId), LogMask.id(authorId), e);
             throw e;
         }
     }

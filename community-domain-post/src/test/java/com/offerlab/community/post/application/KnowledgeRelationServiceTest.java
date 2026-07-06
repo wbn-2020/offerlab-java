@@ -1,9 +1,14 @@
 package com.offerlab.community.post.application;
 
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.ContentSeriesDTO;
+import com.offerlab.community.post.api.dto.DiscoveryMapDTO;
+import com.offerlab.community.post.api.dto.KnowledgeAssetOverviewDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationEdgeDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationGraphDTO;
 import com.offerlab.community.post.api.dto.KnowledgeRelationNodeDTO;
+import com.offerlab.community.post.api.dto.PublicKnowledgeAssetDTO;
+import com.offerlab.community.post.api.dto.PublicKnowledgeRelationDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.infrastructure.persistence.mapper.CommunityTopicMapper;
@@ -46,6 +51,47 @@ class KnowledgeRelationServiceTest {
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("topic_tag"));
         assertTrue(graph.getNodes().stream().noneMatch(node -> "series".equals(node.getType())));
         assertTrue(graph.getEdges().stream().noneMatch(edge -> "series_post".equals(edge.getRelation())));
+    }
+
+    @Test
+    void aggregatesGovernedPublicKnowledgeAssetsWithoutPersistingDisplayFallbacks() {
+        KnowledgeRelationService service = new KnowledgeRelationService(
+                postFacade(),
+                postMapper(),
+                topicMapper(),
+                topicTagMapper()
+        );
+        KnowledgeRelationGraphDTO graph = service.explore(null, null, null, 1, 8);
+
+        KnowledgeAssetOverviewDTO overview = service.aggregatePublicKnowledge(
+                graph,
+                List.of(ContentSeriesDTO.builder()
+                        .id(7001L)
+                        .title("Public Java series")
+                        .description("Reusable public series organized from public posts")
+                        .domain(1)
+                        .visibility(1)
+                        .updateTime(LocalDateTime.now())
+                        .build()),
+                discoveryMap(),
+                8
+        );
+
+        assertEquals(8, overview.getLimit());
+        assertTrue(overview.getAssets().stream().map(PublicKnowledgeAssetDTO::getAssetId).toList().contains("post:101"));
+        assertTrue(overview.getAssets().stream().map(PublicKnowledgeAssetDTO::getAssetId).toList().contains("series:7001"));
+        assertTrue(overview.getAssets().stream().map(PublicKnowledgeAssetDTO::getAssetId).toList().contains("search_entry:hot"));
+        assertTrue(overview.getAssets().stream().noneMatch(asset -> asset.getAssetId().contains("fallback")));
+        assertTrue(overview.getAssets().stream().noneMatch(asset -> "fallback".equals(asset.getSource())));
+        assertTrue(overview.getAssets().stream().noneMatch(asset -> "demo".equals(asset.getPreviewSource())));
+        assertTrue(overview.getAssets().stream().allMatch(asset -> List.of("active", "archived").contains(asset.getAssetStatus())));
+        assertTrue(overview.getRelations().stream().map(PublicKnowledgeRelationDTO::getRelationType).toList().contains("belongs_to"));
+        assertTrue(overview.getRelations().stream().allMatch(relation -> relation.getReasonText() != null && !relation.getReasonText().isBlank()));
+        assertTrue(overview.getPaths().stream().allMatch(path -> List.of("active", "archived").contains(path.getPathStatus())));
+        assertTrue(overview.getPaths().stream().noneMatch(path -> "degraded".equals(path.getPathStatus())));
+        assertTrue(overview.getGaps().stream().allMatch(gap -> Boolean.TRUE.equals(gap.getMinSampleMet())));
+        assertTrue(overview.getSnapshots().stream().allMatch(snapshot -> snapshot.getSnapshotId().startsWith("snapshot:")));
+        assertTrue(overview.getAssets().stream().noneMatch(asset -> asset.toString().contains("creatorUid")));
     }
 
     private static PostFacade postFacade() {
@@ -146,6 +192,29 @@ class KnowledgeRelationServiceTest {
                 .domain(1)
                 .tags(List.of(TagDTO.builder().id(202L).name("Spring Cloud").build()))
                 .createTime(LocalDateTime.now())
+                .build();
+    }
+
+    private static DiscoveryMapDTO discoveryMap() {
+        return DiscoveryMapDTO.builder()
+                .searchEntrypoints(List.of(
+                        DiscoveryMapDTO.DiscoveryItemDTO.builder()
+                                .id("search:hot")
+                                .type("search")
+                                .title("Hot public content")
+                                .summary("Browse recent public discussions by heat")
+                                .href("/search?sort=hot")
+                                .source(DiscoveryMapService.SOURCE_SEARCH_ANALYTICS)
+                                .build(),
+                        DiscoveryMapDTO.DiscoveryItemDTO.builder()
+                                .id("search:fallback-demo")
+                                .type("search")
+                                .title("fallback demo")
+                                .summary("demo seed")
+                                .href("/search?source=fallback")
+                                .source(DiscoveryMapService.SOURCE_FALLBACK_DEMO)
+                                .build()
+                ))
                 .build();
     }
 }

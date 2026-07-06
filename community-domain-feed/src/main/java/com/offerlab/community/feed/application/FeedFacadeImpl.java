@@ -1,6 +1,7 @@
 package com.offerlab.community.feed.application;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.api.FeedFacade;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
@@ -8,6 +9,7 @@ import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.domain.model.Post;
@@ -73,7 +75,7 @@ public class FeedFacadeImpl implements FeedFacade {
         }
         UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
         Set<Long> hiddenPostIds = feedbackStore.hiddenPostIds(uid);
-        List<PostBriefDTO> visibleCandidates = page.getItems().stream()
+        List<PostBriefDTO> visibleCandidates = filterDistributablePosts(page.getItems()).stream()
                 .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
                 .toList();
         Map<Long, Long> publicPostCountByAuthor = postFacade.batchCountPublicPublishedPostsByAuthors(visibleCandidates.stream()
@@ -112,12 +114,13 @@ public class FeedFacadeImpl implements FeedFacade {
                 if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
                     continue;
                 }
-                page.getItems().stream()
+                filterDistributablePosts(page.getItems()).stream()
                         .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
                         .forEach(candidates::add);
             } catch (RuntimeException e) {
                 failedDomains.add(domainName(targetDomain));
-                log.warn("cross-domain recommendation candidate load failed, viewerUid={}, targetDomain={}", uid, targetDomain, e);
+                log.warn("cross-domain recommendation candidate load failed, viewerUid={}, targetDomain={}",
+                        LogMask.id(uid), targetDomain, e);
             }
         }
         if (!candidates.isEmpty()) {
@@ -228,6 +231,9 @@ public class FeedFacadeImpl implements FeedFacade {
             if (item == null || item.getPost() == null || item.getPost().getId() == null) {
                 continue;
             }
+            if (!PublicContentFilter.isDistributablePost(item.getPost())) {
+                continue;
+            }
             target.putIfAbsent(item.getPost().getId(), item);
         }
     }
@@ -276,6 +282,7 @@ public class FeedFacadeImpl implements FeedFacade {
 
         List<Long> postIds = idsAndScores.stream().map(a -> a[0]).toList();
         var posts = postFacade.batchGetPosts(postIds, viewerUid);
+        Set<Long> hiddenPostIds = hiddenPostIdsSafely(viewerUid);
         var counters = postFacade.batchGetCounters(postIds);
         Set<Long> authorIds = posts.values().stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet());
         var authors = userFacade.batchGetUserBriefs(authorIds);
@@ -283,8 +290,8 @@ public class FeedFacadeImpl implements FeedFacade {
         List<FeedItemVO> items = new ArrayList<>(postIds.size());
         for (long[] pair : idsAndScores) {
             PostBriefDTO p = posts.get(pair[0]);
-            if (p == null) continue;
-            UserBriefDTO author = feedAuthor(p, authors);
+            if (p == null || hiddenPostIds.contains(p.getId()) || !PublicContentFilter.isDistributablePost(p)) continue;
+            UserBriefDTO author = feedAuthor(p, authors, viewerUid);
             PostCounterDTO counter = counters.get(p.getId());
             FeedItemVO.MyInteraction my = null;
             if (viewerUid != null) {
@@ -381,7 +388,7 @@ public class FeedFacadeImpl implements FeedFacade {
         try {
             return new long[]{Long.parseLong(tuple.getValue()), tuple.getScore() == null ? 0L : tuple.getScore().longValue()};
         } catch (NumberFormatException e) {
-            log.warn("feed redis tuple skipped: invalid postId={}", tuple.getValue());
+            log.warn("feed redis tuple skipped: invalid postId={}", LogMask.id(tuple.getValue()));
             return null;
         }
     }
@@ -408,15 +415,17 @@ public class FeedFacadeImpl implements FeedFacade {
                                                      String nextCursor,
                                                      boolean hasMore) {
         if (posts == null || posts.isEmpty()) return PageResult.empty();
-        List<Long> postIds = posts.stream().map(PostBriefDTO::getId).toList();
+        List<PostBriefDTO> visiblePosts = visiblePostsForViewer(posts, viewerUid);
+        if (visiblePosts.isEmpty()) return PageResult.empty();
+        List<Long> postIds = visiblePosts.stream().map(PostBriefDTO::getId).toList();
         var counters = postFacade.batchGetCounters(postIds);
-        var authors = userFacade.batchGetUserBriefs(posts.stream()
+        var authors = userFacade.batchGetUserBriefs(visiblePosts.stream()
                 .map(PostBriefDTO::getAuthorId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet()));
-        List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
+        List<FeedItemVO> items = visiblePosts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
-                .author(feedAuthor(p, authors))
+                .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
                         .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
@@ -426,11 +435,14 @@ public class FeedFacadeImpl implements FeedFacade {
         return PageResult.of(items, nextCursor, hasMore);
     }
 
-    private UserBriefDTO feedAuthor(PostBriefDTO post, Map<Long, UserBriefDTO> authors) {
+    private UserBriefDTO feedAuthor(PostBriefDTO post, Map<Long, UserBriefDTO> authors, Long viewerUid) {
         if (post == null) {
             return null;
         }
-        return post.getAuthor() != null ? post.getAuthor() : authors.get(post.getAuthorId());
+        if (post.getAuthor() != null) {
+            return copyUserBrief(post.getAuthor());
+        }
+        return sanitizeAuthor(viewerUid, post.getAuthorId(), authors.get(post.getAuthorId()));
     }
 
     private PageResult<CrossDomainRecommendationVO> assembleCrossDomainPage(List<PostBriefDTO> posts,
@@ -458,7 +470,7 @@ public class FeedFacadeImpl implements FeedFacade {
             Integer targetDomain = effectiveDomain(post.getDomain());
             FeedItemVO feedItem = FeedItemVO.builder()
                     .post(post)
-                    .author(feedAuthor(post, authors))
+                    .author(feedAuthor(post, authors, viewerUid))
                     .counter(counter)
                     .recommendationReasons(reasons)
                     .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
@@ -472,7 +484,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     .sourceDomainName(domainName(sourceDomain))
                     .targetDomain(targetDomain)
                     .targetDomainName(domainName(targetDomain))
-                    .recommendationReason(crossDomainReason(post, sourceDomain, targetDomain, reasons, null, intent))
+                    .recommendationReason(neutralRecommendationReason(crossDomainReason(post, sourceDomain, targetDomain, reasons, null, intent), post))
                     .degraded(degraded)
                     .build();
         }).toList();
@@ -496,7 +508,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .collect(Collectors.toSet()));
         List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
-                .author(authors.get(p.getAuthorId()))
+                .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
                 .recommendationReasons(recommendationReasons(p, counters.get(p.getId()), intent, publicPostCountByAuthor))
                 .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
@@ -505,6 +517,55 @@ public class FeedFacadeImpl implements FeedFacade {
                         .build())
                 .build()).toList();
         return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private UserBriefDTO sanitizeAuthor(Long viewerUid, Long targetUid, UserBriefDTO dto) {
+        UserBriefDTO copy = copyUserBrief(dto);
+        if (copy == null) {
+            return null;
+        }
+        Long effectiveTargetUid = targetUid != null ? targetUid : copy.getUid();
+        if (effectiveTargetUid == null) {
+            copy.setProfileVisible(false);
+            copy.setIntentVisible(false);
+            copy.setIsFollowing(false);
+            return copy;
+        }
+        boolean profileVisible = userFacade.isProfileVisible(viewerUid, effectiveTargetUid);
+        copy.setProfileVisible(profileVisible);
+        copy.setIntentVisible(userFacade.isIntentVisible(viewerUid, effectiveTargetUid));
+        if (viewerUid != null && effectiveTargetUid != null && !viewerUid.equals(effectiveTargetUid)) {
+            copy.setIsFollowing(userFacade.isFollowing(viewerUid, effectiveTargetUid));
+        }
+        if (!profileVisible) {
+            copy.setNickname("");
+            copy.setAvatarUrl("");
+            copy.setBio("");
+            copy.setFollowerCount(0L);
+            copy.setFollowingCount(0L);
+            copy.setPostCount(0L);
+            copy.setPrivacyReason("PROFILE_RESTRICTED");
+        }
+        return copy;
+    }
+
+    private static UserBriefDTO copyUserBrief(UserBriefDTO dto) {
+        if (dto == null) {
+            return null;
+        }
+        return UserBriefDTO.builder()
+                .uid(dto.getUid())
+                .nickname(dto.getNickname())
+                .avatarUrl(dto.getAvatarUrl())
+                .bio(dto.getBio())
+                .followerCount(dto.getFollowerCount())
+                .followingCount(dto.getFollowingCount())
+                .postCount(dto.getPostCount())
+                .isFollowing(dto.getIsFollowing())
+                .profileVisible(dto.getProfileVisible())
+                .intentVisible(dto.getIntentVisible())
+                .privacyReason(dto.getPrivacyReason())
+                .build();
     }
 
     private PageResult<CrossDomainRecommendationVO> fallbackCrossDomainRecommendations(Long uid,
@@ -541,7 +602,7 @@ public class FeedFacadeImpl implements FeedFacade {
                             .sourceDomainName(domainName(sourceDomain))
                             .targetDomain(targetDomain)
                             .targetDomainName(domainName(targetDomain))
-                            .recommendationReason(fallbackReason)
+                            .recommendationReason(neutralRecommendationReason(fallbackReason, item.getPost()))
                             .degraded(true)
                             .build();
                 })
@@ -634,9 +695,64 @@ public class FeedFacadeImpl implements FeedFacade {
             reasons.add("技术标签完整，便于快速判断主题");
         }
         if (reasons.isEmpty()) {
-            reasons.add("根据近期内容质量和活跃度推荐");
+            reasons.add("根据近期活跃度、发布时间和标签完整度推荐");
         }
-        return reasons.stream().limit(3).toList();
+        return reasons.stream()
+                .map(reason -> neutralRecommendationReason(reason, post))
+                .distinct()
+                .limit(3)
+                .toList();
+    }
+
+    private List<PostBriefDTO> visiblePostsForViewer(List<PostBriefDTO> posts, Long viewerUid) {
+        if (posts == null || posts.isEmpty()) {
+            return List.of();
+        }
+        List<PostBriefDTO> distributablePosts = filterDistributablePosts(posts);
+        Set<Long> hiddenPostIds = hiddenPostIdsSafely(viewerUid);
+        if (hiddenPostIds.isEmpty()) {
+            return distributablePosts;
+        }
+        return distributablePosts.stream()
+                .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
+                .toList();
+    }
+
+    private List<PostBriefDTO> filterDistributablePosts(List<PostBriefDTO> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return List.of();
+        }
+        return posts.stream()
+                .filter(PublicContentFilter::isDistributablePost)
+                .toList();
+    }
+
+    private String neutralRecommendationReason(String reason, PostBriefDTO post) {
+        String value = clean(reason);
+        if (value.isBlank()) {
+            return "近期社区互动热度较高";
+        }
+        if (PublicContentFilter.isUnsafeSuggestionText(value) || isHighRiskDomain(post)) {
+            if (value.contains("编辑") || value.contains("精选")) {
+                return "频道编辑整理";
+            }
+            if (value.contains("互动") || value.contains("热度") || value.contains("讨论")) {
+                return "近期社区互动热度较高";
+            }
+            return "同频道近期讨论较多";
+        }
+        return value.length() > 32 ? value.substring(0, 32) : value;
+    }
+
+    private boolean isHighRiskDomain(PostBriefDTO post) {
+        return post != null && Objects.equals(effectiveDomain(post.getDomain()), Post.DOMAIN_INVESTMENT);
+    }
+
+    private Set<Long> hiddenPostIdsSafely(Long viewerUid) {
+        if (viewerUid == null) {
+            return Set.of();
+        }
+        return feedbackStore.hiddenPostIds(viewerUid);
     }
 
     private double newCreatorBoost(PostBriefDTO post, Map<Long, Long> publicPostCountByAuthor) {
@@ -670,7 +786,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     supportHitItemCount);
         } catch (RuntimeException e) {
             log.warn("recommend feed new creator support stats skipped, viewerUid={}, domain={}, deliveredItemCount={}, supportHitItemCount={}",
-                    viewerUid, domain, deliveredItemCount, supportHitItemCount, e);
+                    LogMask.id(viewerUid), domain, deliveredItemCount, supportHitItemCount, e);
         }
     }
 
@@ -860,6 +976,9 @@ public class FeedFacadeImpl implements FeedFacade {
         if (intent == null) {
             return Post.DOMAIN_TECH;
         }
+        if (hasAnyValue(intent.getTechStack()) || hasAnyValue(intent.getTargetCompanies())) {
+            return Post.DOMAIN_TECH;
+        }
         if (hasAnyValue(intent.getTargetPositions()) || !clean(intent.getExpectedCity()).isBlank() || intent.getExpectedSalaryRange() != null) {
             return Post.DOMAIN_CAREER;
         }
@@ -871,9 +990,6 @@ public class FeedFacadeImpl implements FeedFacade {
         }
         if (intentKeywords(intent, List.of("投资", "理财", "基金", "股票"))) {
             return Post.DOMAIN_INVESTMENT;
-        }
-        if (hasAnyValue(intent.getTechStack()) || hasAnyValue(intent.getTargetCompanies())) {
-            return Post.DOMAIN_TECH;
         }
         return Post.DOMAIN_TECH;
     }

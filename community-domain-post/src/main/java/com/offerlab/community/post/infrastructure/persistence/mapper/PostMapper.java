@@ -285,6 +285,10 @@ public interface PostMapper extends BaseMapper<PostPO> {
             </if>
             <if test="tagId != null">
             JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
+            JOIN t_tag t_filter ON t_filter.id = r.tag_id
+                AND t_filter.is_deleted = 0
+                AND t_filter.tag_status = 1
+                AND t_filter.merge_target_id IS NULL
             </if>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
@@ -320,6 +324,50 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                    @Param("cursorTime") LocalDateTime cursorTime,
                                    @Param("cursorId") Long cursorId,
                                    @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="domain != null">
+              AND COALESCE(e.domain, 1) = #{domain}
+              </if>
+              <if test="postType != null">
+              AND p.post_type = #{postType}
+              </if>
+              <if test="keyword != null and keyword != ''">
+              AND (
+                    p.title LIKE CONCAT('%', #{keyword}, '%')
+                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                    )
+                  )
+              </if>
+            ORDER BY
+              (COALESCE(c.favorite_count, 0) * 4
+               + COALESCE(c.comment_count, 0) * 3
+               + COALESCE(c.like_count, 0) * 2
+               + COALESCE(c.view_count, 0) * 0.1) DESC,
+              p.create_time DESC,
+              p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> selectOperationCandidates(@Param("keyword") String keyword,
+                                           @Param("domain") Integer domain,
+                                           @Param("postType") Integer postType,
+                                           @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -387,9 +435,16 @@ public interface PostMapper extends BaseMapper<PostPO> {
     @Select("""
             SELECT p.*
             FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%DEMO%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%FIXTURE%'
               AND p.id > #{lastId}
             ORDER BY p.id ASC
             LIMIT #{limit}
@@ -400,9 +455,16 @@ public interface PostMapper extends BaseMapper<PostPO> {
     @Select("""
             SELECT p.*
             FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%DEMO%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%FIXTURE%'
               AND p.id > #{lastId}
             ORDER BY p.id ASC
             LIMIT #{limit}
@@ -434,6 +496,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
                         SELECT 1
                         FROM t_post_tag_ref r
                         JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                          AND t.tag_status = 1
+                          AND t.merge_target_id IS NULL
                         WHERE r.post_id = p.id
                           AND (
                                 t.tag_name LIKE CONCAT('%', #{keyword}, '%')
@@ -450,6 +514,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
                         SELECT 1
                         FROM t_post_tag_ref r
                         JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                          AND t.tag_status = 1
+                          AND t.merge_target_id IS NULL
                         WHERE r.post_id = p.id
                           AND (
                                 t.tag_name LIKE CONCAT('%', #{company}, '%')
@@ -466,6 +532,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
                         SELECT 1
                         FROM t_post_tag_ref r
                         JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                          AND t.tag_status = 1
+                          AND t.merge_target_id IS NULL
                         WHERE r.post_id = p.id
                           AND (
                                 t.tag_name LIKE CONCAT('%', #{position}, '%')
@@ -741,6 +809,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
                         SELECT 1
                         FROM t_post_tag_ref r
                         JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                          AND t.tag_status = 1
+                          AND t.merge_target_id IS NULL
                         WHERE r.post_id = p.id
                           AND (
                                 t.tag_name LIKE CONCAT('%', #{prefix}, '%')
@@ -820,4 +890,29 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             """)
     List<Long> selectRecentPublicInterviewPostIds(@Param("limit") int limit);
+
+    @Select("""
+            SELECT p.*
+            FROM t_content_series_post sp
+            JOIN t_post_main p
+              ON p.id = sp.post_id
+            LEFT JOIN t_content_series_post cursor_sp
+              ON cursor_sp.id = #{cursor}
+             AND cursor_sp.series_id = #{seriesId}
+             AND cursor_sp.is_deleted = 0
+            WHERE sp.series_id = #{seriesId}
+              AND sp.is_deleted = 0
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (#{cursor} = 0
+                   OR cursor_sp.id IS NULL
+                   OR sp.sort_order > cursor_sp.sort_order
+                   OR (sp.sort_order = cursor_sp.sort_order AND sp.id > cursor_sp.id))
+            ORDER BY sp.sort_order ASC, sp.id ASC
+            LIMIT #{limit}
+            """)
+    List<PostPO> selectPublicPostsByContentSeries(@Param("seriesId") Long seriesId,
+                                                  @Param("cursor") long cursor,
+                                                  @Param("limit") int limit);
 }

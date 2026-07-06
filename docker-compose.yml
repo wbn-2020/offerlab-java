@@ -1,8 +1,8 @@
-# LOCAL DEVELOPMENT ONLY.
+# LOCAL DEVELOPMENT ONLY. NOT FOR ACCEPTANCE, STAGING, OR PRODUCTION.
 # This compose file intentionally uses local passwords, plaintext Kafka, and
 # Elasticsearch security disabled for isolated developer machines. Do not reuse
-# it for staging or production; use the prod profile with external secrets and
-# authenticated managed services instead.
+# it for acceptance, staging, or production; use the acceptance/prod profile with
+# external secrets and authenticated managed services instead.
 services:
   mysql:
     image: mysql:8.0

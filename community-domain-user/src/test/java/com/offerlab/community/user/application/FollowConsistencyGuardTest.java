@@ -49,9 +49,12 @@ class FollowConsistencyGuardTest {
         assertTrue(facadeApi.contains("getFollowingPage"), "facade must expose following page rows including relation id");
         assertTrue(repository.contains("relationId(po.getId())"), "follow page DTO must carry relation table id");
         assertTrue(repository.contains("pageLimit(size)"), "follow repository must clamp LIMIT values before SQL suffixes");
-        assertTrue(controller.contains("toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit)"), "followers API must over-fetch and use relation cursor rows");
-        assertTrue(controller.contains("toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit)"), "following API must over-fetch and use relation cursor rows");
+        assertTrue(controller.contains("toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, UserContext.get())"), "followers API must over-fetch and use relation cursor rows");
+        assertTrue(controller.contains("toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, UserContext.get())"), "following API must over-fetch and use relation cursor rows");
         assertTrue(controller.contains("getRelationId()"), "nextCursor must come from follow relation id, not user id");
+        assertTrue(controller.contains("sanitizeFollowBrief"), "follow pages must sanitize user briefs before returning them");
+        assertTrue(controller.contains("userFacade.isProfileVisible(viewer, targetUid)"), "follow pages must respect profile visibility");
+        assertTrue(controller.contains("copy.setPrivacyReason(\"PROFILE_RESTRICTED\")"), "restricted follow-page users must expose the same privacy reason as profile detail");
 
         assertTrue(cacheService.contains("CacheKeyBuilder.userProfile(uid)"), "user cache service must centralize user profile key eviction");
         assertTrue(service.contains("userCacheService.evictBrief(fromUid, toUid)"), "follow/unfollow must evict both users' brief caches");

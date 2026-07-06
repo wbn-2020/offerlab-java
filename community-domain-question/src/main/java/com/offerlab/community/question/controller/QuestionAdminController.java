@@ -1,5 +1,7 @@
 package com.offerlab.community.question.controller;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.utils.RiskConfirmation;
@@ -366,7 +368,8 @@ public class QuestionAdminController {
 
     @PostMapping("/questions/{id}/duplicates/hide")
     public Result<QuestionDuplicateGroupDTO> hideQuestionDuplicates(@PathVariable Long id,
-                                                                   @Valid @RequestBody(required = false) QuestionDuplicateHideRequest request) {
+                                                                   @RequestBody(required = false) QuestionDuplicateHideRequest request) {
+        rejectOversizedDuplicateHideBatch(request == null ? null : request.ids());
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         List<Long> ids = sanitizeDuplicateHideIds(id, request == null ? null : request.ids());
@@ -503,6 +506,16 @@ public class QuestionAdminController {
             }
         }
         return List.copyOf(sanitized);
+    }
+
+    private static void rejectOversizedDuplicateHideBatch(List<Long> rawIds) {
+        if (rawIds == null || rawIds.size() <= 50) {
+            return;
+        }
+        boolean cleanPositiveBatch = rawIds.stream().allMatch(rawId -> rawId != null && rawId > 0);
+        if (cleanPositiveBatch) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
     }
 
     private static String cleanRemark(String remark) {

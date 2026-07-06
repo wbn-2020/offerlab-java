@@ -142,27 +142,28 @@ public class UserController {
 
     @GetMapping("/{uid}/followers")
     public Result<PageResult<UserBriefDTO>> followers(@PathVariable Long uid,
-                                                     @RequestParam(defaultValue = "0") long cursor,
-                                                     @RequestParam(defaultValue = "20") int size) {
+                                                      @RequestParam(defaultValue = "0") long cursor,
+                                                      @RequestParam(defaultValue = "20") int size) {
         int limit = pageSize(size);
-        return Result.ok(toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit));
+        return Result.ok(toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, UserContext.get()));
     }
 
     @GetMapping("/{uid}/following")
     public Result<PageResult<UserBriefDTO>> following(@PathVariable Long uid,
-                                                     @RequestParam(defaultValue = "0") long cursor,
-                                                     @RequestParam(defaultValue = "20") int size) {
+                                                      @RequestParam(defaultValue = "0") long cursor,
+                                                      @RequestParam(defaultValue = "20") int size) {
         int limit = pageSize(size);
-        return Result.ok(toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit));
+        return Result.ok(toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, UserContext.get()));
     }
 
-    private PageResult<UserBriefDTO> toFollowPage(List<FollowCursorDTO> rows, int limit) {
+    private PageResult<UserBriefDTO> toFollowPage(List<FollowCursorDTO> rows, int limit, Long viewer) {
         if (rows.isEmpty()) return PageResult.empty();
         boolean hasMore = rows.size() > limit;
         List<FollowCursorDTO> pageRows = hasMore ? rows.subList(0, limit) : rows;
         List<UserBriefDTO> items = pageRows.stream()
                 .map(FollowCursorDTO::getUid)
                 .map(userFacade::getUserBrief)
+                .map(dto -> sanitizeFollowBrief(dto, viewer))
                 .filter(java.util.Objects::nonNull)
                 .toList();
         String next = hasMore && !pageRows.isEmpty()
@@ -173,6 +174,30 @@ public class UserController {
 
     private int pageSize(int size) {
         return Math.max(1, Math.min(size, 100));
+    }
+
+    private UserBriefDTO sanitizeFollowBrief(UserBriefDTO dto, Long viewer) {
+        UserBriefDTO copy = copyBrief(dto);
+        if (copy == null) {
+            return null;
+        }
+        Long targetUid = copy.getUid();
+        if (viewer != null && targetUid != null && !viewer.equals(targetUid)) {
+            copy.setIsFollowing(userFacade.isFollowing(viewer, targetUid));
+        }
+        boolean profileVisible = userFacade.isProfileVisible(viewer, targetUid);
+        copy.setProfileVisible(profileVisible);
+        copy.setIntentVisible(userFacade.isIntentVisible(viewer, targetUid));
+        if (!profileVisible) {
+            copy.setNickname("");
+            copy.setAvatarUrl("");
+            copy.setBio("");
+            copy.setFollowerCount(0L);
+            copy.setFollowingCount(0L);
+            copy.setPostCount(0L);
+            copy.setPrivacyReason("PROFILE_RESTRICTED");
+        }
+        return copy;
     }
 
     private UserBriefDTO copyBrief(UserBriefDTO dto) {

@@ -19,7 +19,9 @@ CREATE TABLE t_post_main (
     version         INT          NOT NULL DEFAULT 0,
     KEY idx_author_time (author_id, create_time),
     KEY idx_type_time   (post_type, create_time),
-    KEY idx_status_time (post_status, create_time)
+    KEY idx_status_time (post_status, create_time),
+    KEY idx_post_public_time_id (is_deleted, post_status, visibility, create_time, id),
+    KEY idx_post_public_author_time (is_deleted, post_status, visibility, author_id, create_time, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子主表';
 
 DROP TABLE IF EXISTS t_post_extension;
@@ -56,7 +58,8 @@ CREATE TABLE t_tag (
     UNIQUE KEY uk_tag_name (tag_name, is_deleted),
     KEY idx_type_count (tag_type, use_count),
     KEY idx_tag_status_recommend (tag_status, recommended, use_count),
-    KEY idx_tag_merge_target (merge_target_id)
+    KEY idx_tag_merge_target (merge_target_id),
+    KEY idx_tag_public_lookup (is_deleted, tag_status, merge_target_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标签库';
 
 DROP TABLE IF EXISTS t_post_tag_ref;

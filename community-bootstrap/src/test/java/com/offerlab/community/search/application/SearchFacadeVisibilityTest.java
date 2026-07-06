@@ -12,7 +12,6 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
-import com.offerlab.community.user.api.UserFacade;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,9 +23,9 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -51,8 +50,6 @@ class SearchFacadeVisibilityTest {
     @Mock
     private PostFacade postFacade;
     @Mock
-    private UserFacade userFacade;
-    @Mock
     private SearchAnalyticsService searchAnalyticsService;
     @Mock
     private MigrationCheckService migrationCheckService;
@@ -71,7 +68,6 @@ class SearchFacadeVisibilityTest {
                 elasticsearch,
                 postSearchIndexer,
                 postFacade,
-                userFacade,
                 searchAnalyticsService,
                 migrationCheckService);
         lenient().when(migrationCheckService.tagGovernanceReady()).thenReturn(true);
@@ -98,10 +94,48 @@ class SearchFacadeVisibilityTest {
         assertEquals(101L, page.getItems().get(0).getId());
         assertEquals("<em>Java</em>", page.getItems().get(0).getHighlightTitle());
         assertEquals("Current Java", page.getItems().get(0).getTitle());
+        assertTrue(page.getItems().get(0).getRecommendationReasons().contains("标题高亮命中"));
+        assertTrue(page.getItems().get(0).getRecommendationReasons().contains("标题包含搜索词"));
         assertEquals("elasticsearch", page.getSource());
         assertEquals(Boolean.FALSE, page.getDegraded());
         verify(postFacade).batchGetPosts(List.of(101L, 102L), null, false);
         verify(searchAnalyticsService).recordSearch("Java", null, null, null, "relevance", 1, true);
+    }
+
+    @Test
+    void staleElasticsearchHighlightIsDiscardedAfterCurrentPostReload() throws Exception {
+        when(postSearchIndexer.ensurePostIndex()).thenReturn(true);
+        when(elasticsearch.postIndex()).thenReturn("post_idx");
+        when(elasticsearch.search(eq("post_idx"), any())).thenReturn(Optional.of(esHits()));
+
+        PostBriefDTO currentPublicPost = PostBriefDTO.builder()
+                .id(101L)
+                .authorId(11L)
+                .title("Current Python")
+                .summary("Current summary without the indexed term")
+                .createTime(LocalDateTime.now())
+                .build();
+        when(postFacade.batchGetPosts(List.of(101L, 102L), null, false)).thenReturn(Map.of(101L, currentPublicPost));
+
+        PageResult<PostBriefDTO> page = facade.searchPosts("Java", null, null, null, "relevance", null, 2);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(101L, page.getItems().get(0).getId());
+        assertEquals("Current Python", page.getItems().get(0).getTitle());
+        assertEquals(null, page.getItems().get(0).getHighlightTitle());
+        assertTrue(page.getItems().get(0).getRecommendationReasons() == null
+                || !page.getItems().get(0).getRecommendationReasons().contains("鏍囬楂樹寒鍛戒腑"));
+    }
+
+    @Test
+    void hotKeywordsDoNotExposeStaticFallbackSeedsAsTrend() {
+        when(tagMapper.selectActiveTags()).thenReturn(List.of());
+        when(postMapper.countCompanies(any(), anyInt())).thenReturn(List.of());
+        when(postMapper.countPositions(any(), anyInt())).thenReturn(List.of());
+
+        List<String> hotKeywords = facade.getHotKeywords(10);
+
+        assertEquals(List.of(), hotKeywords);
     }
 
     @Test
@@ -128,8 +162,7 @@ class SearchFacadeVisibilityTest {
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of(extension));
         when(tagMapper.selectTagsByPostIds(List.of(201L))).thenReturn(List.of());
-        when(postFacade.batchGetCounters(List.of(201L))).thenReturn(Map.of());
-        when(userFacade.batchGetUserBriefs(Set.of(21L))).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(201L), null, false)).thenReturn(Map.of(201L, brief(post)));
 
         PageResult<PostBriefDTO> page = facade.searchPosts("Kafka", null, null, null, "relevance", null, 5);
 
@@ -162,8 +195,7 @@ class SearchFacadeVisibilityTest {
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(202L))).thenReturn(List.of());
-        when(postFacade.batchGetCounters(List.of(202L))).thenReturn(Map.of());
-        when(userFacade.batchGetUserBriefs(Set.of(22L))).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(202L), null, false)).thenReturn(Map.of(202L, brief(post)));
 
         PageResult<PostBriefDTO> page = facade.searchPosts(probe, null, null, null, "relevance", null, 10);
 
@@ -189,8 +221,7 @@ class SearchFacadeVisibilityTest {
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(203L))).thenReturn(List.of());
-        when(postFacade.batchGetCounters(List.of(203L))).thenReturn(Map.of());
-        when(userFacade.batchGetUserBriefs(Set.of(23L))).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(203L), null, false)).thenReturn(Map.of(203L, brief(post)));
 
         PageResult<PostBriefDTO> page = facade.searchPosts(keyword, null, null, 10, "relevance", null, 10);
 
@@ -227,8 +258,10 @@ class SearchFacadeVisibilityTest {
                 .thenReturn(mysqlPosts);
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(any())).thenReturn(List.of());
-        when(postFacade.batchGetCounters(List.of(401L, 402L, 403L))).thenReturn(Map.of());
-        when(userFacade.batchGetUserBriefs(Set.of(41L, 42L, 43L))).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(401L, 402L, 403L), null, false)).thenReturn(Map.of(
+                401L, brief(mysqlPosts.get(0)),
+                402L, brief(mysqlPosts.get(1)),
+                403L, brief(mysqlPosts.get(2))));
 
         PageResult<PostBriefDTO> page = facade.searchPosts("Java", null, null, null, "latest", null, 2);
 
@@ -253,8 +286,8 @@ class SearchFacadeVisibilityTest {
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(501L))).thenReturn(List.of());
-        when(postFacade.batchGetCounters(List.of(501L))).thenReturn(Map.of());
-        when(userFacade.batchGetUserBriefs(Set.of(51L))).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(501L), null, false)).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(501L), null, true)).thenReturn(Map.of(501L, brief(post)));
 
         PageResult<PostBriefDTO> hidden = facade.searchPosts(keyword, null, null, null, "relevance", null, 10);
         PageResult<PostBriefDTO> visible = facade.searchPosts(keyword, null, null, null, "relevance", null, 10, true);
@@ -275,8 +308,7 @@ class SearchFacadeVisibilityTest {
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(909L))).thenReturn(List.of());
-        when(postFacade.batchGetCounters(List.of(909L))).thenReturn(Map.of());
-        when(userFacade.batchGetUserBriefs(Set.of(90L))).thenReturn(Map.of());
+        when(postFacade.batchGetPosts(List.of(909L), null, false)).thenReturn(Map.of(909L, brief(post)));
 
         PageResult<PostBriefDTO> page = facade.searchPosts("909", null, null, null, "relevance", null, 5);
 
@@ -391,5 +423,16 @@ class SearchFacadeVisibilityTest {
         post.setContent("Search fallback visible content for " + title);
         post.setCreateTime(createTime);
         return post;
+    }
+
+    private PostBriefDTO brief(PostPO post) {
+        return PostBriefDTO.builder()
+                .id(post.getId())
+                .authorId(post.getAuthorId())
+                .postType(post.getPostType())
+                .title(post.getTitle())
+                .summary(post.getContent())
+                .createTime(post.getCreateTime())
+                .build();
     }
 }

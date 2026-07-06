@@ -5,6 +5,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPo
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.Collection;
 import java.util.List;
@@ -73,4 +74,37 @@ public interface ContentSeriesPostMapper extends BaseMapper<ContentSeriesPostPO>
             """)
     List<ContentSeriesPostPO> selectActivePostsBySeriesId(@Param("seriesId") Long seriesId,
                                                           @Param("limit") int limit);
+
+    @Select("""
+            SELECT id
+            FROM t_content_series_post
+            WHERE series_id = #{seriesId}
+              AND post_id = #{postId}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    Long selectActiveRelationId(@Param("seriesId") Long seriesId, @Param("postId") Long postId);
+
+    @Update("""
+            UPDATE t_content_series_post
+            SET is_deleted = 1,
+                update_time = NOW(3)
+            WHERE series_id = #{seriesId}
+              AND post_id = #{postId}
+              AND is_deleted = 0
+            """)
+    int softDeleteRelation(@Param("seriesId") Long seriesId, @Param("postId") Long postId);
+
+    @Update("""
+            UPDATE t_content_series_post
+            SET is_deleted = 0,
+                sort_order = #{sortOrder},
+                update_time = NOW(3)
+            WHERE series_id = #{seriesId}
+              AND post_id = #{postId}
+              AND is_deleted = 1
+            """)
+    int restoreDeletedRelation(@Param("seriesId") Long seriesId,
+                               @Param("postId") Long postId,
+                               @Param("sortOrder") Integer sortOrder);
 }

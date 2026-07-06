@@ -3,6 +3,7 @@ package com.offerlab.community.analytics.application;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
 import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
+import com.offerlab.community.post.api.event.OperationCurationSelectedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
@@ -114,6 +115,29 @@ public class GrowthEventListener {
                 "POST",
                 String.valueOf(event.getPostId()),
                 "post.publish");
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onOperationCurationSelected(OperationCurationSelectedEvent event) {
+        if (event == null || event.getAuthorUid() == null || event.getContentId() == null) {
+            return;
+        }
+        growthEventService.recordTrustedEvent(
+                GrowthEventService.OPERATION_CURATION_SELECTED,
+                event.getAuthorUid(),
+                null,
+                event.getContentId(),
+                "POST",
+                operationTargetValue(event),
+                "operation.curation");
+    }
+
+    private static String operationTargetValue(OperationCurationSelectedEvent event) {
+        return String.join(":",
+                String.valueOf(event.getPlacementType()),
+                String.valueOf(event.getPlacementId()),
+                String.valueOf(event.getPlacementKey()),
+                String.valueOf(event.getSectionKey()));
     }
 
     private static long asLong(Object value) {

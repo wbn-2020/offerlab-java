@@ -8,6 +8,7 @@ import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
 import com.offerlab.community.search.api.dto.ReviewQueueCreateCmd;
 import com.offerlab.community.search.infrastructure.persistence.mapper.ReviewQueueMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.ReviewQueueItemPO;
@@ -37,6 +38,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     private final SnowflakeIdGenerator idGen;
     private final AdminAuditService auditService;
     private final MigrationCheckService migrationCheckService;
+    private final List<ReviewQueueSourceActionHandler> sourceActionHandlers;
 
     public List<ReviewQueueItemPO> list(String status, String sourceType, String riskLevel, int limit) {
         if (!queueReady()) {
@@ -220,8 +222,21 @@ public class ReviewQueueService implements ReviewQueuePublisher {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         ReviewQueueItemPO after = requireItem(id);
+        dispatchSourceAction(after, status, result, note, operatorUid);
         auditService.recordRequired(operatorUid, action, "REVIEW_QUEUE", id, before, after, clean(note));
         return after;
+    }
+
+    private void dispatchSourceAction(ReviewQueueItemPO item, String status, String result, String note, Long operatorUid) {
+        if (item == null || item.getSourceId() == null || sourceActionHandlers == null || sourceActionHandlers.isEmpty()) {
+            return;
+        }
+        String sourceType = item.getSourceType();
+        for (ReviewQueueSourceActionHandler handler : sourceActionHandlers) {
+            if (handler.supports(sourceType)) {
+                handler.handle(sourceType, item.getSourceId(), status, result, note, operatorUid);
+            }
+        }
     }
 
     private ReviewQueueItemPO requireItem(Long id) {

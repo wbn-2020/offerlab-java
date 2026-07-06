@@ -59,17 +59,15 @@ class SearchControllerApiTest {
     void setUp() {
         mvc = ApiTestSupport.mvc(new SearchController(
                 searchFacade,
-                indexer,
                 searchAnalyticsService,
                 postFacade,
-                elasticsearch,
-                searchIndexRetryService,
-                outboxMessageMapper
+                indexer
         ), jwtService);
     }
 
     @Test
     void publishStatusKeepsInternalRetryErrorsOutOfPublicContract() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
         PostBriefDTO post = PostBriefDTO.builder()
                 .id(42L)
                 .postType(10)
@@ -87,27 +85,14 @@ class SearchControllerApiTest {
         retryTask.setUpdateTime(LocalDateTime.parse("2026-06-14T10:15:00"));
 
         when(postFacade.batchGetPosts(List.of(42L))).thenReturn(Map.of(42L, post));
-        when(postFacade.batchGetPosts(List.of(42L), true)).thenReturn(Map.of(42L, post));
-        when(searchFacade.searchPosts(eq("42"), isNull(), isNull(), isNull(), eq("relevance"), isNull(), eq(5), eq(true)))
+        when(searchFacade.searchPosts(eq("42"), isNull(), isNull(), isNull(), eq("relevance"), isNull(), eq(5), eq(false)))
                 .thenReturn(PageResult.of(List.of(post), null, false));
-        when(elasticsearch.enabled()).thenReturn(true);
-        when(elasticsearch.available()).thenReturn(true);
-        when(elasticsearch.postIndex()).thenReturn("post_idx");
-        when(elasticsearch.indexExists("post_idx")).thenReturn(false);
-        when(elasticsearch.getDocument(eq("post_idx"), eq("42"))).thenReturn(Optional.<JsonNode>empty());
-        when(searchIndexRetryService.findLatestByPostId(42L)).thenReturn(retryTask);
-        when(outboxMessageMapper.findLatestByAggregate("post", 42L)).thenReturn(OutboxMessage.builder()
-                .id(3001L)
-                .topic("post.published")
-                .msgStatus(OutboxMessageMapper.STATUS_FAILED)
-                .retryCount(1)
-                .build());
 
-        mvc.perform(get("/api/v1/search/posts/42/publish-status"))
+        mvc.perform(get("/api/v1/search/posts/42/publish-status")
+                        .header("Authorization", "Bearer token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.index.retryTask.id").value(9001))
-                .andExpect(jsonPath("$.data.index.retryTask.statusText").value("failed"))
-                .andExpect(jsonPath("$.data.index.retryTask.lastError").doesNotExist())
+                .andExpect(jsonPath("$.data.database.publiclyVisible").value(true))
+                .andExpect(jsonPath("$.data.search.visible").value(true))
                 .andExpect(jsonPath("$.data.ready").value(true));
 
         verifyNoInteractions(indexer);

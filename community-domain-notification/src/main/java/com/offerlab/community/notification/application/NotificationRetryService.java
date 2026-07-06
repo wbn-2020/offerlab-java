@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationRetryTaskMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationRetryTaskPO;
@@ -60,7 +61,7 @@ public class NotificationRetryService {
         task.setLastError(shortMessage(cause));
         taskMapper.upsertPending(task);
         log.warn("notification retry task enqueued: scene={} dedupKey={} receiverUid={} targetId={}",
-                scene, task.getDedupKey(), receiverUid, targetId, cause);
+                scene, LogMask.key(task.getDedupKey()), LogMask.id(receiverUid), LogMask.id(targetId), cause);
     }
 
     @Scheduled(fixedDelay = 5000)
@@ -168,7 +169,8 @@ public class NotificationRetryService {
                     task.getTargetId(),
                     parseContent(task.getContentJson()));
             taskMapper.markDone(task.getId(), owner);
-            log.debug("notification retry task completed: id={} dedupKey={}", task.getId(), task.getDedupKey());
+            log.debug("notification retry task completed: id={} dedupKey={}",
+                    LogMask.id(task.getId()), LogMask.key(task.getDedupKey()));
         } catch (Exception e) {
             handleRetryFailure(task, e);
         }
@@ -180,7 +182,7 @@ public class NotificationRetryService {
             taskMapper.updateRetry(task.getId(), owner, NotificationRetryTaskMapper.STATUS_FAILED,
                     retryCount, null, shortMessage(e));
             log.error("notification retry task failed after {} retries: id={} dedupKey={}",
-                    MAX_RETRY, task.getId(), task.getDedupKey(), e);
+                    MAX_RETRY, LogMask.id(task.getId()), LogMask.key(task.getDedupKey()), e);
             return;
         }
         long delaySeconds = (long) Math.pow(2, retryCount) * 30;
@@ -188,7 +190,7 @@ public class NotificationRetryService {
         taskMapper.updateRetry(task.getId(), owner, NotificationRetryTaskMapper.STATUS_PENDING,
                 retryCount, nextRetry, shortMessage(e));
         log.warn("notification retry task rescheduled: id={} dedupKey={} nextRetry={} delaySeconds={}",
-                task.getId(), task.getDedupKey(), nextRetry, delaySeconds, e);
+                LogMask.id(task.getId()), LogMask.key(task.getDedupKey()), nextRetry, delaySeconds, e);
     }
 
     private Map<String, Object> parseContent(String json) {
@@ -275,11 +277,11 @@ public class NotificationRetryService {
             return null;
         }
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("id", task.getId());
+        data.put("id", LogMask.id(task.getId()));
         data.put("scene", task.getScene());
-        data.put("receiverUid", task.getReceiverUid());
+        data.put("receiverUid", LogMask.id(task.getReceiverUid()));
         data.put("targetType", task.getTargetType());
-        data.put("targetId", task.getTargetId());
+        data.put("targetId", LogMask.id(task.getTargetId()));
         data.put("retryCount", task.getRetryCount());
         data.put("nextRetryTime", task.getNextRetryTime() == null ? null : task.getNextRetryTime().toString());
         data.put("lastError", task.getLastError());

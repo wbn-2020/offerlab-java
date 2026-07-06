@@ -9,6 +9,8 @@ Use the folders differently:
   you intentionally want to rebuild it from scratch. Run
   `db/init/00_empty_database_guard.sql` first when applying the init folder; it
   aborts if the current schema already contains tables.
+- `db/schema-ledger.md`: static acceptance ledger for recording which schema
+  source and migration scripts were reviewed for a target environment.
 
 ## Fresh database only
 
@@ -39,6 +41,14 @@ Before running an existing-database migration, use:
 The check is intentionally conservative. It scans `db/migration` for destructive
 DDL/DML patterns and fails fast when it sees statements such as `DROP TABLE`,
 `TRUNCATE`, or broad `DELETE`/`UPDATE` statements without an obvious `WHERE`.
+
+## Acceptance schema ledger
+
+Before service-style acceptance, choose one database schema source and record it
+in `db/schema-ledger.md`. For a shared or existing acceptance database, prefer the
+reviewed migration path and record each applied script with a checksum or file
+revision. Do not treat local `docker-compose.yml` plus `db/init` as proof that an
+existing acceptance database is aligned.
 
 ## Testcontainers integration checks
 

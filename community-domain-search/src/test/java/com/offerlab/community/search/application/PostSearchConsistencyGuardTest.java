@@ -48,6 +48,10 @@ class PostSearchConsistencyGuardTest {
         assertTrue(facade.contains("filterVisibleSearchResults"), "ES results must pass through a visibility filter");
         assertTrue(facade.contains("postFacade.batchGetPosts"), "search visibility fallback must use PostFacade current-state reads");
         assertTrue(facade.contains("stale elasticsearch post filtered"), "filtered stale ES hits must be observable in logs");
+        assertTrue(facade.contains("visibleSuggestionSources"), "ES suggestions must also pass through current visibility checks");
+        assertTrue(facade.contains("Map.of(\"term\", Map.of(\"visibility\", 1))"), "ES suggestions must filter public visibility at query time");
+        assertTrue(facade.contains("\"postId\""), "ES suggestions must fetch numeric post ids for current-state visibility checks");
+        assertTrue(facade.contains("stale elasticsearch suggestion filtered"), "filtered stale ES suggestion hits must be observable in logs");
         assertTrue(facade.contains("int scanLimit = elasticsearchScanLimit(limit)"), "ES search must over-fetch before applying visibility filters");
         assertTrue(facade.contains("body.put(\"size\", scanLimit)"), "ES search request size must use the over-fetch limit");
         assertTrue(facade.contains("boolean hasMore = visibleItems.size() > limit"), "ES hasMore must be calculated after visibility filtering");

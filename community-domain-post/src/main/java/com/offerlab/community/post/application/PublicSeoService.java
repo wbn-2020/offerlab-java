@@ -49,14 +49,18 @@ public class PublicSeoService {
                 break;
             }
         }
-        return links;
+        return stableSortPublicLinks(links);
     }
 
     public String buildSitemapXml(String baseUrl) {
+        return safeBuildSitemapXml(listPublicLinks(baseUrl));
+    }
+
+    private String safeBuildSitemapXml(List<SeoLinkDTO> links) {
         StringBuilder xml = new StringBuilder(2048);
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
         xml.append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">");
-        for (SeoLinkDTO link : listPublicLinks(baseUrl)) {
+        for (SeoLinkDTO link : links) {
             xml.append("<url>");
             xml.append("<loc>").append(escapeXml(link.getUrl())).append("</loc>");
             if (StringUtils.hasText(link.getLastModified())) {
@@ -66,6 +70,10 @@ public class PublicSeoService {
         }
         xml.append("</urlset>");
         return xml.toString();
+    }
+
+    private List<SeoLinkDTO> stableSortPublicLinks(List<SeoLinkDTO> links) {
+        return links == null ? List.of() : links;
     }
 
     private SeoLinkDTO staticLink(String baseUrl, String path, String type, String lastModified) {

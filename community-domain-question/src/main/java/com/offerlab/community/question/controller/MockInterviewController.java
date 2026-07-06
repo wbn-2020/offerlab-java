@@ -1,5 +1,7 @@
 package com.offerlab.community.question.controller;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -35,17 +37,20 @@ public class MockInterviewController {
     @PostMapping
     @RateLimit(key = "'mock-interview:start:' + #uid", rate = 20, per = 3600)
     public Result<MockInterviewSessionDTO> start(@Valid @RequestBody MockInterviewStartCmd cmd) {
-        return Result.ok(mockInterviewService.start(UserContext.require(), cmd));
+        UserContext.require();
+        return disabledLegacyTrainingFeature();
     }
 
     @GetMapping
     public Result<List<MockInterviewSessionDTO>> recent(@RequestParam(defaultValue = "5") @Min(1) @Max(20) int limit) {
-        return Result.ok(mockInterviewService.recent(UserContext.require(), limit));
+        UserContext.require();
+        return disabledLegacyTrainingFeature();
     }
 
     @GetMapping("/stats")
     public Result<MockInterviewStatsDTO> stats() {
-        return Result.ok(mockInterviewService.stats(UserContext.require()));
+        UserContext.require();
+        return disabledLegacyTrainingFeature();
     }
 
     @GetMapping("/{id}")
@@ -56,18 +61,25 @@ public class MockInterviewController {
     @PutMapping("/{id}/draft")
     @RateLimit(key = "'mock-interview:draft:' + #uid", rate = 240, per = 3600)
     public Result<MockInterviewSessionDTO> saveDraft(@PathVariable Long id, @Valid @RequestBody MockInterviewDraftCmd cmd) {
-        return Result.ok(mockInterviewService.saveDraft(UserContext.require(), id, cmd));
+        UserContext.require();
+        return disabledLegacyTrainingFeature();
     }
 
     @PostMapping("/{id}/submit")
     @RateLimit(key = "'mock-interview:submit:' + #uid", rate = 60, per = 3600)
     public Result<MockInterviewSessionDTO> submit(@PathVariable Long id, @Valid @RequestBody MockInterviewSubmitCmd cmd) {
-        return Result.ok(mockInterviewService.submit(UserContext.require(), id, cmd));
+        UserContext.require();
+        return disabledLegacyTrainingFeature();
     }
 
     @PostMapping("/{id}/ai-review/retry")
     @RateLimit(key = "'mock-interview:ai-review:retry:' + #uid", rate = 30, per = 3600)
     public Result<MockInterviewSessionDTO> retryAiReview(@PathVariable Long id) {
-        return Result.ok(mockInterviewService.retryAiReview(UserContext.require(), id));
+        UserContext.require();
+        return disabledLegacyTrainingFeature();
+    }
+
+    private static <T> T disabledLegacyTrainingFeature() {
+        throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
     }
 }

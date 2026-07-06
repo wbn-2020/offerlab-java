@@ -38,10 +38,12 @@ public class GrowthEventService {
     public static final String FIRST_POST_PUBLISHED = "FIRST_POST_PUBLISHED";
     public static final String USER_REGISTER = "USER_REGISTER";
     public static final String CROSS_DOMAIN_CONSUME = "CROSS_DOMAIN_CONSUME";
+    public static final String OPERATION_CURATION_SELECTED = "OPERATION_CURATION_SELECTED";
 
     private static final Set<String> ALLOWED_EVENTS = Set.of(
             PUBLIC_POST_VIEW, AUTH_REDIRECT_CLICK, POST_LIKE, POST_FAVORITE,
-            POST_COMMENT, FIRST_POST_PUBLISHED, USER_REGISTER, CROSS_DOMAIN_CONSUME
+            POST_COMMENT, FIRST_POST_PUBLISHED, USER_REGISTER, CROSS_DOMAIN_CONSUME,
+            OPERATION_CURATION_SELECTED
     );
     private static final Set<String> CLIENT_TRACKABLE_EVENTS = Set.of(
             AUTH_REDIRECT_CLICK

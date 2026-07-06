@@ -3,6 +3,9 @@
 This folder contains non-destructive SQL for existing databases. `db/init/*`
 is used for fresh local initialization only.
 
+Record reviewed and applied scripts in `../schema-ledger.md` for acceptance or
+shared environments.
+
 Run migration scripts manually after reviewing them. Do not batch-run the folder
 blindly; the scripts are ordered by date, but each target environment may already
 have a different subset applied.

@@ -21,12 +21,12 @@ $Utf8NoBomStrict = [System.Text.UTF8Encoding]::new($false, $true)
 
 $root = $Root
 $repoRoot = [string](Resolve-Path (Join-Path $PSScriptRoot ".."))
-$redis = Join-Path $root "redis6.2.18"
-$es = Join-Path $root "elasticsearch-8.14.3"
-$kafka = Join-Path $root "kafka_2.13-3.6.2"
+$redis = Join-Path $root "redis"
+$es = Join-Path (Join-Path $root "elasticsearch") "elasticsearch-8.14.3"
+$kafka = Join-Path (Join-Path $root "kafka") "kafka_2.13-3.6.2"
 $kafkaData = Join-Path $root "kafka-data"
 $kafkaLogs = Join-Path $root "kafka-logs"
-$kafkaMetadataDir = Join-Path $kafkaData "kraft-combined-logs\__cluster_metadata-0"
+$kafkaMetadataDir = Join-Path $kafkaData "offerlab-metadata"
 
 $expectedPaths = @($root, $redis, $es, $kafka, $kafkaData, $kafkaLogs)
 $missing = New-Object System.Collections.Generic.List[string]
@@ -48,18 +48,18 @@ if (Test-Path -LiteralPath $esConfig) {
   if ($content -notmatch "path\.data" -or $content -notmatch "path\.logs") {
     $warnings.Add("Elasticsearch config does not explicitly declare path.data and path.logs.")
   }
-  if ($content -notmatch "C:/codeware/elasticsearch-8.14.3/data" -and $content -notmatch "C:\\codeware\\elasticsearch-8.14.3\\data") {
-    $warnings.Add("Elasticsearch path.data does not reference the expected C:\codeware\elasticsearch-8.14.3\data path.")
+  if ($content -notmatch "C:/codeware/elasticsearch/elasticsearch-8.14.3/data" -and $content -notmatch "C:\\codeware\\elasticsearch\\elasticsearch-8.14.3\\data") {
+    $warnings.Add("Elasticsearch path.data does not reference the expected C:\codeware\elasticsearch\elasticsearch-8.14.3\data path.")
   }
-  if ($content -notmatch "C:/codeware/elasticsearch-8.14.3/logs" -and $content -notmatch "C:\\codeware\\elasticsearch-8.14.3\\logs") {
-    $warnings.Add("Elasticsearch path.logs does not reference the expected C:\codeware\elasticsearch-8.14.3\logs path.")
+  if ($content -notmatch "C:/codeware/elasticsearch/elasticsearch-8.14.3/logs" -and $content -notmatch "C:\\codeware\\elasticsearch\\elasticsearch-8.14.3\\logs") {
+    $warnings.Add("Elasticsearch path.logs does not reference the expected C:\codeware\elasticsearch\elasticsearch-8.14.3\logs path.")
   }
 } else {
   $warnings.Add("Elasticsearch config not found: $esConfig")
 }
 
-$kafkaConfig = Join-Path $kafka "config\kraft\offerlab-server.properties"
 $offerlabKafkaConfig = Join-Path $repoRoot "scripts\kafka\offerlab-server-local.properties"
+$kafkaConfig = $offerlabKafkaConfig
 if (Test-Path -LiteralPath $kafkaConfig) {
   $content = Get-Content -LiteralPath $kafkaConfig -Raw
   if ($content -notmatch "process\.roles\s*=\s*broker,controller") {
@@ -100,7 +100,8 @@ foreach ($scriptName in @("start-local-redis.ps1", "start-local-elasticsearch.ps
   }
 }
 
-if (Test-Path -LiteralPath $kafkaMetadataDir) {
+$kafkaMetadataMetaProperties = Join-Path $kafkaMetadataDir "meta.properties"
+if (Test-Path -LiteralPath $kafkaMetadataMetaProperties) {
   $readOnlyDeletedCheckpoints = @(Get-ChildItem -LiteralPath $kafkaMetadataDir -Filter "*.checkpoint.deleted" -File -ErrorAction SilentlyContinue | Where-Object { $_.IsReadOnly })
   if ($readOnlyDeletedCheckpoints.Count -gt 0) {
     $sample = ($readOnlyDeletedCheckpoints | Select-Object -First 3 | ForEach-Object { $_.FullName }) -join "; "
@@ -110,10 +111,10 @@ if (Test-Path -LiteralPath $kafkaMetadataDir) {
       $strictFailures.Add($message)
     }
   } else {
-    $checks.Add("Kafka metadata checkpoint files are writable or no *.checkpoint.deleted files were found")
+    $checks.Add("Kafka metadata storage is formatted and checkpoint files are writable or no *.checkpoint.deleted files were found")
   }
 } else {
-  $warnings.Add("Kafka metadata directory not found: $kafkaMetadataDir")
+  $warnings.Add("Kafka metadata storage is not formatted: $kafkaMetadataMetaProperties")
 }
 
 function Test-TcpEndpoint {
@@ -378,7 +379,9 @@ if (-not $SkipNetworkProbe) {
 
 }
 
-Invoke-BackendReadinessProbe
+if (-not $SkipNetworkProbe -or $RequireBackendReadiness) {
+  Invoke-BackendReadinessProbe
+}
 if ($RequireCoreApiProbes) {
   Invoke-CoreApiProbes
 }
