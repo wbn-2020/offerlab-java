@@ -2,6 +2,7 @@ package com.offerlab.community.user.controller;
 
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.user.api.dto.UserTaskOverviewDTO;
 import com.offerlab.community.user.application.UserTaskApplicationService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class UserTaskController {
     }
 
     @PostMapping("/onboarding-tasks/{taskCode}/complete")
+    @RateLimit(key = "'user-task:onboarding:' + #uid", rate = 60, per = 60)
     public Result<Void> completeOnboardingTask(@PathVariable String taskCode) {
         taskService.completeOnboardingTask(UserContext.require(), taskCode);
         return Result.ok();
@@ -35,6 +37,7 @@ public class UserTaskController {
     }
 
     @PostMapping("/daily-tasks/{taskCode}/complete")
+    @RateLimit(key = "'user-task:daily:' + #uid", rate = 60, per = 60)
     public Result<Void> completeDailyTask(@PathVariable String taskCode) {
         taskService.completeDailyTask(UserContext.require(), taskCode);
         return Result.ok();

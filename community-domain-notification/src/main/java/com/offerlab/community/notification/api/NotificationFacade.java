@@ -29,6 +29,10 @@ public interface NotificationFacade {
 
     void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId);
 
+    void notifyDiscussionFollowComment(Long receiverUid, Long senderUid, Long postId, Long commentId);
+
+    void notifyDiscussionFollowQualityComment(Long receiverUid, Long senderUid, Long postId, Long commentId, String action);
+
     void notifyFollower(Long receiverUid, Long senderUid);
 
     void notifyFavorite(Long receiverUid, Long senderUid, Long postId);
@@ -36,4 +40,12 @@ public interface NotificationFacade {
     void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId);
 
     void notifySystem(Long receiverUid, Long targetType, Long targetId, Map<String, Object> content);
+
+    void notifyReportReceipt(Long receiverUid, String sourceType, Long reportId, String userStatus, String targetPath);
+
+    void notifyContactRequestReceived(Long receiverUid, Long requesterUid, Long requestId);
+
+    void notifyContactRequestAccepted(Long requesterUid, Long receiverUid, Long requestId);
+
+    void notifyContactRequestRejected(Long requesterUid, Long receiverUid, Long requestId);
 }

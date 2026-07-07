@@ -29,5 +29,5 @@ public @interface RateLimit {
     /**
      * Redis 限流不可用时是否允许请求继续。
      */
-    boolean failOpen() default true;
+    boolean failOpen() default false;
 }

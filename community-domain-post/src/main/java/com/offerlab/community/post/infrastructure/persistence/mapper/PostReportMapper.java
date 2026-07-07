@@ -48,6 +48,56 @@ public interface PostReportMapper extends BaseMapper<PostReportPO> {
     }
 
     @Select("""
+            <script>
+            SELECT id,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   review_time AS reviewTime,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_post_report
+            WHERE reporter_uid = #{reporterUid}
+            <if test="status != null">
+              AND report_status = #{status}
+            </if>
+            <if test="cursor != null and cursor > 0">
+              AND id &lt; #{cursor}
+            </if>
+            ORDER BY id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostReportPO> selectByReporter(@Param("reporterUid") Long reporterUid,
+                                        @Param("status") Integer status,
+                                        @Param("cursor") Long cursor,
+                                        @Param("limit") int limit);
+
+    default List<PostReportPO> selectByReporter(Long reporterUid, int limit) {
+        return selectByReporter(reporterUid, null, null, limit);
+    }
+
+    @Select("""
+            SELECT id,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   review_time AS reviewTime,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_post_report
+            WHERE id = #{id}
+              AND reporter_uid = #{reporterUid}
+            LIMIT 1
+            """)
+    PostReportPO selectByIdAndReporter(@Param("id") Long id,
+                                       @Param("reporterUid") Long reporterUid);
+
+    @Select("""
             SELECT id,
                    post_id AS postId,
                    reporter_uid AS reporterUid,

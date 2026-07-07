@@ -39,9 +39,10 @@ public class ContentModerationService {
     private final ReviewQueuePublisher reviewQueuePublisher;
 
     public void requireUserCanPublish(Long uid) {
-        if (uid == null || !tableExists("t_user_moderation_state")) {
+        if (uid == null) {
             return;
         }
+        requireTableAvailable("t_user_moderation_state", "user moderation");
         try {
             UserModerationState state = mapper.findUserState(uid);
             LocalDateTime now = LocalDateTime.now();
@@ -54,7 +55,8 @@ public class ContentModerationService {
         } catch (BizException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("user moderation check failed open: uid={}", LogMask.id(uid), e);
+            log.warn("user moderation check failed closed: uid={}", LogMask.id(uid), e);
+            throw moderationUnavailable();
         }
     }
 
@@ -67,15 +69,13 @@ public class ContentModerationService {
     }
 
     public ModerationDecision checkContent(Long uid, String scope, String... values) {
-        if (!tableExists("t_moderation_keyword")) {
-            return ModerationDecision.allow();
-        }
         String text = values == null ? "" : String.join("\n", Arrays.stream(values)
                 .filter(Objects::nonNull)
                 .toList()).toLowerCase(Locale.ROOT);
         if (!StringUtils.hasText(text)) {
             return ModerationDecision.allow();
         }
+        requireTableAvailable("t_moderation_keyword", "content keyword moderation");
         try {
             String normalizedScope = normalizeScope(scope);
             ModerationDecision reviewDecision = null;
@@ -96,8 +96,8 @@ public class ContentModerationService {
         } catch (BizException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("content moderation keyword check failed open: scope={}", scope, e);
-            return ModerationDecision.allow();
+            log.warn("content moderation keyword check failed closed: scope={}", scope, e);
+            throw moderationUnavailable();
         }
     }
 
@@ -164,5 +164,16 @@ public class ContentModerationService {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private void requireTableAvailable(String tableName, String scene) {
+        if (!tableExists(tableName)) {
+            log.warn("content moderation dependency unavailable: scene={} table={}", scene, tableName);
+            throw moderationUnavailable();
+        }
+    }
+
+    private BizException moderationUnavailable() {
+        return new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(), "内容安全服务暂时不可用，请稍后再试");
     }
 }

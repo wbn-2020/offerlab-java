@@ -3,6 +3,7 @@ package com.offerlab.community.api;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.application.ContactRequestSettingsService;
 import com.offerlab.community.user.application.UserApplicationService;
 import com.offerlab.community.user.controller.UserController;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,13 +28,15 @@ class UserControllerApiTest {
     @Mock
     private UserApplicationService userService;
     @Mock
+    private ContactRequestSettingsService contactRequestSettingsService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new UserController(userFacade, userService), jwtService);
+        mvc = ApiTestSupport.mvc(new UserController(userFacade, userService, contactRequestSettingsService), jwtService);
     }
 
     @Test

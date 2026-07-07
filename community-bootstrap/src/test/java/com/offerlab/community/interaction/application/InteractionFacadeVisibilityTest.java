@@ -6,9 +6,13 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
+import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentHelpfulMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
+import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentQualitySignalMapper;
+import com.offerlab.community.interaction.infrastructure.persistence.mapper.FavoriteFolderMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.FavoriteMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.LikeMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentPO;
@@ -45,7 +49,13 @@ class InteractionFacadeVisibilityTest {
     @Mock
     private FavoriteMapper favoriteMapper;
     @Mock
+    private FavoriteFolderMapper favoriteFolderMapper;
+    @Mock
     private CommentMapper commentMapper;
+    @Mock
+    private CommentHelpfulMapper commentHelpfulMapper;
+    @Mock
+    private CommentQualitySignalMapper commentQualitySignalMapper;
     @Mock
     private PostCounterMapper postCounterMapper;
     @Mock
@@ -54,6 +64,8 @@ class InteractionFacadeVisibilityTest {
     private PostFacade postFacade;
     @Mock
     private UserFacade userFacade;
+    @Mock
+    private AdminPermissionService adminPermissionService;
     @Mock
     private SnowflakeIdGenerator idGen;
     @Mock
@@ -68,11 +80,15 @@ class InteractionFacadeVisibilityTest {
         facade = new InteractionFacadeImpl(
                 likeMapper,
                 favoriteMapper,
+                favoriteFolderMapper,
                 commentMapper,
+                commentHelpfulMapper,
+                commentQualitySignalMapper,
                 postCounterMapper,
                 postCounterRedis,
                 postFacade,
                 userFacade,
+                adminPermissionService,
                 idGen,
                 events,
                 afterCommit);

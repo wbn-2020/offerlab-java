@@ -15,6 +15,8 @@ public class FavoritePO {
     private Long userId;
     private Long postId;
     private Long folderId;
+    private Integer sortOrder;
     private LocalDateTime createTime;
+    private LocalDateTime updateTime;
     private Integer isDeleted;
 }

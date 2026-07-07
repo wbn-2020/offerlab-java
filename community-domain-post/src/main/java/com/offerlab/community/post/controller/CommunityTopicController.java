@@ -59,15 +59,17 @@ public class CommunityTopicController {
     }
 
     @PostMapping("/{slug}/follow")
-    @RateLimit(key = "'topic:follow:' + #slug", rate = 60, per = 60)
+    @RateLimit(key = "'topic:follow:' + #uid + ':' + #slug", rate = 60, per = 60)
     public Result<CommunityTopicDTO> follow(@PathVariable String slug) {
-        return Result.ok(topicService.follow(slug, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(topicService.follow(slug, uid));
     }
 
     @DeleteMapping("/{slug}/follow")
-    @RateLimit(key = "'topic:unfollow:' + #slug", rate = 60, per = 60)
+    @RateLimit(key = "'topic:unfollow:' + #uid + ':' + #slug", rate = 60, per = 60)
     public Result<CommunityTopicDTO> unfollow(@PathVariable String slug) {
-        return Result.ok(topicService.unfollow(slug, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(topicService.unfollow(slug, uid));
     }
 
     @PublicApi

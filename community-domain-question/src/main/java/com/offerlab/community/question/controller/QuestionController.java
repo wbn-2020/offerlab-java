@@ -107,13 +107,17 @@ public class QuestionController {
     @PutMapping("/questions/{id}/progress")
     @RateLimit(key = "'question:progress:' + #uid", rate = 120, per = 60)
     public Result<Map<String, Object>> progress(@PathVariable Long id, @Valid @RequestBody ProgressReq req) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.updateProgress(id, UserContext.require(), req == null ? null : req.getStatus()));
     }
 
     @PutMapping("/questions/{id}/note")
     @RateLimit(key = "'question:note:' + #uid", rate = 60, per = 60)
     public Result<Map<String, Object>> note(@PathVariable Long id, @Valid @RequestBody NoteReq req) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.updateNote(id, UserContext.require(),
+                req == null ? null : req.getNote(),
+                req == null ? null : req.getMistakeReason(),
+                req == null ? null : req.getAnswerDraft(),
+                req == null ? null : req.getStarStory()));
     }
 
     @PublicApi
@@ -125,7 +129,7 @@ public class QuestionController {
     @PublicApi
     @GetMapping("/companies/{company}/prep-pack")
     public Result<CompanyPrepDTO> companyPrep(@PathVariable String company) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.getCompanyPrep(company, UserContext.get()));
     }
 
     @PublicApi
@@ -137,29 +141,29 @@ public class QuestionController {
 
     @GetMapping("/me/prep/overview")
     public Result<UserPrepOverviewDTO> myPrepOverview() {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.getMyPrepOverview(UserContext.require()));
     }
 
     @GetMapping("/me/prep/weekly-report")
     public Result<UserWeeklyPrepReportDTO> myWeeklyPrepReport() {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.getMyWeeklyPrepReport(UserContext.require()));
     }
 
     @GetMapping("/me/prep/targets")
     public Result<List<PrepTargetDTO>> myPrepTargets() {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.listPrepTargets(UserContext.require()));
     }
 
     @PostMapping("/me/prep/targets")
     @RateLimit(key = "'prep:target:add:' + #uid", rate = 30, per = 60)
     public Result<PrepTargetDTO> addPrepTarget(@Valid @RequestBody PrepTargetCmd cmd) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.addPrepTarget(UserContext.require(), cmd));
     }
 
     @DeleteMapping("/me/prep/targets/{id}")
     @RateLimit(key = "'prep:target:delete:' + #uid", rate = 30, per = 60)
     public Result<Map<String, Object>> deletePrepTarget(@PathVariable Long id) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(questionFacade.deletePrepTarget(UserContext.require(), id));
     }
 
     private PageResult<QuestionDTO> publicQuestionPage(PageResult<QuestionDTO> page) {

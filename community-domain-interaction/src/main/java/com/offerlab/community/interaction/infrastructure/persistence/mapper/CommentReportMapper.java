@@ -49,6 +49,58 @@ public interface CommentReportMapper extends BaseMapper<CommentReportPO> {
     }
 
     @Select("""
+            <script>
+            SELECT id,
+                   comment_id AS commentId,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   review_time AS reviewTime,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_comment_report
+            WHERE reporter_uid = #{reporterUid}
+            <if test="status != null">
+              AND report_status = #{status}
+            </if>
+            <if test="cursor != null and cursor > 0">
+              AND id &lt; #{cursor}
+            </if>
+            ORDER BY id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CommentReportPO> selectByReporter(@Param("reporterUid") Long reporterUid,
+                                           @Param("status") Integer status,
+                                           @Param("cursor") Long cursor,
+                                           @Param("limit") int limit);
+
+    default List<CommentReportPO> selectByReporter(Long reporterUid, Integer status, int limit) {
+        return selectByReporter(reporterUid, status, null, limit);
+    }
+
+    @Select("""
+            SELECT id,
+                   comment_id AS commentId,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   review_time AS reviewTime,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_comment_report
+            WHERE id = #{reportId}
+              AND reporter_uid = #{reporterUid}
+            LIMIT 1
+            """)
+    CommentReportPO selectByIdAndReporter(@Param("reportId") Long reportId,
+                                          @Param("reporterUid") Long reporterUid);
+
+    @Select("""
             SELECT id,
                    comment_id AS commentId,
                    post_id AS postId,

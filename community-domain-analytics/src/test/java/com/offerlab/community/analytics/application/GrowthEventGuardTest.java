@@ -62,6 +62,7 @@ class GrowthEventGuardTest {
         assertContains(controller, "@RequestMapping(\"/api/v1/growth\")");
         assertContains(controller, "@PublicApi");
         assertContains(controller, "@PostMapping(\"/track\")");
+        assertContains(controller, "@RateLimit(key = \"'growth:track:' + #http.remoteAddr\", rate = 120, per = 60)");
 
         assertContains(analyticsController, "@GetMapping(\"/growth\")");
         assertContains(analyticsController, "adminPermissionService");

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
+import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
@@ -44,6 +46,7 @@ public class UserFacadeImpl implements UserFacade {
     private final UserPrivacySettingMapper privacySettingMapper;
     private final ObjectMapper objectMapper;
     private final MultiLevelCache<UserBriefDTO> multiLevelCache;
+    private final ContactRequestSettingsService contactRequestSettingsService;
 
     @Value("${offerlab.feed.bigv-threshold:1000}")
     private long bigvThreshold;
@@ -202,6 +205,16 @@ public class UserFacadeImpl implements UserFacade {
     }
 
     @Override
+    public ContactRequestSettingsDTO getContactRequestSettings(Long uid) {
+        return contactRequestSettingsService.getSettings(uid);
+    }
+
+    @Override
+    public ContactRequestPolicyCheckDTO checkContactRequestPolicy(Long requesterUid, Long receiverUid) {
+        return contactRequestSettingsService.checkPolicy(requesterUid, receiverUid);
+    }
+
+    @Override
     public boolean allowsSystemNotification(Long uid) {
         return enabled(setting(uid).getSystemNotification());
     }
@@ -248,6 +261,8 @@ public class UserFacadeImpl implements UserFacade {
         defaults.setFollowNotification(1);
         defaults.setFavoriteNotification(1);
         defaults.setMentionNotification(1);
+        defaults.setAcceptContactRequest(1);
+        defaults.setContactRequestPolicy(ContactRequestSettingsService.DEFAULT_POLICY);
         return defaults;
     }
 

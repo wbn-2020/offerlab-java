@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/notifications")
@@ -92,7 +93,7 @@ public class NotificationController {
             return NotificationListItemResponse.builder().build();
         }
         Map<String, Object> content = item.get("content") instanceof Map<?, ?> raw
-                ? new LinkedHashMap<>((Map<String, Object>) raw)
+                ? sanitizeContent(raw)
                 : Map.of();
         return NotificationListItemResponse.builder()
                 .id(toLong(item.get("id")))
@@ -113,5 +114,103 @@ public class NotificationController {
 
     private Integer toInteger(Object value) {
         return value instanceof Number number ? number.intValue() : null;
+    }
+
+    private static final Set<String> SAFE_CONTENT_FIELDS = Set.of(
+            "action", "targetType", "targetId", "postId", "postTitle", "commentId", "userId",
+            "requestId", "sourceType", "reportId", "userStatus", "reportStatus", "status",
+            "resultText", "userResultText", "targetPath", "jumpPath", "href", "topicId",
+            "topicSlug", "topicName", "topics", "placementType", "placementKey", "source",
+            "dedupKey", "message", "title", "eventId", "eventType", "contentId", "contentTitle",
+            "placementId", "placementLabel", "sectionKey", "reason", "reasonText", "entrance"
+    );
+
+    private Map<String, Object> sanitizeContent(Map<?, ?> raw) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        raw.forEach((key, value) -> {
+            if (!(key instanceof String field) || !SAFE_CONTENT_FIELDS.contains(field)) {
+                return;
+            }
+            if ("targetPath".equals(field) || "jumpPath".equals(field) || "href".equals(field)) {
+                String path = safePath(value);
+                if (path != null) {
+                    content.put(field, path);
+                }
+                return;
+            }
+            if ("topics".equals(field)) {
+                List<Map<String, Object>> topics = sanitizeTopics(value);
+                if (!topics.isEmpty()) {
+                    content.put(field, topics);
+                }
+                return;
+            }
+            Object safeValue = safeScalar(value);
+            if (safeValue != null) {
+                content.put(field, safeValue);
+            }
+        });
+        return content;
+    }
+
+    private List<Map<String, Object>> sanitizeTopics(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .map(this::sanitizeTopic)
+                .filter(topic -> !topic.isEmpty())
+                .toList();
+    }
+
+    private Map<String, Object> sanitizeTopic(Map<?, ?> raw) {
+        Map<String, Object> topic = new LinkedHashMap<>();
+        putSafeScalar(topic, "topicId", raw.get("topicId"));
+        putSafeScalar(topic, "topicSlug", raw.get("topicSlug"));
+        putSafeScalar(topic, "topicName", raw.get("topicName"));
+        return topic;
+    }
+
+    private void putSafeScalar(Map<String, Object> target, String field, Object value) {
+        Object safeValue = safeScalar(value);
+        if (safeValue != null) {
+            target.put(field, safeValue);
+        }
+    }
+
+    private Object safeScalar(Object value) {
+        if (value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.isEmpty()) {
+                return null;
+            }
+            return trimmed.length() > 500 ? trimmed.substring(0, 500) : trimmed;
+        }
+        return null;
+    }
+
+    private String safePath(Object value) {
+        if (!(value instanceof String text)) {
+            return null;
+        }
+        String path = text.trim();
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        if (path.isEmpty()
+                || !path.startsWith("/")
+                || path.startsWith("//")
+                || path.startsWith("/api/")
+                || path.contains("\\")
+                || path.matches(".*\\s+.*")
+                || lower.startsWith("/javascript:")
+                || lower.startsWith("/data:")
+                || lower.contains("://")) {
+            return null;
+        }
+        return path.length() > 300 ? null : path;
     }
 }

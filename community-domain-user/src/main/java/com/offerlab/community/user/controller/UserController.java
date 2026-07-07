@@ -10,7 +10,9 @@ import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.application.UserApplicationService;
+import com.offerlab.community.user.application.ContactRequestSettingsService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -36,6 +38,7 @@ public class UserController {
 
     private final UserFacade userFacade;
     private final UserApplicationService userService;
+    private final ContactRequestSettingsService contactRequestSettingsService;
 
     @GetMapping("/{uid}")
     @PublicApi
@@ -124,6 +127,19 @@ public class UserController {
     public Result<UserPrivacySettingDTO> updatePrivacySettings(@RequestBody UserPrivacySettingDTO setting) {
         Long uid = UserContext.require();
         return Result.ok(userService.updatePrivacySetting(uid, setting));
+    }
+
+    @GetMapping("/me/contact-request-settings")
+    public Result<ContactRequestSettingsDTO> getContactRequestSettings() {
+        Long uid = UserContext.require();
+        return Result.ok(contactRequestSettingsService.getSettings(uid));
+    }
+
+    @PutMapping("/me/contact-request-settings")
+    @RateLimit(key = "'user:contact-request-settings:update:' + #uid", rate = 30, per = 60)
+    public Result<ContactRequestSettingsDTO> updateContactRequestSettings(@RequestBody ContactRequestSettingsDTO setting) {
+        Long uid = UserContext.require();
+        return Result.ok(contactRequestSettingsService.updateSettings(uid, setting));
     }
 
     @PostMapping("/{uid}/follow")

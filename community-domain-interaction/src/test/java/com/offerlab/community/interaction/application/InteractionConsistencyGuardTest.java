@@ -25,9 +25,10 @@ class InteractionConsistencyGuardTest {
         assertTrue(service.contains("postFacade.getPost(cmd.getPostId(), cmd.getAuthorUid())"), "comments must validate visibility for the author");
         assertTrue(service.contains("catch (DuplicateKeyException e)"), "unique-key races must map to business errors");
         assertTrue(service.contains("likeMapper.restoreById(existing.getId()) <= 0"), "like restore must check affected rows");
-        assertTrue(service.contains("favoriteMapper.restoreById(existing.getId()) <= 0"), "favorite restore must check affected rows");
+        assertTrue(service.contains("favoriteMapper.restoreToFolder(existing.getId(), folder.getId(), DEFAULT_SORT_ORDER) <= 0"), "favorite restore must check affected rows");
         assertTrue(service.contains("likeMapper.softDeleteById(po.getId()) <= 0"), "unlike must check affected rows");
         assertTrue(service.contains("favoriteMapper.softDeleteById(po.getId()) <= 0"), "unfavorite must check affected rows");
+        assertTrue(service.contains("favoriteMapper.moveToFolder(favorite.getId(), uid, target.getId(), DEFAULT_SORT_ORDER) <= 0"), "favorite move must check affected rows");
         assertTrue(service.contains("int deletedCount = commentMapper.delete(deleteQuery)"), "comment deletion must use real affected rows");
         assertFalse(service.contains("Long deletedCount = commentMapper.selectCount(deleteQuery)"), "comment deletion must not count then delete");
 

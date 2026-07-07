@@ -17,6 +17,7 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
+import com.offerlab.community.post.api.dto.PostReportReceiptDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
@@ -210,6 +211,16 @@ public class PostController {
         // 举报写入后进入管理员审核流；这里仅返回 reportId，审核动作由 admin 接口处理。
         Long reportId = reportService.reportPost(postId, UserContext.require(), req.getReason(), req.getDetail());
         return Result.ok(Map.of("reportId", reportId));
+    }
+
+    @GetMapping("/reports")
+    public Result<List<PostReportReceiptDTO>> listMyReports(@RequestParam(defaultValue = "20") int limit) {
+        return Result.ok(reportService.listMyReceipts(UserContext.require(), limit));
+    }
+
+    @GetMapping("/reports/{reportId}")
+    public Result<PostReportReceiptDTO> getMyReport(@PathVariable Long reportId) {
+        return Result.ok(reportService.getMyReceipt(reportId, UserContext.require()));
     }
 
     @GetMapping("/admin/reports")

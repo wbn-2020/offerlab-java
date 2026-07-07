@@ -2,7 +2,6 @@ package com.offerlab.community.search.controller;
 
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
-import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
@@ -25,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -81,22 +81,26 @@ public class SearchController {
 
     @GetMapping("/posts/{postId}/publish-status")
     public Result<Map<String, Object>> publishStatus(@PathVariable @Positive Long postId) {
-        UserContext.require();
         PostBriefDTO publicBrief = postFacade.batchGetPosts(List.of(postId)).get(postId);
+        boolean dbVisible = publicBrief != null;
 
-        Map<String, Object> database = new java.util.LinkedHashMap<>();
-        database.put("publiclyVisible", publicBrief != null);
-
-        Map<String, Object> search = new java.util.LinkedHashMap<>();
         PageResult<PostBriefDTO> recall = facade.searchPosts(String.valueOf(postId), null, null, null,
                 "relevance", null, 5, false);
-        search.put("visible", containsPost(recall, postId));
+        Map<String, Object> database = new LinkedHashMap<>();
+        database.put("publiclyVisible", dbVisible);
 
-        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        Map<String, Object> search = new LinkedHashMap<>();
+        search.put("visible", containsPost(recall, postId));
+        search.put("source", recall.getSource());
+        search.put("degraded", recall.getDegraded());
+        search.put("fallbackReason", recall.getFallbackReason());
+        search.put("diagnostics", recall.getDiagnostics());
+
+        Map<String, Object> data = new LinkedHashMap<>();
         data.put("postId", postId);
         data.put("database", database);
         data.put("search", search);
-        data.put("ready", publicBrief != null && Boolean.TRUE.equals(search.get("visible")));
+        data.put("ready", dbVisible && Boolean.TRUE.equals(search.get("visible")));
         return Result.ok(data);
     }
 

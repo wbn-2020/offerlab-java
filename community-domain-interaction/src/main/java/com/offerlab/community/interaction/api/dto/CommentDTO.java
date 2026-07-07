@@ -25,7 +25,18 @@ public class CommentDTO {
     private String content;
     private Integer likeCount;
     private Boolean myLiked;
+    private Boolean authorReply;
+    private Boolean authorPinned;
+    private Boolean featured;
+    private Integer helpfulCount;
+    private Boolean myHelpful;
+    private Double hotScore;
+    private Boolean folded;
+    private String foldReason;
+    private List<String> qualityBadges;
     private Boolean canDelete;
+    private Integer replyCount;
+    private Boolean hasMoreReplies;
     private List<CommentDTO> replies;
     private LocalDateTime createTime;
 }

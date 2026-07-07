@@ -10,6 +10,7 @@ import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
+import com.offerlab.community.interaction.api.event.CommentReportReviewedEvent;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentReportMapper;
@@ -17,11 +18,14 @@ import com.offerlab.community.interaction.infrastructure.persistence.po.CommentP
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentReportPO;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -37,9 +41,17 @@ public class CommentReportService {
     public static final int STATUS_PENDING = 0;
     public static final int STATUS_APPROVED = 1;
     public static final int STATUS_REJECTED = 2;
+    public static final int STATUS_CLOSED = 3;
+    public static final String USER_STATUS_PROCESSING = "PROCESSING";
+    public static final String USER_STATUS_ACTION_TAKEN = "ACTION_TAKEN";
+    public static final String USER_STATUS_NOT_ACCEPTED = "NOT_ACCEPTED";
+    public static final String USER_STATUS_CLOSED = "CLOSED";
 
     private static final int COMMENT_STATUS_NORMAL = 1;
     private static final int COMMENT_STATUS_HIDDEN = 3;
+    private static final String CONTENT_STATUS_AVAILABLE = "AVAILABLE";
+    private static final String CONTENT_STATUS_POST_UNAVAILABLE = "POST_UNAVAILABLE";
+    private static final String CONTENT_STATUS_COMMENT_UNAVAILABLE = "COMMENT_UNAVAILABLE";
     private static final int MAX_REASON_LEN = 64;
     private static final int MAX_DETAIL_LEN = 1000;
     private static final int MAX_LIMIT = 100;
@@ -57,6 +69,9 @@ public class CommentReportService {
     private final AfterCommitExecutor afterCommit;
     private final ReviewQueuePublisher reviewQueuePublisher;
     private final DomainModeratorService domainModeratorService;
+
+    @Autowired(required = false)
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional
     public Long reportComment(Long commentId, Long reporterUid, String reason, String detail) {
@@ -109,6 +124,27 @@ public class CommentReportService {
                 .toList();
     }
 
+    public List<CommentReportDTO> listUserReports(Long reporterUid, Integer status, int limit) {
+        return listUserReports(reporterUid, status, null, limit);
+    }
+
+    public List<CommentReportDTO> listUserReports(Long reporterUid, Integer status, Long cursor, int limit) {
+        requireReporter(reporterUid);
+        Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
+        return reportMapper.selectByReporter(reporterUid, effectiveStatus, safeCursor(cursor), clampLimit(limit)).stream()
+                .map(po -> toUserDto(po, reporterUid))
+                .toList();
+    }
+
+    public CommentReportDTO getUserReport(Long reportId, Long reporterUid) {
+        requireReporter(reporterUid);
+        CommentReportPO report = reportMapper.selectByIdAndReporter(reportId, reporterUid);
+        if (report == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return toUserDto(report, reporterUid);
+    }
+
     @Transactional
     public CommentReportDTO reviewReport(Long reportId, Long reviewerUid, Boolean approved, String note) {
         if (reviewerUid == null) {
@@ -140,6 +176,7 @@ public class CommentReportService {
         if (approved) {
             hideCommentBranch(report.getCommentId(), report.getPostId());
         }
+        publishReportReviewedEvent(report, approved ? USER_STATUS_ACTION_TAKEN : USER_STATUS_NOT_ACCEPTED);
         CommentReportDTO dto = toDto(reportMapper.selectById(reportId));
         adminAuditService.recordRequired(reviewerUid, approved ? "COMMENT_REPORT_APPROVE" : "COMMENT_REPORT_REJECT",
                 "COMMENT_REPORT", reportId, report,
@@ -150,6 +187,33 @@ public class CommentReportService {
                 reviewNote,
                 reviewerUid);
         return dto;
+    }
+
+    @Transactional
+    public CommentReportDTO closeReportFromQueue(Long reportId, Long reviewerUid, String note) {
+        if (reviewerUid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        String reviewNote = clean(note, MAX_DETAIL_LEN, "Review queue closed");
+        CommentReportPO report = reportMapper.selectById(reportId);
+        if (report == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        Post post = postRepo.findById(report.getPostId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        int updated = reportMapper.reviewPending(reportId, STATUS_CLOSED, reviewerUid, reviewNote);
+        if (updated <= 0) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        publishReportReviewedEvent(report, USER_STATUS_CLOSED);
+        adminAuditService.recordRequired(reviewerUid, "COMMENT_REPORT_CLOSE",
+                "COMMENT_REPORT", reportId, report,
+                Map.of("closed", true, "commentId", report.getCommentId(), "postId", report.getPostId()), reviewNote);
+        return toDto(reportMapper.selectById(reportId));
     }
 
     private void publishReportQueueItem(Long reportId, CommentPO comment, CommentReportPO report) {
@@ -171,6 +235,20 @@ public class CommentReportService {
                 "{\"commentId\":" + report.getCommentId() + ",\"postId\":" + report.getPostId() + "}",
                 "comment report created"
         ));
+    }
+
+    private void publishReportReviewedEvent(CommentReportPO report, String userStatus) {
+        if (applicationEventPublisher == null || report == null || report.getReporterUid() == null || report.getId() == null) {
+            return;
+        }
+        applicationEventPublisher.publishEvent(CommentReportReviewedEvent.builder()
+                .reporterUid(report.getReporterUid())
+                .reportId(report.getId())
+                .postId(report.getPostId())
+                .commentId(report.getCommentId())
+                .userStatus(userStatus)
+                .targetPath(report.getPostId() == null ? null : "/post/" + report.getPostId() + "#comments")
+                .build());
     }
 
     private CommentPO requireVisibleComment(Long commentId) {
@@ -211,11 +289,21 @@ public class CommentReportService {
         return Math.max(1, Math.min(limit, MAX_LIMIT));
     }
 
+    private Long safeCursor(Long cursor) {
+        return cursor == null || cursor <= 0 ? null : cursor;
+    }
+
     private int requireKnownStatus(int status) {
-        if (status == STATUS_PENDING || status == STATUS_APPROVED || status == STATUS_REJECTED) {
+        if (status == STATUS_PENDING || status == STATUS_APPROVED || status == STATUS_REJECTED || status == STATUS_CLOSED) {
             return status;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private void requireReporter(Long reporterUid) {
+        if (reporterUid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
     }
 
     private String clean(String value, int maxLen, String fallback) {
@@ -242,12 +330,74 @@ public class CommentReportService {
                 .reason(po.getReason())
                 .detail(po.getDetail())
                 .reportStatus(po.getReportStatus())
+                .userStatus(toUserStatus(po.getReportStatus()))
+                .postAvailable(post != null && post.isVisibleTo(po.getReporterUid(), false))
+                .commentAvailable(isVisibleComment(comment))
+                .contentStatus(toContentStatus(post != null && post.isVisibleTo(po.getReporterUid(), false), isVisibleComment(comment)))
                 .reviewerUid(po.getReviewerUid())
                 .reviewNote(po.getReviewNote())
                 .reviewTime(po.getReviewTime())
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private CommentReportDTO toUserDto(CommentReportPO po, Long reporterUid) {
+        if (po == null) {
+            return null;
+        }
+        CommentPO comment = commentMapper.selectById(po.getCommentId());
+        PostDTO post = postFacade.getPost(po.getPostId(), reporterUid);
+        boolean postAvailable = post != null;
+        boolean commentAvailable = postAvailable && isVisibleComment(comment);
+        return CommentReportDTO.builder()
+                .id(po.getId())
+                .commentId(po.getCommentId())
+                .postId(po.getPostId())
+                .postTitle(postAvailable ? post.getTitle() : null)
+                .commentSummary(commentAvailable ? summary(comment.getContent()) : null)
+                .reporterUid(po.getReporterUid())
+                .reason(po.getReason())
+                .detail(po.getDetail())
+                .reportStatus(po.getReportStatus())
+                .userStatus(toUserStatus(po.getReportStatus()))
+                .postAvailable(postAvailable)
+                .commentAvailable(commentAvailable)
+                .contentStatus(toContentStatus(postAvailable, commentAvailable))
+                .reviewTime(po.getReviewTime())
+                .createTime(po.getCreateTime())
+                .updateTime(po.getUpdateTime())
+                .build();
+    }
+
+    private boolean isVisibleComment(CommentPO comment) {
+        return comment != null
+                && comment.getCommentStatus() != null
+                && comment.getCommentStatus() == COMMENT_STATUS_NORMAL
+                && (comment.getIsDeleted() == null || comment.getIsDeleted() == 0);
+    }
+
+    private String toUserStatus(Integer status) {
+        if (status != null && status == STATUS_APPROVED) {
+            return USER_STATUS_ACTION_TAKEN;
+        }
+        if (status != null && status == STATUS_REJECTED) {
+            return USER_STATUS_NOT_ACCEPTED;
+        }
+        if (status != null && status == STATUS_CLOSED) {
+            return USER_STATUS_CLOSED;
+        }
+        return USER_STATUS_PROCESSING;
+    }
+
+    private String toContentStatus(boolean postAvailable, boolean commentAvailable) {
+        if (!postAvailable) {
+            return CONTENT_STATUS_POST_UNAVAILABLE;
+        }
+        if (!commentAvailable) {
+            return CONTENT_STATUS_COMMENT_UNAVAILABLE;
+        }
+        return CONTENT_STATUS_AVAILABLE;
     }
 
     private boolean isSyntheticReport(CommentReportDTO dto) {

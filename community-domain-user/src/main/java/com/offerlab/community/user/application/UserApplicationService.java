@@ -298,6 +298,8 @@ public class UserApplicationService {
         po.setFollowNotification(1);
         po.setFavoriteNotification(1);
         po.setMentionNotification(1);
+        po.setAcceptContactRequest(1);
+        po.setContactRequestPolicy(ContactRequestSettingsService.DEFAULT_POLICY);
         return po;
     }
 

@@ -6,10 +6,16 @@ import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.interaction.api.DiscussionFollowFacade;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
+import com.offerlab.community.interaction.api.dto.DiscussionFollowStatusDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
+import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.interaction.application.CommentReportService;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.application.DomainModeratorService;
@@ -22,6 +28,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -36,6 +43,7 @@ import java.util.Map;
 public class InteractionController {
 
     private final InteractionFacade facade;
+    private final DiscussionFollowFacade discussionFollowFacade;
     private final CommentReportService reportService;
     private final DomainModeratorService domainModeratorService;
     private final ContentModerationService contentModerationService;
@@ -75,9 +83,10 @@ public class InteractionController {
 
     @PostMapping("/posts/{postId}/favorite")
     @RateLimit(key = "'favorite:' + #uid", rate = 60, per = 60)
-    public Result<Map<String, Object>> favorite(@PathVariable Long postId) {
+    public Result<Map<String, Object>> favorite(@PathVariable Long postId,
+                                                @RequestBody(required = false) FavoriteMoveCmd req) {
         // 返回 favorited 与点赞接口保持一致，便于前端乐观更新后校正状态。
-        facade.favorite(UserContext.require(), postId);
+        facade.favorite(UserContext.require(), postId, req == null ? null : req.getFolderId());
         return Result.ok(Map.of("favorited", true));
     }
 
@@ -93,6 +102,83 @@ public class InteractionController {
     public Result<PageResult<PostBriefDTO>> favoritePosts(@RequestParam(defaultValue = "0") long cursor,
                                                          @RequestParam(defaultValue = "20") int size) {
         return Result.ok(facade.listFavoritePosts(UserContext.require(), cursor, size));
+    }
+
+    @GetMapping("/users/me/favorite-folders")
+    public Result<List<FavoriteFolderDTO>> favoriteFolders() {
+        return Result.ok(facade.listFavoriteFolders(UserContext.require()));
+    }
+
+    @PostMapping("/users/me/favorite-folders")
+    @RateLimit(key = "'favorite-folder:create:' + #uid", rate = 30, per = 60)
+    public Result<FavoriteFolderDTO> createFavoriteFolder(@Valid @RequestBody FavoriteFolderCreateCmd cmd) {
+        return Result.ok(facade.createFavoriteFolder(UserContext.require(), cmd));
+    }
+
+    @PutMapping("/users/me/favorite-folders/{folderId}")
+    @RateLimit(key = "'favorite-folder:update:' + #uid", rate = 60, per = 60)
+    public Result<FavoriteFolderDTO> updateFavoriteFolder(@PathVariable Long folderId,
+                                                          @Valid @RequestBody FavoriteFolderUpdateCmd cmd) {
+        return Result.ok(facade.updateFavoriteFolder(UserContext.require(), folderId, cmd));
+    }
+
+    @DeleteMapping("/users/me/favorite-folders/{folderId}")
+    @RateLimit(key = "'favorite-folder:delete:' + #uid", rate = 30, per = 60)
+    public Result<Void> deleteFavoriteFolder(@PathVariable Long folderId) {
+        facade.deleteFavoriteFolder(UserContext.require(), folderId);
+        return Result.ok();
+    }
+
+    @GetMapping("/users/me/favorite-folders/{folderId}/posts")
+    public Result<PageResult<PostBriefDTO>> favoriteFolderPosts(@PathVariable Long folderId,
+                                                               @RequestParam(defaultValue = "0") long cursor,
+                                                               @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(facade.listFavoritePostsInFolder(UserContext.require(), folderId, cursor, size));
+    }
+
+    @PutMapping("/users/me/favorites/{postId}/folder")
+    @RateLimit(key = "'favorite:move:' + #uid", rate = 60, per = 60)
+    public Result<FavoriteFolderDTO> moveFavorite(@PathVariable Long postId,
+                                                  @RequestBody(required = false) FavoriteMoveCmd cmd) {
+        return Result.ok(facade.moveFavorite(UserContext.require(), postId, cmd));
+    }
+
+    @PublicApi
+    @GetMapping("/favorite-folders/{folderId}")
+    public Result<FavoriteFolderDTO> publicFavoriteFolder(@PathVariable Long folderId) {
+        return Result.ok(facade.getPublicFavoriteFolder(folderId));
+    }
+
+    @PublicApi
+    @GetMapping("/favorite-folders/{folderId}/posts")
+    public Result<PageResult<PostBriefDTO>> publicFavoriteFolderPosts(@PathVariable Long folderId,
+                                                                      @RequestParam(defaultValue = "0") long cursor,
+                                                                      @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(facade.listPublicFavoritePostsInFolder(folderId, cursor, size));
+    }
+
+    @PublicApi
+    @GetMapping("/posts/{postId}/discussion-follow")
+    public Result<DiscussionFollowStatusDTO> discussionFollowStatus(@PathVariable Long postId) {
+        return Result.ok(discussionFollowFacade.status(UserContext.get(), postId));
+    }
+
+    @PostMapping("/posts/{postId}/discussion-follow")
+    @RateLimit(key = "'discussion-follow:' + #uid", rate = 60, per = 60)
+    public Result<DiscussionFollowStatusDTO> followDiscussion(@PathVariable Long postId) {
+        return Result.ok(discussionFollowFacade.follow(UserContext.require(), postId));
+    }
+
+    @DeleteMapping("/posts/{postId}/discussion-follow")
+    @RateLimit(key = "'discussion-unfollow:' + #uid", rate = 60, per = 60)
+    public Result<DiscussionFollowStatusDTO> unfollowDiscussion(@PathVariable Long postId) {
+        return Result.ok(discussionFollowFacade.unfollow(UserContext.require(), postId));
+    }
+
+    @GetMapping("/users/me/discussion-follows")
+    public Result<PageResult<PostBriefDTO>> discussionFollows(@RequestParam(defaultValue = "0") long cursor,
+                                                              @RequestParam(defaultValue = "20") int size) {
+        return Result.ok(discussionFollowFacade.listFollowedPosts(UserContext.require(), cursor, size));
     }
 
     @PostMapping("/posts/{postId}/comments")
@@ -118,8 +204,9 @@ public class InteractionController {
     @GetMapping("/posts/{postId}/comments")
     public Result<PageResult<CommentDTO>> comments(@PathVariable Long postId,
                                                    @RequestParam(defaultValue = "0") long cursor,
-                                                   @RequestParam(defaultValue = "20") int size) {
-        return Result.ok(facade.listComments(postId, UserContext.get(), cursor, size));
+                                                   @RequestParam(defaultValue = "20") int size,
+                                                   @RequestParam(defaultValue = "latest") String sort) {
+        return Result.ok(facade.listComments(postId, UserContext.get(), cursor, size, sort));
     }
 
     @DeleteMapping("/comments/{commentId}")
@@ -136,6 +223,17 @@ public class InteractionController {
         return Result.ok(Map.of("reportId", reportId));
     }
 
+    @GetMapping("/comments/reports/me")
+    public Result<List<CommentReportDTO>> listMyCommentReports(@RequestParam(required = false) Integer status,
+                                                               @RequestParam(defaultValue = "20") int limit) {
+        return Result.ok(reportService.listUserReports(UserContext.require(), status, limit));
+    }
+
+    @GetMapping("/comments/reports/{reportId}")
+    public Result<CommentReportDTO> getMyCommentReport(@PathVariable Long reportId) {
+        return Result.ok(reportService.getUserReport(reportId, UserContext.require()));
+    }
+
     @GetMapping("/comments/admin/reports")
     public Result<List<CommentReportDTO>> listCommentReports(@RequestParam(required = false) Integer status,
                                                              @RequestParam(required = false) Integer domain,
@@ -146,6 +244,7 @@ public class InteractionController {
     }
 
     @PostMapping("/comments/admin/reports/{reportId}/review")
+    @RateLimit(key = "'comment-report:review:' + #uid", rate = 60, per = 60)
     public Result<CommentReportDTO> reviewCommentReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
@@ -166,6 +265,63 @@ public class InteractionController {
         return Result.ok(Map.of("liked", false));
     }
 
+    @PostMapping("/comments/{commentId}/helpful")
+    @RateLimit(key = "'comment:helpful:' + #commentId + ':' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> markCommentHelpful(@PathVariable Long commentId) {
+        facade.markCommentHelpful(UserContext.require(), commentId);
+        return Result.ok(Map.of("helpful", true));
+    }
+
+    @DeleteMapping("/comments/{commentId}/helpful")
+    @RateLimit(key = "'comment:unhelpful:' + #commentId + ':' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> unmarkCommentHelpful(@PathVariable Long commentId) {
+        facade.unmarkCommentHelpful(UserContext.require(), commentId);
+        return Result.ok(Map.of("helpful", false));
+    }
+
+    @PostMapping("/posts/{postId}/comments/{commentId}/pin")
+    @RateLimit(key = "'comment:pin:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> pinComment(@PathVariable Long postId, @PathVariable Long commentId) {
+        facade.pinComment(UserContext.require(), postId, commentId);
+        return Result.ok(Map.of("pinned", true));
+    }
+
+    @DeleteMapping("/posts/{postId}/comments/{commentId}/pin")
+    @RateLimit(key = "'comment:unpin:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> unpinComment(@PathVariable Long postId, @PathVariable Long commentId) {
+        facade.unpinComment(UserContext.require(), postId, commentId);
+        return Result.ok(Map.of("pinned", false));
+    }
+
+    @PostMapping("/comments/{commentId}/featured")
+    @RateLimit(key = "'comment:feature:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> featureComment(@PathVariable Long commentId) {
+        facade.featureComment(UserContext.require(), commentId);
+        return Result.ok(Map.of("featured", true));
+    }
+
+    @DeleteMapping("/comments/{commentId}/featured")
+    @RateLimit(key = "'comment:unfeature:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> unfeatureComment(@PathVariable Long commentId) {
+        facade.unfeatureComment(UserContext.require(), commentId);
+        return Result.ok(Map.of("featured", false));
+    }
+
+    @PostMapping("/comments/{commentId}/fold")
+    @RateLimit(key = "'comment:fold:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> foldComment(@PathVariable Long commentId,
+                                                   @RequestBody(required = false) FoldReq req) {
+        facade.foldComment(UserContext.require(), commentId, req == null ? null : req.getReason());
+        return Result.ok(Map.of("folded", true));
+    }
+
+    @DeleteMapping("/comments/{commentId}/fold")
+    @RateLimit(key = "'comment:unfold:' + #uid", rate = 60, per = 60)
+    public Result<Map<String, Object>> unfoldComment(@PathVariable Long commentId) {
+        facade.unfoldComment(UserContext.require(), commentId);
+        return Result.ok(Map.of("folded", false));
+    }
+
     @Data
     public static class CommentReq {
         private Long parentId;
@@ -182,6 +338,12 @@ public class InteractionController {
         private String reason;
         @Size(max = 1000)
         private String detail;
+    }
+
+    @Data
+    public static class FoldReq {
+        @Size(max = 255)
+        private String reason;
     }
 
     @Data

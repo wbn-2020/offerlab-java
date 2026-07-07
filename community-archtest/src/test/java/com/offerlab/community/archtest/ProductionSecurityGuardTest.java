@@ -9,6 +9,7 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.infra.web.config.WebMvcConfig;
 import com.offerlab.community.feed.controller.FeedController;
 import com.offerlab.community.interaction.controller.InteractionController;
+import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.notification.controller.NotificationController;
 import com.offerlab.community.post.controller.PostController;
 import com.offerlab.community.question.controller.QuestionAdminController;
@@ -53,7 +54,7 @@ class ProductionSecurityGuardTest {
     void highFrequencyUserMutationEndpointsAreRateLimited() throws Exception {
         assertRateLimited(InteractionController.class, "like", Long.class);
         assertRateLimited(InteractionController.class, "unlike", Long.class);
-        assertRateLimited(InteractionController.class, "favorite", Long.class);
+        assertRateLimited(InteractionController.class, "favorite", Long.class, FavoriteMoveCmd.class);
         assertRateLimited(InteractionController.class, "unfavorite", Long.class);
         assertRateLimited(InteractionController.class, "comment", Long.class, InteractionController.CommentReq.class);
         assertRateLimited(InteractionController.class, "deleteComment", Long.class);

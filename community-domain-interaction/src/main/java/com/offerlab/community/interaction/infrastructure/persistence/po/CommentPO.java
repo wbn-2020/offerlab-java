@@ -21,6 +21,7 @@ public class CommentPO {
     private Long replyToUid;
     private String content;
     private Integer likeCount;
+    private Integer helpfulCount;
     private Integer commentStatus;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

@@ -12,11 +12,15 @@ import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
+import com.offerlab.community.post.api.dto.PostReportReceiptDTO;
+import com.offerlab.community.post.api.event.PostReportReviewedEvent;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostReportMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostReportPO;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -32,6 +36,11 @@ public class PostReportService {
     public static final int STATUS_PENDING = 0;
     public static final int STATUS_APPROVED = 1;
     public static final int STATUS_REJECTED = 2;
+    public static final int STATUS_CLOSED = 3;
+    public static final String USER_STATUS_PROCESSING = "PROCESSING";
+    public static final String USER_STATUS_ACTION_TAKEN = "ACTION_TAKEN";
+    public static final String USER_STATUS_NOT_ACCEPTED = "NOT_ACCEPTED";
+    public static final String USER_STATUS_CLOSED = "CLOSED";
 
     private static final int MAX_REASON_LEN = 64;
     private static final int MAX_DETAIL_LEN = 1000;
@@ -46,6 +55,9 @@ public class PostReportService {
     private final AdminAuditService adminAuditService;
     private final ReviewQueuePublisher reviewQueuePublisher;
     private final DomainModeratorService domainModeratorService;
+
+    @Autowired(required = false)
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
@@ -100,6 +112,30 @@ public class PostReportService {
                 .toList();
     }
 
+    public List<PostReportReceiptDTO> listMyReceipts(Long reporterUid, int limit) {
+        return listMyReceipts(reporterUid, null, null, limit);
+    }
+
+    public List<PostReportReceiptDTO> listMyReceipts(Long reporterUid, Integer status, Long cursor, int limit) {
+        requireReporter(reporterUid);
+        Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
+        List<PostReportPO> reports = reportMapper.selectByReporter(reporterUid, effectiveStatus, safeCursor(cursor), clampLimit(limit));
+        Map<Long, Post> postsById = batchLoadReportPosts(reports);
+        return reports.stream()
+                .map(po -> toReceiptDto(po, postsById.get(po.getPostId()), reporterUid))
+                .toList();
+    }
+
+    public PostReportReceiptDTO getMyReceipt(Long reportId, Long reporterUid) {
+        requireReporter(reporterUid);
+        PostReportPO report = reportMapper.selectByIdAndReporter(reportId, reporterUid);
+        if (report == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        Post post = postRepo.findById(report.getPostId()).orElse(null);
+        return toReceiptDto(report, post, reporterUid);
+    }
+
     @Transactional
     public PostReportDTO reviewReport(Long reportId, Long reviewerUid, Boolean approved, String note) {
         if (reviewerUid == null) {
@@ -133,6 +169,7 @@ public class PostReportService {
             takeDownPost(report.getPostId());
         }
 
+        publishReportReviewedEvent(report, approved ? USER_STATUS_ACTION_TAKEN : USER_STATUS_NOT_ACCEPTED);
         PostReportDTO dto = toDto(reportMapper.selectById(reportId));
         adminAuditService.recordRequired(reviewerUid, approved ? "POST_REPORT_APPROVE" : "POST_REPORT_REJECT",
                 "POST_REPORT", reportId, report, Map.of("approved", approved, "postId", report.getPostId()), reviewNote);
@@ -142,6 +179,32 @@ public class PostReportService {
                 reviewNote,
                 reviewerUid);
         return dto;
+    }
+
+    @Transactional
+    public PostReportDTO closeReportFromQueue(Long reportId, Long reviewerUid, String note) {
+        if (reviewerUid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        String reviewNote = clean(note, MAX_DETAIL_LEN, "Review queue closed");
+        PostReportPO report = reportMapper.selectById(reportId);
+        if (report == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        Post post = postRepo.findById(report.getPostId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        int updated = reportMapper.reviewPending(reportId, STATUS_CLOSED, reviewerUid, reviewNote);
+        if (updated <= 0) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        publishReportReviewedEvent(report, USER_STATUS_CLOSED);
+        adminAuditService.recordRequired(reviewerUid, "POST_REPORT_CLOSE",
+                "POST_REPORT", reportId, report, Map.of("closed", true, "postId", report.getPostId()), reviewNote);
+        return toDto(reportMapper.selectById(reportId));
     }
 
     private void publishReportQueueItem(Long reportId, Post post, PostReportPO report) {
@@ -165,6 +228,19 @@ public class PostReportService {
         ));
     }
 
+    private void publishReportReviewedEvent(PostReportPO report, String userStatus) {
+        if (applicationEventPublisher == null || report == null || report.getReporterUid() == null || report.getId() == null) {
+            return;
+        }
+        applicationEventPublisher.publishEvent(PostReportReviewedEvent.builder()
+                .reporterUid(report.getReporterUid())
+                .reportId(report.getId())
+                .postId(report.getPostId())
+                .userStatus(userStatus)
+                .targetPath(report.getPostId() == null ? null : "/post/" + report.getPostId())
+                .build());
+    }
+
     private void takeDownPost(Long postId) {
         Post post = postRepo.findById(postId)
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
@@ -180,11 +256,21 @@ public class PostReportService {
         return Math.max(1, Math.min(limit, MAX_LIMIT));
     }
 
+    private Long safeCursor(Long cursor) {
+        return cursor == null || cursor <= 0 ? null : cursor;
+    }
+
     private int requireKnownStatus(int status) {
-        if (status == STATUS_PENDING || status == STATUS_APPROVED || status == STATUS_REJECTED) {
+        if (status == STATUS_PENDING || status == STATUS_APPROVED || status == STATUS_REJECTED || status == STATUS_CLOSED) {
             return status;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private void requireReporter(Long reporterUid) {
+        if (reporterUid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
     }
 
     private String clean(String value, int maxLen, String fallback) {
@@ -234,6 +320,54 @@ public class PostReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private PostReportReceiptDTO toReceiptDto(PostReportPO po, Post post, Long viewerUid) {
+        if (po == null) {
+            return null;
+        }
+        boolean targetAvailable = post != null && post.isVisibleTo(viewerUid, false);
+        return PostReportReceiptDTO.builder()
+                .id(po.getId())
+                .postId(po.getPostId())
+                .targetAvailable(targetAvailable)
+                .postTitle(targetAvailable ? post.getTitle() : null)
+                .postSummary(targetAvailable ? summary(post.getContent()) : null)
+                .reason(po.getReason())
+                .detail(po.getDetail())
+                .reportStatus(po.getReportStatus())
+                .userStatus(toUserStatus(po.getReportStatus()))
+                .statusMessage(toUserStatusMessage(po.getReportStatus()))
+                .reviewTime(po.getReviewTime())
+                .createTime(po.getCreateTime())
+                .updateTime(po.getUpdateTime())
+                .build();
+    }
+
+    private String toUserStatus(Integer reportStatus) {
+        if (reportStatus != null && reportStatus == STATUS_APPROVED) {
+            return USER_STATUS_ACTION_TAKEN;
+        }
+        if (reportStatus != null && reportStatus == STATUS_REJECTED) {
+            return USER_STATUS_NOT_ACCEPTED;
+        }
+        if (reportStatus != null && reportStatus == STATUS_CLOSED) {
+            return USER_STATUS_CLOSED;
+        }
+        return USER_STATUS_PROCESSING;
+    }
+
+    private String toUserStatusMessage(Integer reportStatus) {
+        if (reportStatus != null && reportStatus == STATUS_CLOSED) {
+            return "举报已关闭，平台已记录该反馈";
+        }
+        if (reportStatus != null && reportStatus == STATUS_APPROVED) {
+            return "平台已处理该内容";
+        }
+        if (reportStatus != null && reportStatus == STATUS_REJECTED) {
+            return "经复核，暂未发现明确违规";
+        }
+        return "平台已收到，正在处理";
     }
 
     private boolean isSyntheticReport(PostReportDTO dto) {

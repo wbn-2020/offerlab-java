@@ -37,7 +37,15 @@ public class AuthInterceptor implements HandlerInterceptor {
             "/api/v1/ops",
             "/api/v1/posts/admin",
             "/api/v1/tags/admin",
-            "/api/v1/comments/admin"
+            "/api/v1/comments/admin",
+            "/api/v1/users/me",
+            "/api/v1/me",
+            "/api/v1/notifications",
+            "/api/v1/contact-requests",
+            "/api/v1/comments/reports",
+            "/api/v1/posts/reports",
+            "/api/v1/post-drafts",
+            "/api/v1/mock-interviews"
     };
 
     private final JwtService jwtService;
@@ -93,6 +101,9 @@ public class AuthInterceptor implements HandlerInterceptor {
     }
 
     private static boolean requiresStrictRevocation(HttpServletRequest request) {
+        if (!"GET".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
         String path = request.getRequestURI();
         String contextPath = request.getContextPath();
         if (StringUtils.hasText(contextPath) && path.startsWith(contextPath)) {

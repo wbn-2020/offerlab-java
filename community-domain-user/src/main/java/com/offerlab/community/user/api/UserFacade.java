@@ -1,6 +1,8 @@
 package com.offerlab.community.user.api;
 
 import com.offerlab.community.user.api.dto.UserBriefDTO;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
+import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 
@@ -56,4 +58,8 @@ public interface UserFacade {
     boolean allowsFavoriteNotification(Long uid);
 
     boolean allowsMentionNotification(Long uid);
+
+    ContactRequestSettingsDTO getContactRequestSettings(Long uid);
+
+    ContactRequestPolicyCheckDTO checkContactRequestPolicy(Long requesterUid, Long receiverUid);
 }

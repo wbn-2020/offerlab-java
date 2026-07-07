@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.interaction.api.DiscussionFollowFacade;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.application.CommentReportService;
@@ -34,6 +35,8 @@ class InteractionControllerApiTest {
     @Mock
     private InteractionFacade facade;
     @Mock
+    private DiscussionFollowFacade discussionFollowFacade;
+    @Mock
     private CommentReportService reportService;
     @Mock
     private DomainModeratorService domainModeratorService;
@@ -47,19 +50,19 @@ class InteractionControllerApiTest {
     @BeforeEach
     void setUp() {
         mvc = ApiTestSupport.mvc(
-                new InteractionController(facade, reportService, domainModeratorService, contentModerationService),
+                new InteractionController(facade, discussionFollowFacade, reportService, domainModeratorService, contentModerationService),
                 jwtService);
     }
 
     @Test
     void commentsArePublicAndUseAnonymousViewerWhenNoToken() throws Exception {
-        when(facade.listComments(10L, null, 0L, 20)).thenReturn(PageResult.empty());
+        when(facade.listComments(10L, null, 0L, 20, "latest")).thenReturn(PageResult.empty());
 
         mvc.perform(get("/api/v1/posts/10/comments"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(facade).listComments(10L, null, 0L, 20);
+        verify(facade).listComments(10L, null, 0L, 20, "latest");
     }
 
     @Test

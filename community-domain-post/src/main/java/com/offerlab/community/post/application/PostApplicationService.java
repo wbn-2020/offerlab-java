@@ -98,7 +98,7 @@ public class PostApplicationService {
                     .domain(post.getDomain())
                     .timestamp(Instant.now().toEpochMilli())
                     .tagIds(resolvedTagIds)
-                    .topicNotificationTargets(communityTopicService.notificationTargetsForPost(resolvedTagIds, cmd.getAuthorId()))
+                    .topicNotificationTargets(topicNotificationTargets(post, resolvedTagIds))
                     .build());
         }
         return id;
@@ -409,5 +409,13 @@ public class PostApplicationService {
         } else {
             tagMapper.insertIgnoreNameCompat(id, name, tagType);
         }
+    }
+
+    private List<PostPublishedEvent.TopicNotificationTarget> topicNotificationTargets(Post post, List<Long> tagIds) {
+        if (post == null || !Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)
+                || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)) {
+            return List.of();
+        }
+        return communityTopicService.notificationTargetsForPost(tagIds, post.getAuthorId());
     }
 }

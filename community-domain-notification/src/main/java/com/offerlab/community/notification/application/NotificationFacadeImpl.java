@@ -50,6 +50,15 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private static final int TARGET_POST = 1;
     private static final int TARGET_COMMENT = 2;
     private static final int TARGET_USER = 3;
+    private static final String ACTION_REPORT_RECEIPT = "report_receipt";
+    private static final String ACTION_CONTACT_REQUEST_RECEIVED = "contact_request_received";
+    private static final String ACTION_CONTACT_REQUEST_ACCEPTED = "contact_request_accepted";
+    private static final String ACTION_CONTACT_REQUEST_REJECTED = "contact_request_rejected";
+    private static final String REPORT_USER_STATUS_ACTION_TAKEN = "ACTION_TAKEN";
+    private static final String REPORT_USER_STATUS_NOT_ACCEPTED = "NOT_ACCEPTED";
+    private static final String REPORT_USER_STATUS_CLOSED = "CLOSED";
+    private static final String CONTACT_REQUEST_INBOX_PATH = "/me/contact-requests?tab=inbox";
+    private static final String CONTACT_REQUEST_OUTBOX_PATH = "/me/contact-requests?tab=outbox";
 
     private final NotificationMessageMapper mapper;
     private final SnowflakeIdGenerator idGen;
@@ -170,6 +179,31 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     @Override
     @Transactional
+    public void notifyDiscussionFollowComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
+        create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
+                Map.of("action", "discussion_follow_comment",
+                        "postId", postId,
+                        "commentId", commentId,
+                        "targetPath", commentsTargetPath(postId)));
+    }
+
+    @Override
+    @Transactional
+    public void notifyDiscussionFollowQualityComment(Long receiverUid, Long senderUid, Long postId, Long commentId, String action) {
+        String normalizedAction = normalizeDiscussionFollowQualityAction(action);
+        if (normalizedAction == null) {
+            return;
+        }
+        create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
+                Map.of("action", normalizedAction,
+                        "postId", postId,
+                        "commentId", commentId,
+                        "targetPath", commentsTargetPath(postId),
+                        "message", discussionFollowQualityMessage(normalizedAction)));
+    }
+
+    @Override
+    @Transactional
     public void notifyFollower(Long receiverUid, Long senderUid) {
         create(receiverUid, senderUid, TYPE_FOLLOWER, TARGET_USER, senderUid,
                 Map.of("action", "follow", "userId", senderUid));
@@ -197,6 +231,37 @@ public class NotificationFacadeImpl implements NotificationFacade {
     public void notifySystem(Long receiverUid, Long targetType, Long targetId, Map<String, Object> content) {
         create(receiverUid, 0L, TYPE_SYSTEM, targetType == null ? null : targetType.intValue(), targetId,
                 content == null ? Map.of() : content);
+    }
+
+    @Override
+    @Transactional
+    public void notifyReportReceipt(Long receiverUid, String sourceType, Long reportId, String userStatus, String targetPath) {
+        create(receiverUid, 0L, TYPE_SYSTEM, null, reportId,
+                reportReceiptContent(sourceType, reportId, userStatus, targetPath));
+    }
+
+    @Override
+    @Transactional
+    public void notifyContactRequestReceived(Long receiverUid, Long requesterUid, Long requestId) {
+        create(receiverUid, requesterUid, TYPE_SYSTEM, null, requestId,
+                contactRequestContent(ACTION_CONTACT_REQUEST_RECEIVED, requestId,
+                        CONTACT_REQUEST_INBOX_PATH, "有人发来了联系请求。"));
+    }
+
+    @Override
+    @Transactional
+    public void notifyContactRequestAccepted(Long requesterUid, Long receiverUid, Long requestId) {
+        create(requesterUid, receiverUid, TYPE_SYSTEM, null, requestId,
+                contactRequestContent(ACTION_CONTACT_REQUEST_ACCEPTED, requestId,
+                        CONTACT_REQUEST_OUTBOX_PATH, "你的联系请求已被接受。"));
+    }
+
+    @Override
+    @Transactional
+    public void notifyContactRequestRejected(Long requesterUid, Long receiverUid, Long requestId) {
+        create(requesterUid, receiverUid, TYPE_SYSTEM, null, requestId,
+                contactRequestContent(ACTION_CONTACT_REQUEST_REJECTED, requestId,
+                        CONTACT_REQUEST_OUTBOX_PATH, "你的联系请求已被拒绝。"));
     }
 
     private void create(Long receiverUid, Long senderUid, Integer notifType,
@@ -249,6 +314,55 @@ public class NotificationFacadeImpl implements NotificationFacade {
             case TYPE_MENTION -> userFacade.allowsMentionNotification(receiverUid);
             default -> userFacade.allowsInteractionNotification(receiverUid);
         };
+    }
+
+    private Map<String, Object> reportReceiptContent(String sourceType, Long reportId,
+                                                     String userStatus, String targetPath) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        String normalizedStatus = normalizeReportUserStatus(userStatus);
+        content.put("action", ACTION_REPORT_RECEIPT);
+        content.put("sourceType", sourceType);
+        content.put("reportId", reportId);
+        content.put("userStatus", normalizedStatus);
+        content.put("targetPath", targetPath);
+        content.put("title", "你提交的举报已有处理结果。");
+        content.put("message", REPORT_USER_STATUS_ACTION_TAKEN.equals(normalizedStatus)
+                ? "平台已处理你举报的内容。"
+                : "经复核，暂未发现明确违规。");
+        content.put("message", reportReceiptMessage(normalizedStatus));
+        content.put("dedupKey", ACTION_REPORT_RECEIPT + ":" + sourceType + ":" + reportId);
+        return content;
+    }
+
+    private String normalizeReportUserStatus(String userStatus) {
+        if (REPORT_USER_STATUS_ACTION_TAKEN.equals(userStatus)) {
+            return REPORT_USER_STATUS_ACTION_TAKEN;
+        }
+        if (REPORT_USER_STATUS_CLOSED.equals(userStatus)) {
+            return REPORT_USER_STATUS_CLOSED;
+        }
+        return REPORT_USER_STATUS_NOT_ACCEPTED;
+    }
+
+    private String reportReceiptMessage(String status) {
+        if (REPORT_USER_STATUS_ACTION_TAKEN.equals(status)) {
+            return "平台已处理你举报的内容。";
+        }
+        if (REPORT_USER_STATUS_CLOSED.equals(status)) {
+            return "举报已关闭，平台已记录该反馈。";
+        }
+        return "经复核，暂未发现明确违规。";
+    }
+
+    private Map<String, Object> contactRequestContent(String action, Long requestId,
+                                                      String targetPath, String message) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", action);
+        content.put("requestId", requestId);
+        content.put("targetPath", targetPath);
+        content.put("message", message);
+        content.put("dedupKey", action + ":" + requestId);
+        return content;
     }
 
     private LambdaQueryWrapper<NotificationMessagePO> baseUnread(Long uid) {
@@ -415,5 +529,30 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     private int clampPageSize(int size) {
         return Math.max(1, Math.min(size, 50));
+    }
+
+    private String normalizeDiscussionFollowQualityAction(String action) {
+        if (action == null || action.isBlank()) {
+            return null;
+        }
+        return switch (action) {
+            case "discussion_follow_featured_reply",
+                 "discussion_follow_author_pinned",
+                 "discussion_follow_author_reply" -> action;
+            default -> null;
+        };
+    }
+
+    private String discussionFollowQualityMessage(String action) {
+        return switch (action) {
+            case "discussion_follow_featured_reply" -> "你关注的讨论有一条精选回复。";
+            case "discussion_follow_author_pinned" -> "作者置顶了一条关键回应。";
+            case "discussion_follow_author_reply" -> "作者补充了新的回应。";
+            default -> "你关注的讨论有新的回应。";
+        };
+    }
+
+    private String commentsTargetPath(Long postId) {
+        return "/post/" + postId + "#comments";
     }
 }
