@@ -34,11 +34,17 @@ public class ContactRequestSettingsService {
     private final FollowRepository followRepo;
     private final UserPrivacySettingMapper privacySettingMapper;
     private final ContentModerationService contentModerationService;
+    private final UserCacheService userCacheService;
 
     @Transactional
     public ContactRequestSettingsDTO getSettings(Long uid) {
         requireUser(uid);
         return toDTO(loadOrCreate(uid));
+    }
+
+    public ContactRequestSettingsDTO getSettingsOrDefault(Long uid) {
+        requireUser(uid);
+        return toDTO(loadOrDefault(uid));
     }
 
     @Transactional
@@ -55,6 +61,7 @@ public class ContactRequestSettingsService {
         } else {
             privacySettingMapper.insert(po);
         }
+        userCacheService.evictBrief(uid);
         return toDTO(po);
     }
 

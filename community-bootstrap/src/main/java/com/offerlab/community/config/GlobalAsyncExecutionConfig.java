@@ -16,6 +16,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Configuration
 public class GlobalAsyncExecutionConfig implements AsyncConfigurer {
     public static final String DEFAULT_EXECUTOR_BEAN = "communityAsyncExecutor";
+    public static final String AI_REVIEW_EXECUTOR_BEAN = "aiReviewAsyncExecutor";
+    public static final String NOTIFICATION_EXECUTOR_BEAN = "notificationAsyncExecutor";
+    public static final String FEED_FANOUT_EXECUTOR_BEAN = "feedFanoutAsyncExecutor";
     public static final int CORE_POOL_SIZE = 4;
     public static final int MAX_POOL_SIZE = 8;
     public static final int QUEUE_CAPACITY = 200;
@@ -26,12 +29,32 @@ public class GlobalAsyncExecutionConfig implements AsyncConfigurer {
 
     @Bean(name = DEFAULT_EXECUTOR_BEAN)
     public ThreadPoolTaskExecutor communityAsyncExecutor() {
+        return buildExecutor(CORE_POOL_SIZE, MAX_POOL_SIZE, QUEUE_CAPACITY, THREAD_NAME_PREFIX);
+    }
+
+    @Bean(name = AI_REVIEW_EXECUTOR_BEAN)
+    public ThreadPoolTaskExecutor aiReviewAsyncExecutor() {
+        return buildExecutor(1, 2, 20, "offerlab-ai-review-");
+    }
+
+    @Bean(name = NOTIFICATION_EXECUTOR_BEAN)
+    public ThreadPoolTaskExecutor notificationAsyncExecutor() {
+        return buildExecutor(4, 8, 500, "offerlab-notify-");
+    }
+
+    @Bean(name = FEED_FANOUT_EXECUTOR_BEAN)
+    public ThreadPoolTaskExecutor feedFanoutAsyncExecutor() {
+        return buildExecutor(2, 4, 50, "offerlab-feed-fanout-");
+    }
+
+    private ThreadPoolTaskExecutor buildExecutor(int corePoolSize, int maxPoolSize,
+                                                 int queueCapacity, String threadNamePrefix) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(CORE_POOL_SIZE);
-        executor.setMaxPoolSize(MAX_POOL_SIZE);
-        executor.setQueueCapacity(QUEUE_CAPACITY);
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
+        executor.setQueueCapacity(queueCapacity);
         executor.setKeepAliveSeconds(KEEP_ALIVE_SECONDS);
-        executor.setThreadNamePrefix(THREAD_NAME_PREFIX);
+        executor.setThreadNamePrefix(threadNamePrefix);
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.setRejectedExecutionHandler(new LoggingCallerRunsPolicy());
@@ -50,11 +73,20 @@ public class GlobalAsyncExecutionConfig implements AsyncConfigurer {
 
     static final class LoggingCallerRunsPolicy implements RejectedExecutionHandler {
         private final ThreadPoolExecutor.CallerRunsPolicy delegate = new ThreadPoolExecutor.CallerRunsPolicy();
+        private final String poolName;
+
+        LoggingCallerRunsPolicy() {
+            this("community");
+        }
+
+        private LoggingCallerRunsPolicy(String poolName) {
+            this.poolName = poolName;
+        }
 
         @Override
         public void rejectedExecution(Runnable runnable, ThreadPoolExecutor executor) {
-            log.warn("community async executor saturated; falling back to caller thread: poolSize={}, activeCount={}, queueSize={}",
-                    executor.getPoolSize(), executor.getActiveCount(), executor.getQueue().size());
+            log.warn("community async executor saturated; pool={} falling back to caller thread: poolSize={}, activeCount={}, queueSize={}",
+                    poolName, executor.getPoolSize(), executor.getActiveCount(), executor.getQueue().size());
             delegate.rejectedExecution(runnable, executor);
         }
     }

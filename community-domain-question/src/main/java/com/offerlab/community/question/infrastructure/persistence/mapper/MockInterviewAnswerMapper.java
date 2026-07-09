@@ -178,8 +178,29 @@ public interface MockInterviewAnswerMapper extends BaseMapper<MockInterviewAnswe
               AND session_id = #{sessionId}
               AND ai_review_status = 'PENDING'
             ORDER BY sequence_no ASC, id ASC
+            LIMIT #{limit}
             """)
-    List<MockInterviewAnswerPO> selectPendingAiReview(@Param("uid") Long uid, @Param("sessionId") Long sessionId);
+    default List<MockInterviewAnswerPO> selectPendingAiReview(Long uid, Long sessionId) {
+        return selectPendingAiReview(uid, sessionId, Integer.MAX_VALUE);
+    }
+
+    List<MockInterviewAnswerPO> selectPendingAiReview(@Param("uid") Long uid,
+                                                      @Param("sessionId") Long sessionId,
+                                                      @Param("limit") int limit);
+
+    @Select("""
+            SELECT *
+            FROM t_mock_interview_answer
+            WHERE uid = #{uid}
+              AND session_id = #{sessionId}
+              AND ai_review_status = 'PENDING'
+              AND (ai_review_task_id IS NULL OR ai_review_task_id = '')
+            ORDER BY sequence_no ASC, id ASC
+            LIMIT #{limit}
+            """)
+    List<MockInterviewAnswerPO> selectClaimablePendingAiReview(@Param("uid") Long uid,
+                                                               @Param("sessionId") Long sessionId,
+                                                               @Param("limit") int limit);
 
     @Update("""
             UPDATE t_mock_interview_answer

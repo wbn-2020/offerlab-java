@@ -19,6 +19,7 @@ public class MockInterviewSubmitCmd {
 
     @Valid
     @NotEmpty
+    @Size(max = 50)
     private List<AnswerCmd> answers;
 
     private Boolean aiReviewEnabled;

@@ -1,6 +1,5 @@
--- Add interview schedule metadata to user prep targets without touching existing rows.
+﻿-- Add interview schedule metadata to user prep targets without touching existing rows.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

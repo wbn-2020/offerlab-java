@@ -14,6 +14,7 @@ public class FeedFeedbackStore {
 
     private static final Duration FEEDBACK_TTL = Duration.ofDays(90);
     private static final String ACTION_NOT_INTERESTED = "not_interested";
+    private static final int MAX_HIDDEN_POST_IDS = 1000;
 
     private final RedisTemplate<String, Object> redisTemplate;
 
@@ -26,8 +27,10 @@ public class FeedFeedbackStore {
                 normalizedAction + "|" + clean(reason));
         redisTemplate.expire(feedbackKey(uid), FEEDBACK_TTL);
         if (ACTION_NOT_INTERESTED.equals(normalizedAction)) {
-            redisTemplate.opsForSet().add(hiddenKey(uid), String.valueOf(postId));
-            redisTemplate.expire(hiddenKey(uid), FEEDBACK_TTL);
+            String key = hiddenKey(uid);
+            redisTemplate.opsForZSet().add(key, String.valueOf(postId), System.currentTimeMillis());
+            redisTemplate.opsForZSet().removeRange(key, 0, -MAX_HIDDEN_POST_IDS - 1);
+            redisTemplate.expire(key, FEEDBACK_TTL);
         }
     }
 
@@ -35,7 +38,7 @@ public class FeedFeedbackStore {
         if (uid == null) {
             return Set.of();
         }
-        Set<Object> values = redisTemplate.opsForSet().members(hiddenKey(uid));
+        Set<Object> values = redisTemplate.opsForZSet().reverseRange(hiddenKey(uid), 0, MAX_HIDDEN_POST_IDS - 1);
         if (values == null || values.isEmpty()) {
             return Set.of();
         }
@@ -51,7 +54,12 @@ public class FeedFeedbackStore {
             return ACTION_NOT_INTERESTED;
         }
         String normalized = action.trim().toLowerCase();
-        return "hide".equals(normalized) || "dislike".equals(normalized) ? ACTION_NOT_INTERESTED : normalized;
+        return "hide".equals(normalized)
+                || "dislike".equals(normalized)
+                || "less_like_this".equals(normalized)
+                || "hide_author".equals(normalized)
+                ? ACTION_NOT_INTERESTED
+                : normalized;
     }
 
     private static String clean(String value) {
@@ -71,6 +79,6 @@ public class FeedFeedbackStore {
     }
 
     private static String hiddenKey(Long uid) {
-        return "offerlab:feed:hidden:" + uid;
+        return "offerlab:feed:hidden:z:" + uid;
     }
 }

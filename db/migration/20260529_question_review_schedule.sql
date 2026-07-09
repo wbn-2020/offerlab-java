@@ -1,8 +1,7 @@
--- 20260529_question_review_schedule.sql
+﻿-- 20260529_question_review_schedule.sql
 -- Non-destructive migration for explicit personal question review scheduling.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

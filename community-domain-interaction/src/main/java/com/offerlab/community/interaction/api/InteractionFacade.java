@@ -5,11 +5,14 @@ import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
+import com.offerlab.community.interaction.api.dto.FavoriteBatchMoveCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 
 import java.util.List;
+import java.util.Set;
 
 public interface InteractionFacade {
 
@@ -20,6 +23,10 @@ public interface InteractionFacade {
     boolean hasLiked(Long uid, Long postId);
 
     boolean hasFavorited(Long uid, Long postId);
+
+    Set<Long> likedPostIds(Long uid, List<Long> postIds);
+
+    Set<Long> favoritedPostIds(Long uid, List<Long> postIds);
 
     void likeComment(Long uid, Long commentId);
 
@@ -34,10 +41,16 @@ public interface InteractionFacade {
     Long addComment(CommentCreateCmd cmd);
 
     default PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size) {
-        return listComments(postId, viewerUid, cursor, size, "latest");
+        return listComments(postId, viewerUid, String.valueOf(cursor), size, "latest");
     }
 
-    PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size, String sort);
+    default PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size, String sort) {
+        return listComments(postId, viewerUid, String.valueOf(cursor), size, sort);
+    }
+
+    PageResult<CommentDTO> listComments(Long postId, Long viewerUid, String cursor, int size, String sort);
+
+    PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size);
 
     void deleteComment(Long commentId, Long operatorUid);
 
@@ -73,9 +86,17 @@ public interface InteractionFacade {
         throw new UnsupportedOperationException("unfoldComment");
     }
 
-    PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size);
+    default PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) {
+        return listLikedPosts(uid, String.valueOf(cursor), size);
+    }
 
-    PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size);
+    PageResult<PostBriefDTO> listLikedPosts(Long uid, String cursor, int size);
+
+    default PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size) {
+        return listFavoritePosts(uid, String.valueOf(cursor), size);
+    }
+
+    PageResult<PostBriefDTO> listFavoritePosts(Long uid, String cursor, int size);
 
     List<FavoriteFolderDTO> listFavoriteFolders(Long uid);
 
@@ -83,13 +104,27 @@ public interface InteractionFacade {
 
     FavoriteFolderDTO updateFavoriteFolder(Long uid, Long folderId, FavoriteFolderUpdateCmd cmd);
 
-    void deleteFavoriteFolder(Long uid, Long folderId);
+    FavoriteFolderDTO sortFavoriteFolder(Long uid, Long folderId, FavoriteFolderSortCmd cmd);
 
-    PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, long cursor, int size);
+    void deleteFavoriteFolder(Long uid, Long folderId, Long targetFolderId);
+
+    default PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, long cursor, int size) {
+        return listFavoritePostsInFolder(uid, folderId, String.valueOf(cursor), size);
+    }
+
+    PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, String cursor, int size);
 
     FavoriteFolderDTO moveFavorite(Long uid, Long postId, FavoriteMoveCmd cmd);
 
+    FavoriteFolderDTO batchMoveFavorites(Long uid, FavoriteBatchMoveCmd cmd);
+
     FavoriteFolderDTO getPublicFavoriteFolder(Long folderId);
 
-    PageResult<PostBriefDTO> listPublicFavoritePostsInFolder(Long folderId, long cursor, int size);
+    List<FavoriteFolderDTO> listPublicFavoriteFoldersByUser(Long uid, int limit);
+
+    default PageResult<PostBriefDTO> listPublicFavoritePostsInFolder(Long folderId, long cursor, int size) {
+        return listPublicFavoritePostsInFolder(folderId, String.valueOf(cursor), size);
+    }
+
+    PageResult<PostBriefDTO> listPublicFavoritePostsInFolder(Long folderId, String cursor, int size);
 }

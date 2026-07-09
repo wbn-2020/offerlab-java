@@ -1,8 +1,7 @@
--- 20260530_mock_interview_ai_review.sql
+﻿-- 20260530_mock_interview_ai_review.sql
 -- Non-destructive migration for optional AI/rule review of mock interview answers.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

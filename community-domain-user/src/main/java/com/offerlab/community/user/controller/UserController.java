@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import com.offerlab.community.user.api.dto.UserPrivacySettingDTO;
@@ -13,11 +14,15 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.application.UserApplicationService;
 import com.offerlab.community.user.application.ContactRequestSettingsService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -30,10 +35,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
+@Validated
 public class UserController {
 
     private final UserFacade userFacade;
@@ -42,7 +49,9 @@ public class UserController {
 
     @GetMapping("/{uid}")
     @PublicApi
-    public Result<UserBriefDTO> getUser(@PathVariable Long uid) {
+    @RateLimit(key = "'public:user:detail:' + #uid + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<UserBriefDTO> getUser(@PathVariable Long uid,
+                                        HttpServletRequest request) {
         UserBriefDTO dto = copyBrief(userFacade.getUserBrief(uid));
         if (dto != null) {
             Long viewer = UserContext.get();
@@ -61,6 +70,13 @@ public class UserController {
                 dto.setFollowingCount(0L);
                 dto.setPostCount(0L);
                 dto.setPrivacyReason("PROFILE_RESTRICTED");
+                dto.setAcceptContactRequest(false);
+                dto.setContactRequestPolicy("off");
+                dto.setCanStartContactRequest(false);
+                dto.setContactRequestReasonCode("PROFILE_RESTRICTED");
+                dto.setContactRequestReasonMessage("PROFILE_RESTRICTED");
+            } else {
+                applyContactRequestPolicy(dto, viewer, uid);
             }
         }
         return Result.ok(dto);
@@ -105,14 +121,18 @@ public class UserController {
 
     @PublicApi
     @GetMapping("/{uid}/intent")
-    public Result<UserIntentDTO> getIntent(@PathVariable Long uid) {
+    @RateLimit(key = "'public:user:intent:' + #uid + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<UserIntentDTO> getIntent(@PathVariable Long uid,
+                                           HttpServletRequest request) {
         return Result.ok(userFacade.isIntentVisible(UserContext.get(), uid) ? userFacade.getUserIntent(uid) : null);
     }
 
     @PublicApi
     @GetMapping("/search")
-    public Result<List<UserBriefDTO>> searchUsers(@RequestParam(name = "q", required = false) String keyword,
-                                                  @RequestParam(defaultValue = "10") int size) {
+    @RateLimit(key = "'public:user:search:' + #request.remoteAddr", rate = 60, per = 60, failOpen = false)
+    public Result<List<UserBriefDTO>> searchUsers(@RequestParam(name = "q", required = false) @Size(max = 80) String keyword,
+                                                  @RequestParam(defaultValue = "10") @Min(1) @Max(20) int size,
+                                                  HttpServletRequest request) {
         return Result.ok(userService.searchUsers(keyword, UserContext.get(), size, userFacade));
     }
 
@@ -124,7 +144,7 @@ public class UserController {
 
     @PutMapping("/me/privacy-settings")
     @RateLimit(key = "'user:privacy:update:' + #uid", rate = 30, per = 60)
-    public Result<UserPrivacySettingDTO> updatePrivacySettings(@RequestBody UserPrivacySettingDTO setting) {
+    public Result<UserPrivacySettingDTO> updatePrivacySettings(@Valid @RequestBody UserPrivacySettingDTO setting) {
         Long uid = UserContext.require();
         return Result.ok(userService.updatePrivacySetting(uid, setting));
     }
@@ -156,30 +176,49 @@ public class UserController {
         return Result.ok();
     }
 
+    @PublicApi
     @GetMapping("/{uid}/followers")
+    @RateLimit(key = "'public:user:followers:' + #uid + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<UserBriefDTO>> followers(@PathVariable Long uid,
                                                       @RequestParam(defaultValue = "0") long cursor,
-                                                      @RequestParam(defaultValue = "20") int size) {
+                                                      @RequestParam(defaultValue = "20") int size,
+                                                      HttpServletRequest request) {
+        Long viewer = UserContext.get();
+        if (!userFacade.isProfileVisible(viewer, uid)) {
+            return Result.ok(PageResult.empty());
+        }
         int limit = pageSize(size);
-        return Result.ok(toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, UserContext.get()));
+        return Result.ok(toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, viewer));
     }
 
+    @PublicApi
     @GetMapping("/{uid}/following")
+    @RateLimit(key = "'public:user:following:' + #uid + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<UserBriefDTO>> following(@PathVariable Long uid,
                                                       @RequestParam(defaultValue = "0") long cursor,
-                                                      @RequestParam(defaultValue = "20") int size) {
+                                                      @RequestParam(defaultValue = "20") int size,
+                                                      HttpServletRequest request) {
+        Long viewer = UserContext.get();
+        if (!userFacade.isProfileVisible(viewer, uid)) {
+            return Result.ok(PageResult.empty());
+        }
         int limit = pageSize(size);
-        return Result.ok(toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, UserContext.get()));
+        return Result.ok(toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, viewer));
     }
 
     private PageResult<UserBriefDTO> toFollowPage(List<FollowCursorDTO> rows, int limit, Long viewer) {
         if (rows.isEmpty()) return PageResult.empty();
         boolean hasMore = rows.size() > limit;
         List<FollowCursorDTO> pageRows = hasMore ? rows.subList(0, limit) : rows;
+        List<Long> uids = pageRows.stream().map(FollowCursorDTO::getUid).toList();
+        Map<Long, UserBriefDTO> briefs = userFacade.batchGetUserBriefs(uids);
+        Map<Long, Boolean> following = viewer == null
+                ? Map.of()
+                : userFacade.batchIsFollowing(viewer, uids);
         List<UserBriefDTO> items = pageRows.stream()
                 .map(FollowCursorDTO::getUid)
-                .map(userFacade::getUserBrief)
-                .map(dto -> sanitizeFollowBrief(dto, viewer))
+                .map(briefs::get)
+                .map(dto -> sanitizeFollowBrief(dto, viewer, following))
                 .filter(java.util.Objects::nonNull)
                 .toList();
         String next = hasMore && !pageRows.isEmpty()
@@ -193,13 +232,18 @@ public class UserController {
     }
 
     private UserBriefDTO sanitizeFollowBrief(UserBriefDTO dto, Long viewer) {
+        return sanitizeFollowBrief(dto, viewer, Map.of());
+    }
+
+    private UserBriefDTO sanitizeFollowBrief(UserBriefDTO dto, Long viewer, Map<Long, Boolean> followingByUid) {
         UserBriefDTO copy = copyBrief(dto);
         if (copy == null) {
             return null;
         }
         Long targetUid = copy.getUid();
         if (viewer != null && targetUid != null && !viewer.equals(targetUid)) {
-            copy.setIsFollowing(userFacade.isFollowing(viewer, targetUid));
+            Boolean isFollowing = followingByUid == null ? null : followingByUid.get(targetUid);
+            copy.setIsFollowing(isFollowing != null ? isFollowing : userFacade.isFollowing(viewer, targetUid));
         }
         boolean profileVisible = userFacade.isProfileVisible(viewer, targetUid);
         copy.setProfileVisible(profileVisible);
@@ -212,8 +256,40 @@ public class UserController {
             copy.setFollowingCount(0L);
             copy.setPostCount(0L);
             copy.setPrivacyReason("PROFILE_RESTRICTED");
+            copy.setAcceptContactRequest(false);
+            copy.setContactRequestPolicy("off");
+            copy.setCanStartContactRequest(false);
+            copy.setContactRequestReasonCode("PROFILE_RESTRICTED");
+            copy.setContactRequestReasonMessage("PROFILE_RESTRICTED");
+        } else {
+            applyContactRequestPolicy(copy, viewer, targetUid);
         }
         return copy;
+    }
+
+    private void applyContactRequestPolicy(UserBriefDTO dto, Long viewer, Long targetUid) {
+        if (dto == null || targetUid == null) {
+            return;
+        }
+        if (viewer == null) {
+            dto.setCanStartContactRequest(false);
+            dto.setContactRequestReasonCode("LOGIN_REQUIRED");
+            dto.setContactRequestReasonMessage("LOGIN_REQUIRED");
+            return;
+        }
+        if (viewer.equals(targetUid)) {
+            dto.setCanStartContactRequest(false);
+            dto.setContactRequestReasonCode("SELF_CONTACT");
+            dto.setContactRequestReasonMessage("SELF_CONTACT");
+            return;
+        }
+        ContactRequestPolicyCheckDTO policy = contactRequestSettingsService.checkPolicy(viewer, targetUid);
+        dto.setCanStartContactRequest(Boolean.TRUE.equals(policy.getAllowed()));
+        dto.setContactRequestReasonCode(policy.getReasonCode());
+        dto.setContactRequestReasonMessage(policy.getReasonMessage());
+        dto.setContactRequestPolicy(policy.getContactRequestPolicy());
+        dto.setAcceptContactRequest(Boolean.TRUE.equals(policy.getAllowed())
+                || !"CONTACT_REQUEST_CLOSED".equals(policy.getReasonCode()));
     }
 
     private UserBriefDTO copyBrief(UserBriefDTO dto) {
@@ -232,14 +308,26 @@ public class UserController {
                 .profileVisible(dto.getProfileVisible())
                 .intentVisible(dto.getIntentVisible())
                 .privacyReason(dto.getPrivacyReason())
+                .acceptContactRequest(dto.getAcceptContactRequest())
+                .contactRequestPolicy(dto.getContactRequestPolicy())
+                .canStartContactRequest(dto.getCanStartContactRequest())
+                .contactRequestReasonCode(dto.getContactRequestReasonCode())
+                .contactRequestReasonMessage(dto.getContactRequestReasonMessage())
                 .build();
     }
 
     @Data
     public static class UpdateProfileReq {
+        @Size(min = 1, max = 32)
         private String nickname;
+
+        @Size(max = 512)
         private String avatarUrl;
+
+        @Size(max = 500)
         private String bio;
+
+        @Size(max = 500)
         private String signature;
 
         private String effectiveBio() {

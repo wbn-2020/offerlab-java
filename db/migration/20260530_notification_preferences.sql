@@ -1,6 +1,5 @@
--- Add granular notification preferences without changing existing choices.
+﻿-- Add granular notification preferences without changing existing choices.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

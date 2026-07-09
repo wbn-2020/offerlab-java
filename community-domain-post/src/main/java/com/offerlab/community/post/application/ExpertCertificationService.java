@@ -7,6 +7,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplicationDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplicantApplicationDTO;
 import com.offerlab.community.post.api.dto.ExpertCertificationApplyCmd;
@@ -338,8 +339,12 @@ public class ExpertCertificationService {
                 .map(String::trim)
                 .distinct()
                 .limit(8)
-                .map(link -> link.length() <= 512 ? link : link.substring(0, 512))
+                .map(ExpertCertificationService::requireSafeEvidenceLink)
                 .toList();
+    }
+
+    private static String requireSafeEvidenceLink(String link) {
+        return ExternalUrlSafety.requireSafeHttpUrl(link, "evidenceLinks", 512);
     }
 
     private String toJson(Object value) {

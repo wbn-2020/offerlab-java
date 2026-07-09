@@ -15,7 +15,8 @@ class QuestionDemoSeedGuardTest {
     void localSeedMustKeepQuestionAndPrepDemoData() throws Exception {
         String seed = readSeed();
 
-        assertTrue(seed.contains("demo.admin@offerlab.local"), "seed must include a local demo/admin user");
+        assertTrue(seed.contains("demo.author@offerlab.local"), "seed must include a disabled local demo content author");
+        assertTrue(seed.contains("db/local/seed_local_demo_admin.sql"), "seed must keep local admin demos in local-only seed");
         assertTrue(seed.contains("INSERT INTO t_post_main"), "seed must include public interview posts for question joins");
         assertTrue(seed.contains("INSERT INTO t_post_extension"), "seed must include company/position post metadata");
         assertTrue(seed.contains("INSERT INTO t_interview_question"), "seed must include interview questions");
@@ -24,7 +25,7 @@ class QuestionDemoSeedGuardTest {
         assertTrue(seed.contains("INSERT INTO t_user_question_progress"), "seed must include user progress for /me/prep");
         assertTrue(seed.contains("answer_draft") && seed.contains("star_story"), "seed must include answer draft and STAR fields");
         assertTrue(seed.contains("INSERT INTO t_mock_interview_session"), "seed should include a demo mock interview summary");
-        assertTrue(seed.contains("深测科技"), "seed must support /companies/深测科技/prep");
+        assertTrue(seed.contains("娣辨祴绉戞妧"), "seed must support the demo company prep route");
 
         assertTrue(count(seed, "SHA2\\('offerlab-demo-question-") >= 8,
                 "seed must keep at least eight demo interview questions");
@@ -33,18 +34,22 @@ class QuestionDemoSeedGuardTest {
     }
 
     @Test
-    void existingDatabasePatchMustTargetRealRetestAdminUser() throws Exception {
+    void existingDatabasePatchMustResolveDemoAuthorBeforeRetestAdminUser() throws Exception {
         String migration = readMigration();
 
         assertTrue(migration.contains("db/migration"), "migration must document that it is for existing databases");
+        assertTrue(migration.contains("SELECT id FROM t_user_account WHERE email = 'demo.author@offerlab.local'"),
+                "existing database patch must prefer the demo content author uid");
+        assertTrue(migration.contains("SELECT id FROM t_user_account WHERE email = 'demo.admin@offerlab.local'"),
+                "existing database patch must keep compatibility with local demo admin uid");
         assertTrue(migration.contains("SELECT id FROM t_user_account WHERE email = 'admin'"),
-                "existing database patch must resolve the real retest admin uid");
+                "existing database patch must still resolve the real retest admin uid");
         assertTrue(migration.contains("SET @demo_uid := COALESCE"),
                 "existing database patch must keep a deterministic fallback uid");
-        assertTrue(migration.contains("@demo_uid, 'company', '深测科技'"),
-                "prep targets must bind to the resolved retest uid");
+        assertTrue(migration.contains("@demo_uid, 'company', '娣辨祴绉戞妧'"),
+                "prep targets must bind to the resolved demo uid");
         assertTrue(migration.contains("@demo_uid, 990200000000000001"),
-                "question progress must bind to the resolved retest uid");
+                "question progress must bind to the resolved demo uid");
         assertTrue(migration.contains("source_author_uid = VALUES(source_author_uid)"),
                 "questions must refresh their source author uid for existing rows");
         assertTrue(migration.contains("missing_demo_seed_schema_columns"),

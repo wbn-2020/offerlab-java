@@ -1,18 +1,17 @@
--- 02_post.sql
--- 内容域：帖子、扩展信息、标签
+﻿-- 02_post.sql
+-- 鍐呭鍩燂細甯栧瓙銆佹墿灞曚俊鎭€佹爣绛?
 SET NAMES utf8mb4;
-USE offerlab;
 
 DROP TABLE IF EXISTS t_post_main;
 CREATE TABLE t_post_main (
     id              BIGINT       NOT NULL PRIMARY KEY,
     author_id       BIGINT       NOT NULL,
-    post_type       TINYINT      NOT NULL COMMENT '1面经 2技术博客 3题解 4求职问答',
+    post_type       TINYINT      NOT NULL COMMENT '1闈㈢粡 2鎶€鏈崥瀹?3棰樿В 4姹傝亴闂瓟',
     title           VARCHAR(255) NOT NULL,
     content         LONGTEXT     NOT NULL,
     cover_url       VARCHAR(512) NULL,
-    visibility      TINYINT      NOT NULL DEFAULT 1 COMMENT '1公开 2仅自己 3粉丝可见',
-    post_status     TINYINT      NOT NULL DEFAULT 1 COMMENT '1已发布 2草稿 3审核中 4已下架',
+    visibility      TINYINT      NOT NULL DEFAULT 1 COMMENT '1鍏紑 2浠呰嚜宸?3绮変笣鍙',
+    post_status     TINYINT      NOT NULL DEFAULT 1 COMMENT '1宸插彂甯?2鑽夌 3瀹℃牳涓?4宸蹭笅鏋?,
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
@@ -22,7 +21,7 @@ CREATE TABLE t_post_main (
     KEY idx_status_time (post_status, create_time),
     KEY idx_post_public_time_id (is_deleted, post_status, visibility, create_time, id),
     KEY idx_post_public_author_time (is_deleted, post_status, visibility, author_id, create_time, id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子主表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙涓昏〃';
 
 DROP TABLE IF EXISTS t_post_extension;
 CREATE TABLE t_post_extension (
@@ -39,19 +38,19 @@ CREATE TABLE t_post_extension (
     KEY idx_position (position),
     KEY idx_company_result (company, interview_result),
     KEY idx_post_extension_domain_post (domain, post_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子扩展';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙鎵╁睍';
 
 DROP TABLE IF EXISTS t_tag;
 CREATE TABLE t_tag (
     id              BIGINT       NOT NULL PRIMARY KEY,
     tag_name        VARCHAR(64)  NOT NULL,
-    tag_type        TINYINT      NOT NULL COMMENT '1技术栈 2公司 3岗位 4自定义',
+    tag_type        TINYINT      NOT NULL COMMENT '1鎶€鏈爤 2鍏徃 3宀椾綅 4鑷畾涔?,
     use_count       BIGINT       NOT NULL DEFAULT 0,
     is_official     TINYINT      NOT NULL DEFAULT 0,
-    tag_status      TINYINT      NOT NULL DEFAULT 1 COMMENT '1启用 0禁用/合并',
-    recommended     TINYINT      NOT NULL DEFAULT 0 COMMENT '1推荐标签',
-    synonyms        VARCHAR(512) NULL COMMENT '同义词，逗号分隔',
-    merge_target_id BIGINT       NULL COMMENT '合并目标标签',
+    tag_status      TINYINT      NOT NULL DEFAULT 1 COMMENT '1鍚敤 0绂佺敤/鍚堝苟',
+    recommended     TINYINT      NOT NULL DEFAULT 0 COMMENT '1鎺ㄨ崘鏍囩',
+    synonyms        VARCHAR(512) NULL COMMENT '鍚屼箟璇嶏紝閫楀彿鍒嗛殧',
+    merge_target_id BIGINT       NULL COMMENT '鍚堝苟鐩爣鏍囩',
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
@@ -60,7 +59,7 @@ CREATE TABLE t_tag (
     KEY idx_tag_status_recommend (tag_status, recommended, use_count),
     KEY idx_tag_merge_target (merge_target_id),
     KEY idx_tag_public_lookup (is_deleted, tag_status, merge_target_id, id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标签库';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='鏍囩搴?;
 
 DROP TABLE IF EXISTS t_post_tag_ref;
 CREATE TABLE t_post_tag_ref (
@@ -70,7 +69,7 @@ CREATE TABLE t_post_tag_ref (
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_post_tag (post_id, tag_id),
     KEY idx_tag_post (tag_id, post_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子-标签关联';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙-鏍囩鍏宠仈';
 
 DROP TABLE IF EXISTS t_community_topic;
 CREATE TABLE t_community_topic (
@@ -91,7 +90,7 @@ CREATE TABLE t_community_topic (
     UNIQUE KEY uk_topic_slug (slug, is_deleted),
     KEY idx_topic_status_sort (topic_status, sort_order, update_time),
     KEY idx_topic_featured_sort (featured, topic_status, sort_order)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社区专题';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='绀惧尯涓撻';
 
 DROP TABLE IF EXISTS t_community_topic_tag;
 CREATE TABLE t_community_topic_tag (
@@ -102,7 +101,7 @@ CREATE TABLE t_community_topic_tag (
     UNIQUE KEY uk_topic_tag (topic_id, tag_id),
     KEY idx_topic_tag_topic (topic_id),
     KEY idx_topic_tag_tag (tag_id, topic_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社区专题-标签关联';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='绀惧尯涓撻-鏍囩鍏宠仈';
 
 DROP TABLE IF EXISTS t_community_topic_follow;
 CREATE TABLE t_community_topic_follow (
@@ -126,14 +125,14 @@ CREATE TABLE t_post_counter (
     share_count     BIGINT       NOT NULL DEFAULT 0,
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     version         INT          NOT NULL DEFAULT 0
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子计数器';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙璁℃暟鍣?;
 
 DROP TABLE IF EXISTS t_post_draft;
 CREATE TABLE t_post_draft (
     id              BIGINT       NOT NULL PRIMARY KEY,
     uid             BIGINT       NOT NULL,
-    source_post_id  BIGINT       NULL COMMENT '编辑已有帖子时关联的帖子 ID',
-    post_type       TINYINT      NOT NULL DEFAULT 1 COMMENT '1面经 2技术博客 3题解 4求职问答',
+    source_post_id  BIGINT       NULL COMMENT '缂栬緫宸叉湁甯栧瓙鏃跺叧鑱旂殑甯栧瓙 ID',
+    post_type       TINYINT      NOT NULL DEFAULT 1 COMMENT '1闈㈢粡 2鎶€鏈崥瀹?3棰樿В 4姹傝亴闂瓟',
     title           VARCHAR(255) NULL,
     content         LONGTEXT     NULL,
     cover_url       VARCHAR(512) NULL,
@@ -146,7 +145,7 @@ CREATE TABLE t_post_draft (
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
     KEY idx_uid_update_time (uid, update_time),
     KEY idx_uid_source_post (uid, source_post_id, update_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子服务端草稿';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙鏈嶅姟绔崏绋?;
 
 DROP TABLE IF EXISTS t_post_version_history;
 CREATE TABLE t_post_version_history (
@@ -186,6 +185,8 @@ CREATE TABLE t_search_index_retry_task (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_search_index_retry_dedup (dedup_key),
     KEY idx_search_index_retry_due (task_status, next_retry_time),
+    KEY idx_search_index_retry_claim (task_status, next_retry_time, create_time, id),
+    KEY idx_search_index_retry_expired_claim (task_status, lock_until, create_time, id),
     KEY idx_search_index_retry_lock (lock_owner, lock_until),
     KEY idx_search_index_retry_post (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='search index retry tasks';

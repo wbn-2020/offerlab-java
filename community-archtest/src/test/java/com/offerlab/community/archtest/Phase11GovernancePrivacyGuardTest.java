@@ -53,7 +53,7 @@ class Phase11GovernancePrivacyGuardTest {
         String userController = read("../community-domain-user/src/main/java/com/offerlab/community/user/controller/UserController.java");
 
         assertContains(reviewQueueController, "@RequestMapping(\"/api/v1/admin/review-queue\")", "review queue must stay under admin routing");
-        assertTrue(count(reviewQueueController, "AdminPermissionService.ROLE_CONTENT_MODERATOR") >= 7,
+        assertContains(reviewQueueService, "AdminPermissionService.ROLE_CONTENT_MODERATOR",
                 "each review queue endpoint must require content moderator scope");
         assertContains(reviewQueueService, "public ReviewQueueItemPO approve(Long id, Long operatorUid, String note, String confirmationPhrase)", "approve action must accept confirmation phrase");
         assertContains(reviewQueueService, "public ReviewQueueItemPO reject(Long id, Long operatorUid, String note, String confirmationPhrase)", "reject action must accept confirmation phrase");

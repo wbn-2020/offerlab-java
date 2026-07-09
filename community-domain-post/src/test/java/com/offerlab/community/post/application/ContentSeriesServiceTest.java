@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.ContentSeriesAddPostCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
@@ -315,7 +316,8 @@ class ContentSeriesServiceTest {
                 postMapper(posts, relationState),
                 postFacade(posts),
                 new SnowflakeIdGenerator(),
-                migrationCheckService
+                migrationCheckService,
+                new ContentModerationStub()
         );
     }
 
@@ -680,6 +682,21 @@ class ContentSeriesServiceTest {
         @Override
         public boolean contentSeriesReady() {
             return contentSeriesReady;
+        }
+    }
+
+    private static final class ContentModerationStub extends ContentModerationService {
+        private ContentModerationStub() {
+            super(null, null, null);
+        }
+
+        @Override
+        public void requireUserCanPublish(Long uid) {
+        }
+
+        @Override
+        public ModerationDecision checkContent(Long uid, String scope, String sourceType, Long sourceId, String... values) {
+            return new ModerationDecision(false, "ALLOW", null, null);
         }
     }
 }

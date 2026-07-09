@@ -5,9 +5,14 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.moderation.ModerationKeywordHit;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
+import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
+import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.event.PostDeletedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
@@ -56,6 +61,9 @@ public class PostApplicationService {
     private final CommunityTopicService communityTopicService;
     private final MigrationCheckService migrationCheckService;
     private final DomainConfigService domainConfigService;
+    private final ContentModerationService contentModerationService;
+    private final MultiLevelCache<PostDTO> postDetailCache;
+    private final DomainModeratorService domainModeratorService;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
@@ -63,7 +71,7 @@ public class PostApplicationService {
         domainConfigService.requireDomainEnabled(domain);
         PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
                 cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
-        long id = idGen.nextId();
+        long id = cmd.getPostId() == null || cmd.getPostId() <= 0 ? idGen.nextId() : cmd.getPostId();
         List<Long> resolvedTagIds = resolveTagIds(input.tagIds(), input.tagNames());
         requireResolvedTagCount(input.postType(), resolvedTagIds);
         String enrichedExtJson = mergeAnonymousToExtJson(
@@ -105,12 +113,54 @@ public class PostApplicationService {
     }
 
     @Transactional
+    public void resolveModerationHit(Long hitId, Long reviewerUid, boolean approved, String note) {
+        ModerationKeywordHit hit = contentModerationService.findKeywordHit(hitId);
+        if (hit == null || !ContentModerationService.SCOPE_POST.equalsIgnoreCase(hit.getScope())
+                || !ContentModerationService.SOURCE_POST.equalsIgnoreCase(hit.getSourceType())
+                || hit.getSourceId() == null || hit.getSourceId() <= 0) {
+            return;
+        }
+        Post post = postRepo.findById(hit.getSourceId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        if (!Objects.equals(post.getPostStatus(), Post.STATUS_REVIEWING)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        Integer nextStatus = approved ? Post.STATUS_PUBLISHED : Post.STATUS_TAKEN_DOWN;
+        boolean updated = postRepo.updateStatusIfCurrent(
+                post.getId(), Post.STATUS_REVIEWING, nextStatus, post.getVersion());
+        if (!updated) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        post.setPostStatus(nextStatus);
+        if (approved) {
+            List<Long> tagIds = currentTagIds(post.getId());
+            events.publish(PostPublishedEvent.builder()
+                    .postId(post.getId())
+                    .authorId(post.getAuthorId())
+                    .title(post.getTitle())
+                    .content(post.getContent())
+                    .visibility(post.getVisibility())
+                    .postStatus(post.getPostStatus())
+                    .domain(post.getDomain())
+                    .timestamp(Instant.now().toEpochMilli())
+                    .tagIds(tagIds)
+                    .topicNotificationTargets(topicNotificationTargets(post, tagIds))
+                    .build());
+        }
+        postDetailCache.evict(CacheKeyBuilder.postDetail(post.getId()));
+        postDetailCache.evict(CacheKeyBuilder.postDetailRaw(post.getId()));
+        contentModerationService.reviewKeywordHit(hitId, approved ? "APPROVED" : "REJECTED", reviewerUid, note);
+    }
+
+    @Transactional
     public void update(PostUpdateCmd cmd) {
         Post post = postRepo.findById(cmd.getPostId())
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         if (!post.getAuthorId().equals(cmd.getOperatorUid())) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
+        requireEditableStatus(post);
         Integer nextDomain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), post.getDomain());
         domainConfigService.requireDomainEnabled(nextDomain);
         boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
@@ -145,7 +195,9 @@ public class PostApplicationService {
                 || domainConfigService.reviewRequiredForPublish(nextDomain)) {
             post.setPostStatus(Post.STATUS_REVIEWING);
         }
-        postRepo.update(post);
+        if (!postRepo.update(post)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
         if (tagsProvided) {
             syncTags(post.getId(), resolvedTagIds);
         }
@@ -408,6 +460,13 @@ public class PostApplicationService {
             tagMapper.insertIgnoreName(id, name, tagType);
         } else {
             tagMapper.insertIgnoreNameCompat(id, name, tagType);
+        }
+    }
+
+    private static void requireEditableStatus(Post post) {
+        Integer status = post == null ? null : post.getPostStatus();
+        if (!Objects.equals(status, Post.STATUS_PUBLISHED) && !Objects.equals(status, Post.STATUS_DRAFT)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
         }
     }
 

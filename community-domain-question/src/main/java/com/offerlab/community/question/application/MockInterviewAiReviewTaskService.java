@@ -17,27 +17,55 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class MockInterviewAiReviewTaskService {
 
+    private static final int REVIEW_BATCH_SIZE = 10;
+    private static final int MAX_REVIEWS_PER_TASK = 20;
+
     private final MockInterviewAnswerMapper answerMapper;
     private final MockInterviewAiReviewService aiReviewService;
     private final MigrationCheckService migrationCheckService;
 
-    @Async
+    @Async("aiReviewAsyncExecutor")
     public void reviewSession(Long uid, Long sessionId) {
         if (uid == null || sessionId == null) {
             return;
         }
-        List<MockInterviewAnswerPO> answers = answerMapper.selectPendingAiReview(uid, sessionId);
-        for (MockInterviewAnswerPO answer : answers) {
-            reviewOne(uid, sessionId, answer);
+        int reviewed = 0;
+        boolean ready = mockInterviewAiReviewReady();
+        while (reviewed < MAX_REVIEWS_PER_TASK) {
+            int limit = Math.min(REVIEW_BATCH_SIZE, MAX_REVIEWS_PER_TASK - reviewed);
+            List<MockInterviewAnswerPO> answers = ready
+                    ? answerMapper.selectClaimablePendingAiReview(uid, sessionId, limit)
+                    : answerMapper.selectPendingAiReview(uid, sessionId, limit);
+            if (answers == null || answers.isEmpty()) {
+                break;
+            }
+            for (MockInterviewAnswerPO answer : answers) {
+                if (answer == null || answer.getQuestionId() == null) {
+                    continue;
+                }
+                if (reviewOne(uid, sessionId, answer)) {
+                    reviewed++;
+                    if (reviewed >= MAX_REVIEWS_PER_TASK) {
+                        break;
+                    }
+                }
+            }
+            if (answers.size() < limit) {
+                break;
+            }
+        }
+        if (reviewed >= MAX_REVIEWS_PER_TASK) {
+            log.warn("mock interview AI review task reached per-run limit: uid={} sessionId={} maxReviews={}",
+                    uid, sessionId, MAX_REVIEWS_PER_TASK);
         }
     }
 
-    private void reviewOne(Long uid, Long sessionId, MockInterviewAnswerPO answer) {
+    private boolean reviewOne(Long uid, Long sessionId, MockInterviewAnswerPO answer) {
         String taskId = "mock-review-" + UUID.randomUUID();
         if (!claimPendingAiReview(uid, sessionId, answer.getQuestionId(), taskId)) {
             log.info("skip stale mock interview AI review: uid={} sessionId={} questionId={}",
                     uid, sessionId, answer.getQuestionId());
-            return;
+            return false;
         }
         long startedNanos = System.nanoTime();
         try {
@@ -47,7 +75,7 @@ public class MockInterviewAiReviewTaskService {
                 updateAiReviewFailed(uid, sessionId, answer.getQuestionId(),
                         "AI review returned empty result", taskId, durationMs, 0, 0, 0L,
                         "EMPTY_REVIEW_RESULT", "none");
-                return;
+                return true;
             }
             updateAiReview(uid, sessionId, answer.getQuestionId(), result.score(),
                     result.completeness(), result.projectExpression(), result.followUpSuggestion(), result.provider(),
@@ -60,6 +88,7 @@ public class MockInterviewAiReviewTaskService {
             updateAiReviewFailed(uid, sessionId, answer.getQuestionId(), shortMessage(e),
                     taskId, durationMs, 0, 0, 0L, "REVIEW_TASK_EXCEPTION", "none");
         }
+        return true;
     }
 
     private long durationMs(long startedNanos) {

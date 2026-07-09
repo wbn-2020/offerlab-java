@@ -63,8 +63,10 @@ class PostVersionHistoryGuardTest {
 
         assertTrue(domain.contains("private Integer version"), "post domain must carry the DB version for snapshots");
         assertTrue(repo.contains(".version(po.getVersion())"), "repository must map the DB version into the domain object");
-        assertTrue(repo.contains("po.setVersion(post.getVersion())"), "post updates must pass the base version to MyBatis-Plus optimistic locking");
-        assertFalse(repo.contains("post.getVersion() + 1"), "repository must not manually advance @Version before updateById");
+        assertTrue(repo.contains("Integer expectedVersion = post.getVersion()"), "post updates must capture the base optimistic-lock version");
+        assertTrue(repo.contains("update.eq(PostPO::getVersion, expectedVersion)"), "post updates must compare against the base version");
+        assertTrue(repo.contains(".set(PostPO::getVersion, expectedVersion + 1)"), "post updates must advance the version atomically with the compare-and-set update");
+        assertFalse(repo.contains("post.getVersion() + 1"), "repository must not recompute the base version inline before saving");
         assertFalse(repo.contains("po.setVersion(null)"), "post updates must not clear the version field before saving");
         assertTrue(mybatisConfig.contains("MybatisPlusInterceptor"), "MyBatis-Plus interceptor must be registered for @Version fields");
         assertTrue(mybatisConfig.contains("OptimisticLockerInnerInterceptor"), "post optimistic locking must install the version interceptor");

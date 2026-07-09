@@ -31,7 +31,10 @@ public interface CommentMapper extends BaseMapper<CommentPO> {
               AND c.comment_status = 1
               AND c.is_deleted = 0
               <if test="beforeCreateTime != null">
-                AND c.create_time &lt; #{beforeCreateTime}
+                AND (
+                  c.create_time &lt; #{beforeCreateTime}
+                  OR (#{beforeId} IS NOT NULL AND c.create_time = #{beforeCreateTime} AND c.id &lt; #{beforeId})
+                )
               </if>
             ORDER BY
               CASE WHEN EXISTS (
@@ -55,12 +58,14 @@ public interface CommentMapper extends BaseMapper<CommentPO> {
               CASE WHEN c.author_id = c.post_author_id THEN 1 ELSE 0 END DESC,
               COALESCE(c.helpful_count, 0) DESC,
               COALESCE(c.like_count, 0) DESC,
-              c.create_time DESC
+              c.create_time DESC,
+              c.id DESC
             LIMIT #{limit}
             </script>
             """)
     List<CommentPO> selectQualityRoots(@Param("postId") Long postId,
                                        @Param("beforeCreateTime") LocalDateTime beforeCreateTime,
+                                       @Param("beforeId") Long beforeId,
                                        @Param("limit") int limit);
 
     @Select("""
@@ -89,6 +94,32 @@ public interface CommentMapper extends BaseMapper<CommentPO> {
     List<CommentPO> selectPreviewRepliesByRootIds(@Param("postId") Long postId,
                                                   @Param("rootIds") List<Long> rootIds,
                                                   @Param("limitPerRoot") int limitPerRoot);
+
+    @Select("""
+            <script>
+            SELECT c.id, c.post_id, c.post_author_id, c.author_id, c.root_id, c.parent_id,
+                   c.reply_to_uid, c.content, c.like_count, c.helpful_count,
+                   c.comment_status, c.create_time, c.update_time, c.is_deleted
+            FROM t_int_comment c
+            WHERE c.post_id = #{postId}
+              AND c.root_id = #{rootId}
+              AND c.comment_status = 1
+              AND c.is_deleted = 0
+              <if test="afterCreateTime != null">
+                AND (
+                  c.create_time &gt; #{afterCreateTime}
+                  OR (#{afterId} IS NOT NULL AND c.create_time = #{afterCreateTime} AND c.id &gt; #{afterId})
+                )
+              </if>
+            ORDER BY c.create_time ASC, c.id ASC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CommentPO> selectRepliesByRootId(@Param("postId") Long postId,
+                                          @Param("rootId") Long rootId,
+                                          @Param("afterCreateTime") LocalDateTime afterCreateTime,
+                                          @Param("afterId") Long afterId,
+                                          @Param("limit") int limit);
 
     @Select("""
             <script>

@@ -332,7 +332,7 @@ public class KnowledgeRelationService {
                 .source("series")
                 .previewSource(PREVIEW_REMOTE)
                 .sourceNote("From public content series")
-                .targetHref("/series/" + series.getId())
+                .targetHref("/collections/" + series.getId())
                 .domain(series.getDomain())
                 .updatedAt(series.getUpdateTime() == null ? now : series.getUpdateTime())
                 .build();

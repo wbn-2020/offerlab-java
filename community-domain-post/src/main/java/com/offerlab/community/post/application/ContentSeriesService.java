@@ -5,6 +5,8 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.dto.ContentSeriesAddPostCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesDTO;
@@ -48,6 +50,7 @@ public class ContentSeriesService {
     private final PostFacade postFacade;
     private final SnowflakeIdGenerator idGenerator;
     private final MigrationCheckService migrationCheckService;
+    private final ContentModerationService contentModerationService;
 
     public List<ContentSeriesDTO> listMine(Long creatorUid) {
         requireUser(creatorUid);
@@ -69,13 +72,23 @@ public class ContentSeriesService {
     public ContentSeriesDTO create(ContentSeriesCreateCmd cmd, Long creatorUid) {
         requireUser(creatorUid);
         requireSchemaReady();
+        contentModerationService.requireUserCanPublish(creatorUid);
+        Long seriesId = idGenerator.nextId();
+        String title = requireTitle(cmd == null ? null : cmd.getTitle());
+        String description = clean(cmd == null ? null : cmd.getDescription(), 1000);
+        String coverUrl = normalizeCoverUrl(cmd == null ? null : cmd.getCoverUrl());
+        contentModerationService.checkContent(creatorUid,
+                ContentModerationService.SCOPE_CONTENT_SERIES,
+                ContentModerationService.SOURCE_CONTENT_SERIES,
+                seriesId,
+                title, description);
         ContentSeriesPO series = new ContentSeriesPO();
-        series.setId(idGenerator.nextId());
+        series.setId(seriesId);
         series.setCreatorUid(creatorUid);
-        series.setTitle(requireTitle(cmd == null ? null : cmd.getTitle()));
-        series.setDescription(clean(cmd == null ? null : cmd.getDescription(), 1000));
+        series.setTitle(title);
+        series.setDescription(description);
         series.setDomain(requireDomain(cmd == null ? null : cmd.getDomain()));
-        series.setCoverUrl(clean(cmd == null ? null : cmd.getCoverUrl(), 512));
+        series.setCoverUrl(coverUrl);
         series.setVisibility(normalizeVisibility(cmd == null ? null : cmd.getVisibility()));
         series.setCreateTime(LocalDateTime.now());
         series.setUpdateTime(LocalDateTime.now());
@@ -87,11 +100,20 @@ public class ContentSeriesService {
     public ContentSeriesDTO update(Long seriesId, ContentSeriesUpdateCmd cmd, Long operatorUid) {
         requireUser(operatorUid);
         requireSchemaReady();
+        contentModerationService.requireUserCanPublish(operatorUid);
         ContentSeriesPO series = requireOwnedSeries(seriesId, operatorUid);
-        series.setTitle(requireTitle(cmd == null ? null : cmd.getTitle()));
-        series.setDescription(clean(cmd == null ? null : cmd.getDescription(), 1000));
+        String title = requireTitle(cmd == null ? null : cmd.getTitle());
+        String description = clean(cmd == null ? null : cmd.getDescription(), 1000);
+        String coverUrl = normalizeCoverUrl(cmd == null ? null : cmd.getCoverUrl());
+        contentModerationService.checkContent(operatorUid,
+                ContentModerationService.SCOPE_CONTENT_SERIES,
+                ContentModerationService.SOURCE_CONTENT_SERIES,
+                seriesId,
+                title, description);
+        series.setTitle(title);
+        series.setDescription(description);
         series.setDomain(requireDomain(cmd == null ? null : cmd.getDomain()));
-        series.setCoverUrl(clean(cmd == null ? null : cmd.getCoverUrl(), 512));
+        series.setCoverUrl(coverUrl);
         series.setVisibility(normalizeVisibility(cmd == null ? null : cmd.getVisibility()));
         series.setUpdateTime(LocalDateTime.now());
         contentSeriesMapper.updateById(series);
@@ -357,6 +379,14 @@ public class ContentSeriesService {
             return visibility;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static String normalizeCoverUrl(String coverUrl) {
+        String value = clean(coverUrl, 512);
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return ExternalUrlSafety.requireSafeHttpUrl(value, "coverUrl", 512);
     }
 
     private static int normalizePageSize(int size) {

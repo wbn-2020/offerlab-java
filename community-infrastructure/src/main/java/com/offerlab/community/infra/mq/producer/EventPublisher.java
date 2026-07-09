@@ -81,9 +81,13 @@ public class EventPublisher {
             log.debug("spring event published: {}", event.getClass().getSimpleName());
 
         } catch (Exception e) {
-            log.error("failed to publish event: {}", event, e);
+            log.error("failed to publish event: eventType={}", safeEventType(event), e);
             throw new RuntimeException("Event publish failed", e);
         }
+    }
+
+    private static String safeEventType(Object event) {
+        return event == null ? "null" : event.getClass().getSimpleName();
     }
 
     /**

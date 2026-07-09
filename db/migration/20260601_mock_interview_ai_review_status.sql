@@ -1,8 +1,7 @@
--- 20260601_mock_interview_ai_review_status.sql
+﻿-- 20260601_mock_interview_ai_review_status.sql
 -- Non-destructive migration for async mock interview AI review state.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

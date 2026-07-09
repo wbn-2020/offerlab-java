@@ -5,12 +5,16 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.notification.api.NotificationFacade;
+import com.offerlab.community.notification.api.dto.NotificationReadAllResultDTO;
 import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,6 +30,7 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/v1/notifications")
 @RequiredArgsConstructor
+@Validated
 public class NotificationController {
 
     static final int MAX_READ_BATCH_SIZE = 200;
@@ -33,9 +38,10 @@ public class NotificationController {
     private final NotificationFacade facade;
 
     @GetMapping
-    public Result<PageResult<NotificationListItemResponse>> list(@RequestParam(required = false) String type,
-                                                                 @RequestParam(defaultValue = "0") long cursor,
-                                                                 @RequestParam(defaultValue = "20") int size) {
+    @RateLimit(key = "'notification:list:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<NotificationListItemResponse>> list(@RequestParam(required = false) @Size(max = 32) String type,
+                                                                 @RequestParam(defaultValue = "0") @Size(max = 64) String cursor,
+                                                                 @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         PageResult<Map<String, Object>> page = facade.listNotifications(UserContext.require(), type, cursor, size);
         List<NotificationListItemResponse> items = page.getItems() == null ? List.of() : page.getItems().stream()
                 .map(this::toResponse)
@@ -51,27 +57,28 @@ public class NotificationController {
     }
 
     @GetMapping("/unread-count")
+    @RateLimit(key = "'notification:unread-count:' + #uid", rate = 180, per = 60, failOpen = false)
     public Result<Map<String, Long>> unreadCount() {
         return Result.ok(facade.getUnreadCountByType(UserContext.require()));
     }
 
     @GetMapping("/realtime-status")
+    @RateLimit(key = "'notification:realtime-status:' + #uid", rate = 180, per = 60, failOpen = false)
     public Result<NotificationRealtimeStatusDTO> realtimeStatus() {
         return Result.ok(facade.getRealtimeStatus(UserContext.require()));
     }
 
     @PostMapping("/read")
-    @RateLimit(key = "'notification:read:' + #uid", rate = 120, per = 60)
+    @RateLimit(key = "'notification:read:' + #uid", rate = 120, per = 60, failOpen = false)
     public Result<Void> read(@Valid @RequestBody ReadReq req) {
         facade.markAsRead(UserContext.require(), req == null ? List.of() : req.getIds());
         return Result.ok();
     }
 
     @PostMapping("/read-all")
-    @RateLimit(key = "'notification:read-all:' + #uid", rate = 20, per = 60)
-    public Result<Void> readAll() {
-        facade.markAllAsRead(UserContext.require());
-        return Result.ok();
+    @RateLimit(key = "'notification:read-all:' + #uid", rate = 20, per = 60, failOpen = false)
+    public Result<NotificationReadAllResultDTO> readAll() {
+        return Result.ok(facade.markAllAsRead(UserContext.require()));
     }
 
     public static class ReadReq {

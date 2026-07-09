@@ -71,8 +71,8 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             if (type.isInstance(l1Value)) {
                 return type.cast(l1Value);
             }
-            log.warn("L1 cache type mismatch for key: {}, expected: {}, actual: {}",
-                    key, type.getName(), l1Value.getClass().getName());
+            log.warn("L1 cache type mismatch, keyRef={}, expected={}, actual={}",
+                    safeCacheKey(key), type.getName(), l1Value.getClass().getName());
             l1Cache.invalidate(key);
         }
 
@@ -83,13 +83,13 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
                 return cached;
             }
         } catch (Exception e) {
-            log.warn("L2 cache read failed before lock, key={}, fallback to loader protection: {}", key, e.getMessage());
+            log.warn("L2 cache read failed before lock, keyRef={}, fallback to loader protection: {}", safeCacheKey(key), e.getMessage());
         }
 
         // L2 未命中后再进入击穿保护
         String lockKey = CacheKeyBuilder.cacheLock(key);
         if (redisson == null) {
-            log.warn("L2 cache lock unavailable, key={}, fallback to loader", key);
+            log.warn("L2 cache lock unavailable, keyRef={}, fallback to loader", safeCacheKey(key));
             return loadAndCache(key, loader, type);
         }
         RLock lock = null;
@@ -98,7 +98,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             lock = redisson.getLock(lockKey);
             locked = lock.tryLock(3, 30, TimeUnit.SECONDS);
             if (!locked) {
-                log.warn("Failed to acquire lock for key: {}, rechecking L2 before loader", key);
+                log.warn("Failed to acquire cache lock, keyRef={}, rechecking L2 before loader", safeCacheKey(key));
                 try {
                     String l2Value = redisTemplate.opsForValue().get(key);
                     V cached = fromL2Value(key, l2Value, type, l1Cache);
@@ -106,7 +106,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
                         return cached;
                     }
                 } catch (Exception e) {
-                    log.warn("L2 cache recheck failed after lock miss, key={}: {}", key, e.getMessage());
+                    log.warn("L2 cache recheck failed after lock miss, keyRef={}: {}", safeCacheKey(key), e.getMessage());
                 }
                 return loadAndCache(key, loader, type);
             }
@@ -122,10 +122,10 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             return loadAndCache(key, loader, type);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.error("Interrupted while acquiring lock for key: {}", key, e);
+            log.error("Interrupted while acquiring cache lock, keyRef={}", safeCacheKey(key), e);
             return loadAndCache(key, loader, type);
         } catch (Exception e) {
-            log.warn("L2 cache lock degraded, key={}, fallback to loader: {}", key, e.getMessage());
+            log.warn("L2 cache lock degraded, keyRef={}, fallback to loader: {}", safeCacheKey(key), e.getMessage());
             return loadAndCache(key, loader, type);
         } finally {
             if (locked && lock != null) {
@@ -134,7 +134,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
                         lock.unlock();
                     }
                 } catch (Exception e) {
-                    log.warn("L2 cache lock release failed, key={}: {}", key, e.getMessage());
+                    log.warn("L2 cache lock release failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
                 }
             }
         }
@@ -162,13 +162,13 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
         try {
             redisTemplate.delete(key);
         } catch (Exception e) {
-            log.warn("L2 cache delete failed, key={}: {}", key, e.getMessage());
+            log.warn("L2 cache delete failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
         }
         // 广播失效消息
         try {
             redisTemplate.convertAndSend(CacheKeyBuilder.cacheEvictChannel(), key);
         } catch (Exception e) {
-            log.warn("L2 cache eviction publish failed, key={}: {}", key, e.getMessage());
+            log.warn("L2 cache eviction publish failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
         }
     }
 
@@ -179,7 +179,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             try {
                 redisTemplate.opsForValue().set(key, NULL_MARKER, Duration.ofSeconds(60));
             } catch (Exception e) {
-                log.warn("L2 null cache write failed, key={}: {}", key, e.getMessage());
+                log.warn("L2 null cache write failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
             }
         } else {
             String serialized = serialize(value);
@@ -187,7 +187,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
                 try {
                     redisTemplate.opsForValue().set(key, serialized, withJitter(ttl));
                 } catch (Exception e) {
-                    log.warn("L2 cache write failed, key={}: {}", key, e.getMessage());
+                    log.warn("L2 cache write failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
                 }
             }
         }
@@ -206,7 +206,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             try {
                 redisTemplate.opsForValue().set(key, NULL_MARKER, Duration.ofSeconds(60));
             } catch (Exception e) {
-                log.warn("L2 null cache write failed, key={}: {}", key, e.getMessage());
+                log.warn("L2 null cache write failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
             }
         } else {
             // 缓存到 L1 和 L2
@@ -216,7 +216,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
                 try {
                     redisTemplate.opsForValue().set(key, serialized, withJitter(DEFAULT_TTL));
                 } catch (Exception e) {
-                    log.warn("L2 cache write failed, key={}: {}", key, e.getMessage());
+                    log.warn("L2 cache write failed, keyRef={}: {}", safeCacheKey(key), e.getMessage());
                 }
             }
         }
@@ -258,8 +258,12 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
         try {
             return objectMapper.readValue(json, type);
         } catch (Exception e) {
-            log.error("Failed to deserialize value: {}", json, e);
+            log.error("Failed to deserialize cached value, type={}", type.getName(), e);
             return null;
         }
+    }
+
+    private static String safeCacheKey(String key) {
+        return key == null ? "null" : "hash=" + Integer.toHexString(key.hashCode()) + ",len=" + key.length();
     }
 }

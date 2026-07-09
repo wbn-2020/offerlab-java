@@ -137,7 +137,7 @@ class ExpertCertificationServiceTest {
         po.setDomain(Post.DOMAIN_CAREER);
         po.setStatus(ExpertCertificationService.STATUS_REVOKED);
         po.setEvidenceSummary("career pilot");
-        po.setEvidenceLinksJson("[\"https://example.test/post/3001\"]");
+        po.setEvidenceLinksJson("[\"https://example.com/post/3001\"]");
         po.setEligibilityPassed(1);
         po.setEligibilitySummary("eligible");
         po.setRiskAcknowledged(0);
@@ -176,7 +176,7 @@ class ExpertCertificationServiceTest {
         po.setDomain(Post.DOMAIN_CAREER);
         po.setStatus(ExpertCertificationService.STATUS_REJECTED);
         po.setEvidenceSummary("career pilot");
-        po.setEvidenceLinksJson("[\"https://example.test/post/3002\"]");
+        po.setEvidenceLinksJson("[\"https://example.com/post/3002\"]");
         po.setEligibilityPassed(1);
         po.setEligibilitySummary("eligible");
         po.setRiskAcknowledged(0);
@@ -284,7 +284,7 @@ class ExpertCertificationServiceTest {
         ExpertCertificationApplyCmd cmd = new ExpertCertificationApplyCmd();
         cmd.setDomain(Post.DOMAIN_INVESTMENT);
         cmd.setEvidenceSummary("three public investment education posts");
-        cmd.setEvidenceLinks(List.of("https://example.test/post/1", "https://example.test/post/2"));
+        cmd.setEvidenceLinks(List.of("https://example.com/post/1", "https://example.com/post/2"));
         cmd.setRiskAcknowledged(riskAcknowledged);
         return cmd;
     }
@@ -293,7 +293,7 @@ class ExpertCertificationServiceTest {
         ExpertCertificationApplyCmd cmd = new ExpertCertificationApplyCmd();
         cmd.setDomain(Post.DOMAIN_CAREER);
         cmd.setEvidenceSummary("career coaching pilot");
-        cmd.setEvidenceLinks(List.of("https://example.test/post/9"));
+        cmd.setEvidenceLinks(List.of("https://example.com/post/9"));
         cmd.setRiskAcknowledged(false);
         return cmd;
     }

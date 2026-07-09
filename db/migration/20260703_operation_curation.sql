@@ -1,7 +1,6 @@
 -- 20260703_operation_curation.sql
 -- Non-destructive migration for community operations curation workflow.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_operation_curation_item (
     id              BIGINT       NOT NULL PRIMARY KEY,
@@ -15,7 +14,8 @@ CREATE TABLE IF NOT EXISTS t_operation_curation_item (
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
-    UNIQUE KEY uk_operation_curation_source (source_type, source_id, is_deleted),
+    active_guard    TINYINT GENERATED ALWAYS AS (CASE WHEN is_deleted = 0 THEN 1 ELSE NULL END) STORED,
+    UNIQUE KEY uk_operation_curation_source (source_type, source_id, active_guard),
     KEY idx_operation_curation_status_sort (item_status, sort_order, update_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Community operations curation pool';
 
@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS t_operation_slot_item (
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
-    UNIQUE KEY uk_operation_slot_source (slot_id, source_type, source_id, is_deleted),
+    active_guard    TINYINT GENERATED ALWAYS AS (CASE WHEN is_deleted = 0 THEN 1 ELSE NULL END) STORED,
+    UNIQUE KEY uk_operation_slot_source (slot_id, source_type, source_id, active_guard),
     KEY idx_operation_slot_item_slot_sort (slot_id, item_status, sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Community operations slot item';
 

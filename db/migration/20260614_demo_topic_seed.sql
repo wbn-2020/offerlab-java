@@ -1,24 +1,23 @@
--- 20260614_demo_topic_seed.sql
+﻿-- 20260614_demo_topic_seed.sql
 -- Non-destructive demo topic seed for existing local OfferLab databases.
 -- Review before running; this script only upserts deterministic demo rows.
 SET NAMES utf8mb4;
-USE offerlab;
 
 INSERT INTO t_community_topic (
     id, slug, topic_name, description, topic_type, cover_url,
     sort_order, featured, topic_status, created_by, updated_by
 ) VALUES
-    (990500000000000001, 'java-backend-roadmap', 'Java 后端成长路线',
-     '串联 Spring、MySQL、Redis、Kafka 和 JVM 高频面试复盘，适合本地演示专题聚合与关注。',
+    (990500000000000001, 'java-backend-roadmap', 'Java 鍚庣鎴愰暱璺嚎',
+     '涓茶仈 Spring銆丮ySQL銆丷edis銆並afka 鍜?JVM 楂橀闈㈣瘯澶嶇洏锛岄€傚悎鏈湴婕旂ず涓撻鑱氬悎涓庡叧娉ㄣ€?,
      'tech_stack', NULL, 100, 1, 1, 990000000000000001, 990000000000000001),
-    (990500000000000002, 'redis-cache-consistency', 'Redis 缓存一致性',
-     '聚合缓存穿透、击穿、双写一致性、热点重建和降级补偿相关帖子。',
+    (990500000000000002, 'redis-cache-consistency', 'Redis 缂撳瓨涓€鑷存€?,
+     '鑱氬悎缂撳瓨绌块€忋€佸嚮绌裤€佸弻鍐欎竴鑷存€с€佺儹鐐归噸寤哄拰闄嶇骇琛ュ伩鐩稿叧甯栧瓙銆?,
      'scenario', NULL, 90, 1, 1, 990000000000000001, 990000000000000001),
-    (990500000000000003, 'kafka-reliability', 'Kafka 稳定性治理',
-     '覆盖消息幂等、Outbox、堆积排查、重试死信和消费者延迟观测。',
+    (990500000000000003, 'kafka-reliability', 'Kafka 绋冲畾鎬ф不鐞?,
+     '瑕嗙洊娑堟伅骞傜瓑銆丱utbox銆佸爢绉帓鏌ャ€侀噸璇曟淇″拰娑堣垂鑰呭欢杩熻娴嬨€?,
      'scenario', NULL, 80, 1, 1, 990000000000000001, 990000000000000001),
-    (990500000000000004, 'elasticsearch-search-index', '搜索与索引诊断',
-     '围绕 Elasticsearch 索引、搜索降级、召回诊断和重建补偿做专题演示。',
+    (990500000000000004, 'elasticsearch-search-index', '鎼滅储涓庣储寮曡瘖鏂?,
+     '鍥寸粫 Elasticsearch 绱㈠紩銆佹悳绱㈤檷绾с€佸彫鍥炶瘖鏂拰閲嶅缓琛ュ伩鍋氫笓棰樻紨绀恒€?,
      'tech_stack', NULL, 70, 1, 1, 990000000000000001, 990000000000000001)
 ON DUPLICATE KEY UPDATE
     topic_name = VALUES(topic_name),

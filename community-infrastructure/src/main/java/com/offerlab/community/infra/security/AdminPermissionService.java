@@ -26,14 +26,17 @@ public class AdminPermissionService {
     private final Set<Long> adminUids;
     private final AdminRoleMapper adminRoleMapper;
     private final boolean localOpenEnabled;
+    private final String localOpenToken;
     private final Environment environment;
 
     public AdminPermissionService(@Value("${offerlab.admin.uid-whitelist:${OFFERLAB_ADMIN_UIDS:}}") String whitelist,
                                   @Value("${offerlab.admin.local-open-enabled:${OFFERLAB_ADMIN_LOCAL_OPEN_ENABLED:false}}") boolean localOpenEnabled,
+                                  @Value("${offerlab.admin.local-open-token:${OFFERLAB_ADMIN_LOCAL_OPEN_TOKEN:}}") String localOpenToken,
                                   AdminRoleMapper adminRoleMapper,
                                   Environment environment) {
         this.adminUids = parseWhitelist(whitelist);
         this.localOpenEnabled = localOpenEnabled;
+        this.localOpenToken = localOpenToken == null ? "" : localOpenToken.trim();
         this.adminRoleMapper = adminRoleMapper;
         this.environment = environment;
     }
@@ -86,8 +89,10 @@ public class AdminPermissionService {
 
     public boolean isLocalOpenMode() {
         return localOpenEnabled
+                && StringUtils.hasText(localOpenToken)
                 && isLocalBootstrapProfile()
                 && isLoopbackRequest()
+                && hasLocalOpenToken()
                 && adminUids.isEmpty()
                 && (!adminTableExists() || countAdminRows() == 0);
     }
@@ -129,7 +134,8 @@ public class AdminPermissionService {
     }
 
     private boolean isLocalBootstrapProfile() {
-        return environment.matchesProfiles("local", "dev", "test");
+        return environment.matchesProfiles("local")
+                && !environment.matchesProfiles("prod", "acceptance", "staging", "test");
     }
 
     private boolean isLoopbackRequest() {
@@ -151,6 +157,15 @@ public class AdminPermissionService {
         } catch (Exception e) {
             return "localhost".equalsIgnoreCase(remoteAddr);
         }
+    }
+
+    private boolean hasLocalOpenToken() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        if (!(attributes instanceof ServletRequestAttributes servletAttributes)) {
+            return false;
+        }
+        String token = servletAttributes.getRequest().getHeader("X-OfferLab-Local-Open-Token");
+        return localOpenToken.equals(token);
     }
 
     public void requireStrictAdmin(Long uid) {

@@ -1,8 +1,7 @@
--- 20260524_ops_governance.sql
+﻿-- 20260524_ops_governance.sql
 -- Non-destructive migration for existing OfferLab databases.
 -- Review before running. It only creates tables or indexes when missing.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_admin_audit_log (
     id              BIGINT        NOT NULL PRIMARY KEY,
@@ -24,7 +23,7 @@ CREATE TABLE IF NOT EXISTS t_moderation_keyword (
     keyword         VARCHAR(128) NOT NULL,
     match_type      VARCHAR(16)  NOT NULL DEFAULT 'CONTAINS' COMMENT 'CONTAINS / EXACT',
     action          VARCHAR(16)  NOT NULL DEFAULT 'BLOCK' COMMENT 'BLOCK / REVIEW',
-    scope           VARCHAR(32)  NOT NULL DEFAULT 'ALL' COMMENT 'ALL / POST / COMMENT / REPORT',
+    scope           VARCHAR(32)  NOT NULL DEFAULT 'ALL' COMMENT 'ALL / POST / COMMENT / REPORT / CONTACT_REQUEST / CONTENT_SERIES / PROFILE',
     enabled         TINYINT      NOT NULL DEFAULT 1,
     remark          VARCHAR(200) NOT NULL DEFAULT '',
     operator_uid    BIGINT       NULL,

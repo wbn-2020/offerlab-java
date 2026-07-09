@@ -25,4 +25,11 @@ public class UserBriefDTO {
     private Boolean intentVisible;
     /** 资料受限时给前端展示的原因 */
     private String privacyReason;
+    /** Whether this user currently accepts lightweight contact requests. */
+    private Boolean acceptContactRequest;
+    /** Contact request policy: all/following/mutual/off. */
+    private String contactRequestPolicy;
+    private Boolean canStartContactRequest;
+    private String contactRequestReasonCode;
+    private String contactRequestReasonMessage;
 }

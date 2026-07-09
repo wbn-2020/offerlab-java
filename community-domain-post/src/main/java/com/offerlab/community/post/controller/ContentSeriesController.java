@@ -4,12 +4,14 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.dto.ContentSeriesAddPostCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesDTO;
 import com.offerlab.community.post.api.dto.ContentSeriesUpdateCmd;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.application.ContentSeriesService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -40,46 +42,60 @@ public class ContentSeriesController {
 
     @PublicApi
     @GetMapping("/{seriesId}")
-    public Result<ContentSeriesDTO> getPublicDetail(@PathVariable Long seriesId) {
+    @RateLimit(key = "'public:content-series:detail:' + #seriesId + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<ContentSeriesDTO> getPublicDetail(@PathVariable Long seriesId,
+                                                    HttpServletRequest request) {
         return Result.ok(contentSeriesService.getPublicDetail(seriesId));
     }
 
     @PublicApi
     @GetMapping("/{seriesId}/posts")
+    @RateLimit(key = "'public:content-series:posts:' + #seriesId + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<PostBriefDTO>> listPublicPosts(@PathVariable Long seriesId,
                                                             @RequestParam(defaultValue = "0") long cursor,
-                                                            @RequestParam(defaultValue = "20") @Min(1) @Max(30) int size) {
+                                                            @RequestParam(defaultValue = "20") @Min(1) @Max(30) int size,
+                                                            HttpServletRequest request) {
         return Result.ok(contentSeriesService.listPublicPosts(seriesId, cursor, size));
     }
 
     @PublicApi
     @GetMapping("/users/{uid}")
+    @RateLimit(key = "'public:content-series:user:' + #uid + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<List<ContentSeriesDTO>> listPublicByUser(@PathVariable Long uid,
                                                            @RequestParam(defaultValue = "0") long cursor,
-                                                           @RequestParam(defaultValue = "12") @Min(1) @Max(30) int size) {
+                                                           @RequestParam(defaultValue = "12") @Min(1) @Max(30) int size,
+                                                           HttpServletRequest request) {
         return Result.ok(contentSeriesService.listPublicByUser(uid, cursor, size));
     }
 
     @PostMapping
+    @RateLimit(key = "'content-series:create:' + #uid", rate = 20, per = 300, failOpen = false)
     public Result<ContentSeriesDTO> create(@Valid @RequestBody ContentSeriesCreateCmd cmd) {
-        return Result.ok(contentSeriesService.create(cmd, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(contentSeriesService.create(cmd, uid));
     }
 
     @PutMapping("/{seriesId}")
+    @RateLimit(key = "'content-series:update:' + #uid", rate = 40, per = 300, failOpen = false)
     public Result<ContentSeriesDTO> update(@PathVariable Long seriesId,
                                            @Valid @RequestBody ContentSeriesUpdateCmd cmd) {
-        return Result.ok(contentSeriesService.update(seriesId, cmd, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(contentSeriesService.update(seriesId, cmd, uid));
     }
 
     @PostMapping("/{seriesId}/posts")
+    @RateLimit(key = "'content-series:add-post:' + #uid", rate = 60, per = 300, failOpen = false)
     public Result<ContentSeriesDTO> addPost(@PathVariable Long seriesId,
                                             @Valid @RequestBody ContentSeriesAddPostCmd cmd) {
-        return Result.ok(contentSeriesService.addPost(seriesId, cmd, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(contentSeriesService.addPost(seriesId, cmd, uid));
     }
 
     @DeleteMapping("/{seriesId}/posts/{postId}")
+    @RateLimit(key = "'content-series:remove-post:' + #uid", rate = 60, per = 300, failOpen = false)
     public Result<ContentSeriesDTO> removePost(@PathVariable Long seriesId,
                                                @PathVariable Long postId) {
-        return Result.ok(contentSeriesService.removePost(seriesId, postId, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(contentSeriesService.removePost(seriesId, postId, uid));
     }
 }

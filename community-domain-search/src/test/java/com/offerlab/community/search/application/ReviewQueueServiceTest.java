@@ -7,10 +7,13 @@ import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
+import com.offerlab.community.infra.review.ReviewQueueSourceDomainResolver;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.search.api.dto.ReviewQueueCreateCmd;
 import com.offerlab.community.search.infrastructure.persistence.mapper.ReviewQueueMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.ReviewQueueItemPO;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.env.StandardEnvironment;
 
 import java.lang.reflect.Proxy;
 import java.util.LinkedHashMap;
@@ -36,12 +39,14 @@ class ReviewQueueServiceTest {
     }
 
     @Test
-    void sourceUpsertSkipsWriteWhenReadinessIsBlocked() {
+    void sourceUpsertFailsClosedWhenReadinessIsBlocked() {
         ReviewQueueMapperState mapperState = new ReviewQueueMapperState(1);
         ReviewQueueService service = newService(mapperState, new MigrationCheckStub(false));
 
-        service.upsert(new ReviewQueueItemCommand("POST_REPORT", 9001L, "title", "summary", "high", 7L, 10, "{}", "note"));
+        BizException ex = assertThrows(BizException.class,
+                () -> service.upsert(new ReviewQueueItemCommand("POST_REPORT", 9001L, "title", "summary", "high", 7L, 10, "{}", "note")));
 
+        assertEquals(ErrorCode.DATABASE_ERROR.getCode(), ex.getCode());
         assertEquals(0, mapperState.upsertCalls);
         assertEquals(0, mapperState.itemsById.size());
     }
@@ -93,7 +98,10 @@ class ReviewQueueServiceTest {
                 new SnowflakeIdGenerator(),
                 new AdminAuditStub(),
                 migrationCheckService,
-                sourceActionHandlers
+                sourceActionHandlers,
+                List.<ReviewQueueSourceDomainResolver>of(),
+                new AdminPermissionStub(),
+                null
         );
     }
 
@@ -221,6 +229,27 @@ class ReviewQueueServiceTest {
         @Override
         public void recordRequired(Long operatorUid, String action, String resourceType, Object resourceId,
                                    Object before, Object after, String remark) {
+        }
+    }
+
+    private static final class AdminPermissionStub extends AdminPermissionService {
+        private AdminPermissionStub() {
+            super("", false, "test-local-open-token", null, new StandardEnvironment());
+        }
+
+        @Override
+        public boolean isAdmin(Long uid) {
+            return true;
+        }
+
+        @Override
+        public boolean hasRole(Long uid, String roleCode) {
+            return false;
+        }
+
+        @Override
+        public boolean isLocalOpenMode() {
+            return false;
         }
     }
 

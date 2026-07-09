@@ -1,7 +1,6 @@
--- Non-destructive migration for mock interview AI review transparency fields.
+﻿-- Non-destructive migration for mock interview AI review transparency fields.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

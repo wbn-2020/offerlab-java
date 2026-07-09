@@ -1,7 +1,6 @@
--- 08_privacy.sql
+﻿-- 08_privacy.sql
 -- User privacy settings.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_user_privacy_setting (
     user_id                  BIGINT      NOT NULL PRIMARY KEY,

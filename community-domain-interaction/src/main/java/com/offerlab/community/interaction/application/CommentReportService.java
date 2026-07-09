@@ -32,7 +32,11 @@ import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -82,8 +86,6 @@ public class CommentReportService {
         if (postFacade.getPost(comment.getPostId(), reporterUid) == null) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
-        contentModerationService.requireUserCanPublish(reporterUid);
-        contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT, reason, detail);
         if (reportMapper.findPendingByReporter(commentId, reporterUid) != null) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
@@ -92,6 +94,9 @@ public class CommentReportService {
         }
 
         long reportId = idGen.nextId();
+        contentModerationService.requireUserCanPublish(reporterUid);
+        contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT,
+                ContentModerationService.SOURCE_REPORT, reportId, reason, detail);
         CommentReportPO po = new CommentReportPO();
         po.setId(reportId);
         po.setCommentId(commentId);
@@ -117,8 +122,15 @@ public class CommentReportService {
         Integer effectiveStatus = status == null ? null : requireKnownStatus(status);
         int safeLimit = clampLimit(limit);
         int queryLimit = includeTestData ? safeLimit : clampLimit(safeLimit * 5);
-        return reportMapper.selectRecent(effectiveStatus, domain, queryLimit).stream()
-                .map(this::toDto)
+        List<CommentReportPO> reports = reportMapper.selectRecent(effectiveStatus, domain, queryLimit);
+        Map<Long, CommentPO> commentsById = loadCommentsByIds(reports.stream()
+                .map(CommentReportPO::getCommentId)
+                .collect(Collectors.toSet()));
+        Map<Long, Post> postsById = postRepo.batchFindByIds(reports.stream()
+                .map(CommentReportPO::getPostId)
+                .collect(Collectors.toSet()));
+        return reports.stream()
+                .map(po -> toDto(po, commentsById.get(po.getCommentId()), postsById.get(po.getPostId())))
                 .filter(dto -> includeTestData || !isSyntheticReport(dto))
                 .limit(safeLimit)
                 .toList();
@@ -320,6 +332,13 @@ public class CommentReportService {
         }
         CommentPO comment = commentMapper.selectById(po.getCommentId());
         Post post = postRepo.findById(po.getPostId()).orElse(null);
+        return toDto(po, comment, post);
+    }
+
+    private CommentReportDTO toDto(CommentReportPO po, CommentPO comment, Post post) {
+        if (po == null) {
+            return null;
+        }
         return CommentReportDTO.builder()
                 .id(po.getId())
                 .commentId(po.getCommentId())
@@ -368,6 +387,17 @@ public class CommentReportService {
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .build();
+    }
+
+    private Map<Long, CommentPO> loadCommentsByIds(Collection<Long> commentIds) {
+        Set<Long> ids = commentIds == null ? Set.of() : commentIds.stream()
+                .filter(id -> id != null && id > 0)
+                .collect(Collectors.toCollection(HashSet::new));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return commentMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(CommentPO::getId, comment -> comment, (left, right) -> left));
     }
 
     private boolean isVisibleComment(CommentPO comment) {

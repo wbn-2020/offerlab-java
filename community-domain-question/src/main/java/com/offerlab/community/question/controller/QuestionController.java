@@ -17,6 +17,7 @@ import com.offerlab.community.question.api.dto.UserPrepOverviewDTO;
 import com.offerlab.community.question.api.dto.UserWeeklyPrepReportDTO;
 import com.offerlab.community.question.application.QuestionFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -48,6 +49,7 @@ public class QuestionController {
 
     @PublicApi
     @GetMapping("/questions")
+    @RateLimit(key = "'public:questions:list:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<QuestionDTO>> list(@RequestParam(required = false) @Size(max = 100) String keyword,
                                                 @RequestParam(required = false) @Size(max = 128) String company,
                                                 @RequestParam(required = false) @Size(max = 128) String position,
@@ -58,14 +60,15 @@ public class QuestionController {
                                                 @RequestParam(required = false) Boolean hasNote,
                                                 @RequestParam(required = false) Boolean hasAnswerDraft,
                                                 @RequestParam(required = false) Boolean hasStarStory,
-                                                @RequestParam(required = false) List<Long> tagIds,
+                                                @RequestParam(required = false) @Size(max = 20) List<Long> tagIds,
                                                 @RequestParam(required = false)
                                                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
                                                 @RequestParam(required = false)
                                                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
                                                 @RequestParam(required = false) @Size(max = 16) String sort,
                                                 @RequestParam(defaultValue = "1") @Min(1) Integer page,
-                                                @RequestParam(defaultValue = "20") @Min(1) @Max(50) Integer pageSize) {
+                                                @RequestParam(defaultValue = "20") @Min(1) @Max(50) Integer pageSize,
+                                                HttpServletRequest request) {
         QuestionQuery query = new QuestionQuery();
         query.setKeyword(keyword);
         query.setCompany(company);
@@ -88,7 +91,9 @@ public class QuestionController {
 
     @PublicApi
     @GetMapping("/questions/{id}")
-    public Result<QuestionDetailDTO> detail(@PathVariable Long id) {
+    @RateLimit(key = "'public:questions:detail:' + #id + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<QuestionDetailDTO> detail(@PathVariable Long id,
+                                            HttpServletRequest request) {
         return Result.ok(publicQuestionDetail(questionFacade.getQuestionDetail(id, UserContext.get(), false)));
     }
 
@@ -122,20 +127,26 @@ public class QuestionController {
 
     @PublicApi
     @GetMapping("/questions/{id}/related-posts")
-    public Result<List<PostBriefDTO>> relatedPosts(@PathVariable Long id) {
+    @RateLimit(key = "'public:questions:related-posts:' + #id + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<List<PostBriefDTO>> relatedPosts(@PathVariable Long id,
+                                                   HttpServletRequest request) {
         return Result.ok(questionFacade.getRelatedPosts(id));
     }
 
     @PublicApi
     @GetMapping("/companies/{company}/prep-pack")
-    public Result<CompanyPrepDTO> companyPrep(@PathVariable String company) {
+    @RateLimit(key = "'public:companies:prep-pack:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<CompanyPrepDTO> companyPrep(@PathVariable String company,
+                                              HttpServletRequest request) {
         return Result.ok(questionFacade.getCompanyPrep(company, UserContext.get()));
     }
 
     @PublicApi
     @GetMapping("/companies/suggest")
-    public Result<List<String>> suggestCompanies(@RequestParam(required = false, name = "q") String q,
-                                                 @RequestParam(defaultValue = "10") int size) {
+    @RateLimit(key = "'public:companies:suggest:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<List<String>> suggestCompanies(@RequestParam(required = false, name = "q") @Size(max = 100) String q,
+                                                 @RequestParam(defaultValue = "10") @Min(1) @Max(20) int size,
+                                                 HttpServletRequest request) {
         return Result.ok(questionFacade.suggestCompanies(q, size));
     }
 

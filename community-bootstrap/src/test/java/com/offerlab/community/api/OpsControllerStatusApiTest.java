@@ -234,7 +234,7 @@ class OpsControllerStatusApiTest {
                 .andExpect(jsonPath("$.data.localOpen").value(false));
 
         verify(domainModeratorService).listModeratedDomains(88L);
-        verify(adminPermissionService).hasRole(88L, AdminPermissionService.ROLE_OPS);
+        verify(adminPermissionService, org.mockito.Mockito.times(2)).hasRole(88L, AdminPermissionService.ROLE_OPS);
         verify(adminPermissionService).hasRole(88L, AdminPermissionService.ROLE_CONTENT_MODERATOR);
         verify(adminPermissionService).hasRole(88L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
     }

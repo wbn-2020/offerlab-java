@@ -1,7 +1,6 @@
--- Domain generated column for post extension hot filters and analytics.
+﻿-- Domain generated column for post extension hot filters and analytics.
 -- Non-destructive migration: adds a virtual generated column and index if missing.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

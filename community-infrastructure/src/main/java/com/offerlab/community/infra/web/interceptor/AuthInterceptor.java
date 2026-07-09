@@ -29,24 +29,6 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private static final String HEADER = "Authorization";
     private static final String PREFIX = "Bearer ";
-    private static final String[] STRICT_REVOCATION_PREFIXES = {
-            "/api/v1/admin",
-            "/api/v1/expert-certifications/admin",
-            "/api/v1/search/admin",
-            "/api/v1/operations/admin",
-            "/api/v1/ops",
-            "/api/v1/posts/admin",
-            "/api/v1/tags/admin",
-            "/api/v1/comments/admin",
-            "/api/v1/users/me",
-            "/api/v1/me",
-            "/api/v1/notifications",
-            "/api/v1/contact-requests",
-            "/api/v1/comments/reports",
-            "/api/v1/posts/reports",
-            "/api/v1/post-drafts",
-            "/api/v1/mock-interviews"
-    };
 
     private final JwtService jwtService;
 
@@ -83,10 +65,15 @@ public class AuthInterceptor implements HandlerInterceptor {
             }
         }
 
-        if (uid != null && revocationCheckDegraded && requiresStrictRevocation(request)) {
-            log.warn("jwt revocation check degraded for sensitive path: uid={} path={}",
+        if (uid != null && revocationCheckDegraded) {
+            if (!isPublic) {
+                log.warn("jwt revocation check degraded for protected path: uid={} path={}",
+                        LogMask.id(uid), request.getRequestURI());
+                throw new BizException(ErrorCode.UNAUTHORIZED);
+            }
+            log.warn("jwt revocation check degraded for public path, continue anonymously: uid={} path={}",
                     LogMask.id(uid), request.getRequestURI());
-            throw new BizException(ErrorCode.UNAUTHORIZED);
+            uid = null;
         }
 
         if (uid != null) {
@@ -98,23 +85,6 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
 
         return true;
-    }
-
-    private static boolean requiresStrictRevocation(HttpServletRequest request) {
-        if (!"GET".equalsIgnoreCase(request.getMethod())) {
-            return true;
-        }
-        String path = request.getRequestURI();
-        String contextPath = request.getContextPath();
-        if (StringUtils.hasText(contextPath) && path.startsWith(contextPath)) {
-            path = path.substring(contextPath.length());
-        }
-        for (String prefix : STRICT_REVOCATION_PREFIXES) {
-            if (path.equals(prefix) || path.startsWith(prefix + "/")) {
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override

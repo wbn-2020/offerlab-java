@@ -1,5 +1,4 @@
-SET NAMES utf8mb4;
-USE offerlab;
+﻿SET NAMES utf8mb4;
 
 DELIMITER $$
 

@@ -1,6 +1,5 @@
--- 04_notification.sql
+﻿-- 04_notification.sql
 SET NAMES utf8mb4;
-USE offerlab;
 
 DROP TABLE IF EXISTS t_notif_message;
 CREATE TABLE t_notif_message (
@@ -17,7 +16,9 @@ CREATE TABLE t_notif_message (
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
     UNIQUE KEY uk_notif_dedup (dedup_key),
     KEY idx_receiver_unread (receiver_uid, is_read, create_time),
-    KEY idx_receiver_type   (receiver_uid, notif_type, create_time)
+    KEY idx_receiver_type   (receiver_uid, notif_type, create_time),
+    KEY idx_receiver_list   (receiver_uid, is_deleted, notif_type, create_time, id),
+    KEY idx_receiver_unread_latest (receiver_uid, is_deleted, is_read, create_time, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='notifications';
 
 DROP TABLE IF EXISTS t_notif_retry_task;
@@ -41,5 +42,7 @@ CREATE TABLE t_notif_retry_task (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_notif_retry_dedup (dedup_key),
     KEY idx_notif_retry_due (task_status, next_retry_time),
+    KEY idx_notif_retry_claim (task_status, next_retry_time, create_time, id),
+    KEY idx_notif_retry_expired_claim (task_status, lock_until, create_time, id),
     KEY idx_notif_retry_lock (lock_owner, lock_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='notification retry tasks';

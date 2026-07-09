@@ -1,6 +1,5 @@
--- Add claim/lease columns for multi-instance outbox flushing.
+﻿-- Add claim/lease columns for multi-instance outbox flushing.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

@@ -66,16 +66,16 @@ public class SearchAnalyticsService {
         insertQuietly(event);
     }
 
-    public void recordCommunityRecommendClick(String keyword, String target) {
+    public boolean recordCommunityRecommendClick(String keyword, String target) {
         String cleanTarget = clean(target, 128);
         if (cleanTarget == null) {
-            return;
+            return false;
         }
         SearchAnalyticsEventPO event = baseEvent(EVENT_COMMUNITY_RECOMMEND_CLICK);
         event.setKeyword(clean(keyword, 100));
         event.setCompany(cleanTarget);
         event.setResultCount(0);
-        insertQuietly(event);
+        return insertQuietly(event);
     }
 
     public SearchAnalyticsDTO summary(int days, int limit) {
@@ -125,14 +125,16 @@ public class SearchAnalyticsService {
         return event;
     }
 
-    private void insertQuietly(SearchAnalyticsEventPO event) {
+    private boolean insertQuietly(SearchAnalyticsEventPO event) {
         try {
             if (tableReady()) {
                 mapper.insertEvent(event);
+                return true;
             }
         } catch (RuntimeException e) {
             log.debug("record search analytics failed: {}", e.getMessage());
         }
+        return false;
     }
 
     private boolean tableReady() {

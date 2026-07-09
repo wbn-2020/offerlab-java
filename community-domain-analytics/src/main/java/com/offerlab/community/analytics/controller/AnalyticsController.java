@@ -10,7 +10,9 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.domain.model.PostDomain;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,9 +32,11 @@ public class AnalyticsController {
 
     @PublicApi
     @GetMapping("/trend")
+    @RateLimit(key = "'public:dashboard:trend:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<Map<String, Object>> trend(@RequestParam(defaultValue = "30d") String range,
                                              @RequestParam(required = false) String period,
-                                             @RequestParam(required = false) Integer domain) {
+                                             @RequestParam(required = false) Integer domain,
+                                             HttpServletRequest request) {
         return Result.ok(facade.getTrendDashboard(period == null ? range : period, requireOptionalDomain(domain)));
     }
 

@@ -9,7 +9,7 @@ import lombok.Data;
 public class FeedFeedbackCmd {
     @NotNull
     private Long postId;
-    @Pattern(regexp = "not_interested|hide|dislike", message = "unsupported feedback action")
+    @Pattern(regexp = "not_interested|hide|dislike|less_like_this|hide_author|more_like_this", message = "unsupported feedback action")
     private String action;
     @Size(max = 200)
     private String reason;

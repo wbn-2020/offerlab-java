@@ -7,6 +7,9 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.Collection;
+import java.util.List;
+
 @Mapper
 public interface UserFollowMapper extends BaseMapper<UserFollowPO> {
 
@@ -19,6 +22,20 @@ public interface UserFollowMapper extends BaseMapper<UserFollowPO> {
             LIMIT 1
             """)
     UserFollowPO selectAnyByPair(@Param("fromUid") Long fromUid, @Param("toUid") Long toUid);
+
+    @Select("""
+            <script>
+            SELECT to_uid
+            FROM t_user_follow
+            WHERE from_uid = #{fromUid}
+              AND is_deleted = 0
+              AND to_uid IN
+              <foreach collection="toUids" item="toUid" open="(" separator="," close=")">
+                #{toUid}
+              </foreach>
+            </script>
+            """)
+    List<Long> selectFollowingTargets(@Param("fromUid") Long fromUid, @Param("toUids") Collection<Long> toUids);
 
     @Update("UPDATE t_user_follow SET is_deleted = 0 WHERE id = #{id} AND is_deleted = 1")
     int restoreById(@Param("id") Long id);

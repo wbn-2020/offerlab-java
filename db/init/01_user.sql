@@ -1,21 +1,20 @@
--- 01_user.sql
--- 用户域：账号、资料、关注关系、用户级计数器
--- 编码：utf8mb4
+﻿-- 01_user.sql
+-- 鐢ㄦ埛鍩燂細璐﹀彿銆佽祫鏂欍€佸叧娉ㄥ叧绯汇€佺敤鎴风骇璁℃暟鍣?
+-- 缂栫爜锛歶tf8mb4
 SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS offerlab DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-USE offerlab;
 
 -- ----------------------------
--- 用户账号
+-- 鐢ㄦ埛璐﹀彿
 -- ----------------------------
 DROP TABLE IF EXISTS t_user_account;
 CREATE TABLE t_user_account (
-    id              BIGINT       NOT NULL PRIMARY KEY COMMENT '用户ID（雪花）',
-    email           VARCHAR(128) NOT NULL COMMENT '邮箱',
+    id              BIGINT       NOT NULL PRIMARY KEY COMMENT '鐢ㄦ埛ID锛堥洩鑺憋級',
+    email           VARCHAR(128) NOT NULL COMMENT '閭',
     password_hash   VARCHAR(128) NOT NULL COMMENT 'bcrypt hash',
-    password_salt   VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '盐（bcrypt 自带，可不用）',
-    account_status  TINYINT      NOT NULL DEFAULT 1 COMMENT '1正常 2封禁 3未激活',
+    password_salt   VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '鐩愶紙bcrypt 鑷甫锛屽彲涓嶇敤锛?,
+    account_status  TINYINT      NOT NULL DEFAULT 1 COMMENT '1姝ｅ父 2灏佺 3鏈縺娲?,
     last_login_time DATETIME(3)  NULL,
     last_login_ip   VARCHAR(64)  NULL,
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -24,42 +23,44 @@ CREATE TABLE t_user_account (
     version         INT          NOT NULL DEFAULT 0,
     UNIQUE KEY uk_email (email, is_deleted),
     KEY idx_create_time (create_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户账号';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='鐢ㄦ埛璐﹀彿';
 
 -- ----------------------------
--- 用户资料 + 求职意向
+-- 鐢ㄦ埛璧勬枡 + 姹傝亴鎰忓悜
 -- ----------------------------
 DROP TABLE IF EXISTS t_user_profile;
 CREATE TABLE t_user_profile (
-    id              BIGINT       NOT NULL PRIMARY KEY COMMENT '同账号ID',
+    id              BIGINT       NOT NULL PRIMARY KEY COMMENT '鍚岃处鍙稩D',
     nickname        VARCHAR(64)  NOT NULL,
     avatar_url      VARCHAR(512) NULL,
     bio             VARCHAR(255) NULL,
-    intent_json     JSON         NULL COMMENT '求职意向',
+    intent_json     JSON         NULL COMMENT '姹傝亴鎰忓悜',
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
     version         INT          NOT NULL DEFAULT 0,
     KEY idx_nickname (nickname)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户资料';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='鐢ㄦ埛璧勬枡';
 
 -- ----------------------------
--- 关注关系
+-- 鍏虫敞鍏崇郴
 -- ----------------------------
 DROP TABLE IF EXISTS t_user_follow;
 CREATE TABLE t_user_follow (
     id              BIGINT       NOT NULL PRIMARY KEY,
-    from_uid        BIGINT       NOT NULL COMMENT '关注者',
-    to_uid          BIGINT       NOT NULL COMMENT '被关注者',
+    from_uid        BIGINT       NOT NULL COMMENT '鍏虫敞鑰?,
+    to_uid          BIGINT       NOT NULL COMMENT '琚叧娉ㄨ€?,
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '0关注中 1已取关',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '0鍏虫敞涓?1宸插彇鍏?,
     UNIQUE KEY uk_from_to (from_uid, to_uid),
     KEY idx_to_uid   (to_uid, create_time),
-    KEY idx_from_uid (from_uid, create_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关注关系';
+    KEY idx_from_uid (from_uid, create_time),
+    KEY idx_following_page (from_uid, is_deleted, id),
+    KEY idx_follower_page  (to_uid, is_deleted, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='鍏虫敞鍏崇郴';
 
 -- ----------------------------
--- 用户级计数器
+-- 鐢ㄦ埛绾ц鏁板櫒
 -- ----------------------------
 DROP TABLE IF EXISTS t_user_counter;
 CREATE TABLE t_user_counter (
@@ -70,23 +71,23 @@ CREATE TABLE t_user_counter (
     like_received   BIGINT       NOT NULL DEFAULT 0,
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     version         INT          NOT NULL DEFAULT 0
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户级计数器';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='鐢ㄦ埛绾ц鏁板櫒';
 
 -- ----------------------------
--- 用户任务状态
+-- 鐢ㄦ埛浠诲姟鐘舵€?
 -- ----------------------------
 CREATE TABLE IF NOT EXISTS t_user_task_state (
-    id                   BIGINT       NOT NULL PRIMARY KEY COMMENT '任务状态ID（雪花）',
-    uid                  BIGINT       NOT NULL COMMENT '用户ID',
-    task_type            VARCHAR(16)  NOT NULL COMMENT '任务类型：ONBOARDING / DAILY',
-    task_code            VARCHAR(64)  NOT NULL COMMENT '固定任务编码',
-    task_date            DATE         NOT NULL COMMENT '任务日期桶，onboarding 用锚点日期',
-    completed            TINYINT      NOT NULL DEFAULT 0 COMMENT '0未完成 1已完成',
-    complete_source      VARCHAR(64)  NULL COMMENT '完成来源',
-    complete_ref_id      BIGINT       NULL COMMENT '完成关联对象ID',
-    first_completed_time DATETIME(3)  NULL COMMENT '首次完成时间',
+    id                   BIGINT       NOT NULL PRIMARY KEY COMMENT '浠诲姟鐘舵€両D锛堥洩鑺憋級',
+    uid                  BIGINT       NOT NULL COMMENT '鐢ㄦ埛ID',
+    task_type            VARCHAR(16)  NOT NULL COMMENT '浠诲姟绫诲瀷锛歄NBOARDING / DAILY',
+    task_code            VARCHAR(64)  NOT NULL COMMENT '鍥哄畾浠诲姟缂栫爜',
+    task_date            DATE         NOT NULL COMMENT '浠诲姟鏃ユ湡妗讹紝onboarding 鐢ㄩ敋鐐规棩鏈?,
+    completed            TINYINT      NOT NULL DEFAULT 0 COMMENT '0鏈畬鎴?1宸插畬鎴?,
+    complete_source      VARCHAR(64)  NULL COMMENT '瀹屾垚鏉ユ簮',
+    complete_ref_id      BIGINT       NULL COMMENT '瀹屾垚鍏宠仈瀵硅薄ID',
+    first_completed_time DATETIME(3)  NULL COMMENT '棣栨瀹屾垚鏃堕棿',
     create_time          DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time          DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_user_task_scope_code_day (uid, task_type, task_code, task_date),
     KEY idx_user_task_scope_date (uid, task_type, task_date, completed)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户任务状态';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='鐢ㄦ埛浠诲姟鐘舵€?;

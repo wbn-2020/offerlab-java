@@ -1,7 +1,6 @@
--- Add durable retry tasks for Elasticsearch post index sync failures.
+﻿-- Add durable retry tasks for Elasticsearch post index sync failures.
 -- Non-destructive: creates a new compensation table only.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_search_index_retry_task (
     id              BIGINT       NOT NULL PRIMARY KEY,
@@ -18,6 +17,7 @@ CREATE TABLE IF NOT EXISTS t_search_index_retry_task (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_search_index_retry_dedup (dedup_key),
     KEY idx_search_index_retry_due (task_status, next_retry_time),
+    KEY idx_search_index_retry_claim (task_status, next_retry_time, create_time, id),
     KEY idx_search_index_retry_lock (lock_owner, lock_until),
     KEY idx_search_index_retry_post (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='search index retry tasks';

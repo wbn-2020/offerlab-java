@@ -1,8 +1,7 @@
--- 20260601_question_index_task.sql
+﻿-- 20260601_question_index_task.sql
 -- Durable task state for question index rebuild operations.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_question_index_task (
     task_id       VARCHAR(64)  NOT NULL PRIMARY KEY,

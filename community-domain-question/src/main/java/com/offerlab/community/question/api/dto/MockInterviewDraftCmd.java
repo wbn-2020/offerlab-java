@@ -17,6 +17,7 @@ public class MockInterviewDraftCmd {
     private Integer durationSeconds;
 
     @Valid
+    @Size(max = 50)
     private List<AnswerCmd> answers;
 
     @Data

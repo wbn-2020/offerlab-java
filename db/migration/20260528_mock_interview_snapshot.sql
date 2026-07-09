@@ -1,8 +1,7 @@
--- 20260528_mock_interview_snapshot.sql
+﻿-- 20260528_mock_interview_snapshot.sql
 -- Non-destructive migration for preserving mock interview question text after question re-extraction.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

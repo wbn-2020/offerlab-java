@@ -114,7 +114,12 @@ class PostReportServiceBatchLookupTest {
         }
 
         @Override
-        public void update(Post post) {
+        public boolean update(Post post) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean updateStatusIfCurrent(Long postId, Integer expectedStatus, Integer nextStatus, Integer expectedVersion) {
             throw new UnsupportedOperationException();
         }
 

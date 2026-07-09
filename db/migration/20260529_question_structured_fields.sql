@@ -1,8 +1,7 @@
--- 20260529_question_structured_fields.sql
+﻿-- 20260529_question_structured_fields.sql
 -- Non-destructive migration for richer AI extracted interview question structure.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

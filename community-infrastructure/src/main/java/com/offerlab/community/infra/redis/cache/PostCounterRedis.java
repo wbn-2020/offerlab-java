@@ -3,13 +3,18 @@ import com.offerlab.community.common.utils.LogMask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 帖子计数器 Redis 操作
@@ -34,6 +39,7 @@ public class PostCounterRedis {
     private static final String FIELD_COMMENT = "comment";
     private static final String FIELD_FAVORITE = "favorite";
     private static final String FIELD_SHARE = "share";
+    private static final int MAX_BATCH_GET_SIZE = 500;
 
     public record CounterValue(Long postId,
                                Long viewCount,
@@ -114,14 +120,45 @@ public class PostCounterRedis {
             return Map.of();
         }
 
-        Map<Long, CounterValue> result = new HashMap<>(postIds.size());
-        for (Long postId : postIds) {
-            CounterValue value = get(postId);
-            if (value != null) {
-                result.put(postId, value);
-            }
+        List<Long> normalizedIds = postIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .limit(MAX_BATCH_GET_SIZE)
+                .toList();
+        if (normalizedIds.isEmpty()) {
+            return Map.of();
         }
-        return result;
+
+        try {
+            List<Object> rows = redisTemplate.executePipelined(new SessionCallback<Object>() {
+                @Override
+                @SuppressWarnings({"NullableProblems", "unchecked"})
+                public Object execute(RedisOperations operations) {
+                    HashOperations<String, String, String> hashOps = operations.opsForHash();
+                    for (Long postId : normalizedIds) {
+                        hashOps.entries(getKey(postId));
+                    }
+                    return null;
+                }
+            });
+            if (rows == null || rows.isEmpty()) {
+                return Map.of();
+            }
+            Map<Long, CounterValue> result = new LinkedHashMap<>(normalizedIds.size());
+            for (int i = 0; i < normalizedIds.size() && i < rows.size(); i++) {
+                Map<String, String> entries = normalizeEntries(rows.get(i));
+                if (entries.isEmpty()) {
+                    continue;
+                }
+                Long postId = normalizedIds.get(i);
+                result.put(postId, toCounterValue(postId, entries));
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("post counter redis batch read degraded, size={} reason={}", normalizedIds.size(), LogMask.message(e));
+            return Map.of();
+        }
     }
 
     /**
@@ -173,6 +210,30 @@ public class PostCounterRedis {
 
     private String getKey(Long postId) {
         return KEY_PREFIX + postId;
+    }
+
+    private CounterValue toCounterValue(Long postId, Map<String, String> entries) {
+        return new CounterValue(
+                postId,
+                parseLong(entries.get(FIELD_VIEW)),
+                parseLong(entries.get(FIELD_LIKE)),
+                parseLong(entries.get(FIELD_COMMENT)),
+                parseLong(entries.get(FIELD_FAVORITE)),
+                parseLong(entries.get(FIELD_SHARE))
+        );
+    }
+
+    private Map<String, String> normalizeEntries(Object value) {
+        if (!(value instanceof Map<?, ?> raw) || raw.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> normalized = new HashMap<>(raw.size());
+        raw.forEach((field, count) -> {
+            if (field != null && count != null) {
+                normalized.put(String.valueOf(field), String.valueOf(count));
+            }
+        });
+        return normalized;
     }
 
     private long parseLong(String value) {

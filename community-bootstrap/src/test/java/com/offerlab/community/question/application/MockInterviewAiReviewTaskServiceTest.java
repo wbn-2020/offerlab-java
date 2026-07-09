@@ -43,7 +43,7 @@ class MockInterviewAiReviewTaskServiceTest {
         MockInterviewAnswerPO success = answer(1L);
         MockInterviewAnswerPO failed = answer(2L);
         String longError = "x".repeat(600);
-        when(answerMapper.selectPendingAiReview(42L, 7L)).thenReturn(List.of(success, failed));
+        when(answerMapper.selectClaimablePendingAiReview(42L, 7L, 10)).thenReturn(List.of(success, failed));
         when(answerMapper.claimPendingAiReview(eq(42L), eq(7L), eq(1L), anyString())).thenReturn(1);
         when(answerMapper.claimPendingAiReview(eq(42L), eq(7L), eq(2L), anyString())).thenReturn(1);
         when(aiReviewService.review(success)).thenReturn(new MockInterviewAiReviewService.ReviewResult(
@@ -76,7 +76,7 @@ class MockInterviewAiReviewTaskServiceTest {
     @Test
     void emptyReviewResultIsStoredAsFailed() {
         MockInterviewAnswerPO answer = answer(1L);
-        when(answerMapper.selectPendingAiReview(42L, 7L)).thenReturn(List.of(answer));
+        when(answerMapper.selectClaimablePendingAiReview(42L, 7L, 10)).thenReturn(List.of(answer));
         when(answerMapper.claimPendingAiReview(eq(42L), eq(7L), eq(1L), anyString())).thenReturn(1);
         when(aiReviewService.review(answer)).thenReturn(null);
 
@@ -97,7 +97,7 @@ class MockInterviewAiReviewTaskServiceTest {
     @Test
     void stalePendingAnswerIsSkippedWhenAnotherWorkerAlreadyClaimedIt() {
         MockInterviewAnswerPO answer = answer(1L);
-        when(answerMapper.selectPendingAiReview(42L, 7L)).thenReturn(List.of(answer));
+        when(answerMapper.selectClaimablePendingAiReview(42L, 7L, 10)).thenReturn(List.of(answer));
         when(answerMapper.claimPendingAiReview(eq(42L), eq(7L), eq(1L), anyString())).thenReturn(0);
 
         service.reviewSession(42L, 7L);
@@ -114,7 +114,7 @@ class MockInterviewAiReviewTaskServiceTest {
         when(migrationCheckService.mockInterviewAiReviewReady()).thenReturn(false);
         MockInterviewAnswerPO success = answer(1L);
         MockInterviewAnswerPO failed = answer(2L);
-        when(answerMapper.selectPendingAiReview(42L, 7L)).thenReturn(List.of(success, failed));
+        when(answerMapper.selectPendingAiReview(42L, 7L, 10)).thenReturn(List.of(success, failed));
         when(aiReviewService.review(success)).thenReturn(new MockInterviewAiReviewService.ReviewResult(
                 4, "complete", "project linked", "practice follow-up", "rules",
                 true, 12, 8, 99L, "DEEPSEEK_REVIEW_FAILED"));

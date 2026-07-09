@@ -1,8 +1,7 @@
--- 20260605_ai_extract_task_metrics.sql
+﻿-- 20260605_ai_extract_task_metrics.sql
 -- Non-destructive migration for AI extraction observability metrics.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

@@ -69,8 +69,6 @@ public class PostReportService {
         if (!post.isVisibleTo(null, false)) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
-        contentModerationService.requireUserCanPublish(reporterUid);
-        contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT, reason, detail);
         if (reportMapper.findPendingByReporter(postId, reporterUid) != null) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
@@ -79,6 +77,9 @@ public class PostReportService {
         }
 
         long reportId = idGen.nextId();
+        contentModerationService.requireUserCanPublish(reporterUid);
+        contentModerationService.requireContentAllowed(reporterUid, ContentModerationService.SCOPE_REPORT,
+                ContentModerationService.SOURCE_REPORT, reportId, reason, detail);
         PostReportPO po = new PostReportPO();
         po.setId(reportId);
         po.setPostId(postId);
@@ -246,7 +247,9 @@ public class PostReportService {
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         if (post.getPostStatus() == null || post.getPostStatus() != Post.STATUS_TAKEN_DOWN) {
             post.setPostStatus(Post.STATUS_TAKEN_DOWN);
-            postRepo.update(post);
+            if (!postRepo.update(post)) {
+                throw new BizException(ErrorCode.INVALID_STATUS);
+            }
         }
         postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
         postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));

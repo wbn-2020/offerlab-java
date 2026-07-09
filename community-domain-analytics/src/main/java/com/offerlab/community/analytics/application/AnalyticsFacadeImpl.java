@@ -7,7 +7,6 @@ import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -21,7 +20,6 @@ import java.util.stream.Collectors;
 /**
  * MVP 占位
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AnalyticsFacadeImpl implements AnalyticsFacade {
@@ -31,12 +29,12 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
 
     @Override
     public void track(Map<String, Object> event) {
-        log.debug("track: {}", event);
+        throw analyticsUnavailable("analytics event tracking is not available");
     }
 
     @Override
     public List<Map<String, Object>> getHotPosts(int size) {
-        return List.of();
+        throw analyticsUnavailable("hot post analytics is not available");
     }
 
     @Override
@@ -70,7 +68,11 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
 
     @Override
     public Map<String, Object> getPersonalDashboard(Long uid) {
-        return Map.of("uid", uid, "items", List.of());
+        throw analyticsUnavailable("personal analytics dashboard is not available");
+    }
+
+    private static BizException analyticsUnavailable(String message) {
+        return new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(), message);
     }
 
     private static String normalizeRange(String range) {

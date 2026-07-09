@@ -1,7 +1,6 @@
--- 09_moderation.sql
+﻿-- 09_moderation.sql
 -- Minimal post report and moderation workflow.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_post_report (
     id             BIGINT        NOT NULL PRIMARY KEY,

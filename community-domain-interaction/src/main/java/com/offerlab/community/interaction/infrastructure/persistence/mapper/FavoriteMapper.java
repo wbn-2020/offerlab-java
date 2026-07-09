@@ -7,6 +7,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 @Mapper
 public interface FavoriteMapper extends BaseMapper<FavoritePO> {
 
@@ -19,6 +21,21 @@ public interface FavoriteMapper extends BaseMapper<FavoritePO> {
             LIMIT 1
             """)
     FavoritePO selectAnyByUserPost(@Param("userId") Long userId, @Param("postId") Long postId);
+
+    @Select("""
+            <script>
+            SELECT post_id
+            FROM t_int_favorite
+            WHERE user_id = #{userId}
+              AND is_deleted = 0
+              AND post_id IN
+              <foreach collection="postIds" item="postId" open="(" separator="," close=")">
+                #{postId}
+              </foreach>
+            </script>
+            """)
+    List<Long> selectActivePostIdsByUser(@Param("userId") Long userId,
+                                         @Param("postIds") List<Long> postIds);
 
     @Update("UPDATE t_int_favorite SET is_deleted = 0, update_time = CURRENT_TIMESTAMP(3) WHERE id = #{id} AND is_deleted = 1")
     int restoreById(@Param("id") Long id);
@@ -43,12 +60,28 @@ public interface FavoriteMapper extends BaseMapper<FavoritePO> {
                 update_time = CURRENT_TIMESTAMP(3)
             WHERE id = #{id}
               AND user_id = #{userId}
+              AND folder_id = #{sourceFolderId}
               AND is_deleted = 0
             """)
     int moveToFolder(@Param("id") Long id,
                      @Param("userId") Long userId,
+                     @Param("sourceFolderId") Long sourceFolderId,
                      @Param("folderId") Long folderId,
                      @Param("sortOrder") Integer sortOrder);
+
+    @Update("""
+            UPDATE t_int_favorite
+            SET folder_id = #{targetFolderId},
+                sort_order = #{sortOrder},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE user_id = #{userId}
+              AND folder_id = #{sourceFolderId}
+              AND is_deleted = 0
+            """)
+    int moveFolderFavorites(@Param("userId") Long userId,
+                            @Param("sourceFolderId") Long sourceFolderId,
+                            @Param("targetFolderId") Long targetFolderId,
+                            @Param("sortOrder") Integer sortOrder);
 
     @Update("UPDATE t_int_favorite SET is_deleted = 1, update_time = CURRENT_TIMESTAMP(3) WHERE id = #{id} AND is_deleted = 0")
     int softDeleteById(@Param("id") Long id);
@@ -62,6 +95,7 @@ public interface FavoriteMapper extends BaseMapper<FavoritePO> {
             SET f.folder_id = ff.id,
                 f.update_time = CURRENT_TIMESTAMP(3)
             WHERE f.user_id = #{userId}
+              AND f.is_deleted = 0
               AND (f.folder_id IS NULL OR f.folder_id = 0)
             """)
     int backfillDefaultFolderForUser(@Param("userId") Long userId);

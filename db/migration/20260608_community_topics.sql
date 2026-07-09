@@ -1,8 +1,7 @@
--- 20260608_community_topics.sql
+﻿-- 20260608_community_topics.sql
 -- Non-destructive migration for real community topic operations.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_community_topic (
     id              BIGINT       NOT NULL PRIMARY KEY,
@@ -22,7 +21,7 @@ CREATE TABLE IF NOT EXISTS t_community_topic (
     UNIQUE KEY uk_topic_slug (slug, is_deleted),
     KEY idx_topic_status_sort (topic_status, sort_order, update_time),
     KEY idx_topic_featured_sort (featured, topic_status, sort_order)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社区专题';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='绀惧尯涓撻';
 
 CREATE TABLE IF NOT EXISTS t_community_topic_tag (
     id              BIGINT       NOT NULL PRIMARY KEY,
@@ -32,7 +31,7 @@ CREATE TABLE IF NOT EXISTS t_community_topic_tag (
     UNIQUE KEY uk_topic_tag (topic_id, tag_id),
     KEY idx_topic_tag_topic (topic_id),
     KEY idx_topic_tag_tag (tag_id, topic_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社区专题-标签关联';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='绀惧尯涓撻-鏍囩鍏宠仈';
 
 CREATE TABLE IF NOT EXISTS t_community_topic_follow (
     id              BIGINT       NOT NULL PRIMARY KEY,

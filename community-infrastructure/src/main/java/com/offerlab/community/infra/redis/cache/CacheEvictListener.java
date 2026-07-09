@@ -23,7 +23,8 @@ public class CacheEvictListener implements MessageListener {
 
     // 全局 L1 缓存实例（所有 MultiLevelCache 共享）
     private static final Cache<String, Object> GLOBAL_L1_CACHE = Caffeine.newBuilder()
-            .maximumSize(10_000)
+            .maximumWeight(20_000_000)
+            .weigher(CacheEvictListener::estimateWeight)
             .expireAfterWrite(Duration.ofMinutes(5))
             .recordStats()
             .build();
@@ -44,5 +45,11 @@ public class CacheEvictListener implements MessageListener {
      */
     public static Cache<String, Object> getGlobalL1Cache() {
         return GLOBAL_L1_CACHE;
+    }
+
+    private static int estimateWeight(String key, Object value) {
+        int keyWeight = key == null ? 0 : key.length() * 2;
+        int valueWeight = value == null ? 1 : Math.min(2_000_000, value.toString().length() * 2);
+        return Math.max(1, keyWeight + valueWeight);
     }
 }

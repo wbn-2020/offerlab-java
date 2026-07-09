@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProductionSecurityGuardTest {
+    private static final String LOCAL_OPEN_TOKEN = "test-local-open-token";
 
     @Test
     void publicAuthMutationEndpointsAreRateLimited() throws Exception {
@@ -113,7 +114,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void prodProfileDoesNotAllowLocalOpenAdminMode() {
-        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), prodEnvironment());
+        AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), prodEnvironment());
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -122,7 +123,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void devProfileLocksAdminModeUnlessLocalOpenIsExplicitlyEnabled() {
-        AdminPermissionService service = new AdminPermissionService("", false, mapperWithoutAdminTable(), devEnvironment());
+        AdminPermissionService service = new AdminPermissionService("", false, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), devEnvironment());
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -130,8 +131,8 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
-    void devProfileAllowsExplicitLocalOpenAdminModeForBootstrap() {
-        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), devEnvironment());
+    void localProfileAllowsExplicitLocalOpenAdminModeForBootstrap() {
+        AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), profiles("local"));
 
         bindRequest("127.0.0.1");
         try {
@@ -144,7 +145,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void stagingProfileDoesNotAllowLocalOpenAdminMode() {
-        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), profiles("staging"));
+        AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), profiles("staging"));
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -283,7 +284,8 @@ class ProductionSecurityGuardTest {
             case "getContextPath", "getServletPath" -> "";
             case "getLocale" -> Locale.getDefault();
             case "getLocales" -> Collections.enumeration(java.util.List.of(Locale.getDefault()));
-            case "getAttribute", "getHeader", "getSession" -> null;
+            case "getHeader" -> LOCAL_OPEN_TOKEN;
+            case "getAttribute", "getSession" -> null;
             case "getAttributeNames", "getHeaderNames", "getParameterNames" -> Collections.emptyEnumeration();
             case "getParameterMap" -> Map.of();
             case "setAttribute", "removeAttribute" -> null;

@@ -15,6 +15,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PostCreateCmd {
+    private Long postId;
     @NotNull
     private Long authorId;
     @NotNull

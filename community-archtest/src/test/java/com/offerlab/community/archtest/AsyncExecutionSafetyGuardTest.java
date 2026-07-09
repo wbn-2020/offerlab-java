@@ -22,9 +22,9 @@ class AsyncExecutionSafetyGuardTest {
                 "global async baseline must explicitly provide the default async executor");
         assertTrue(asyncConfig.contains("ThreadPoolTaskExecutor"),
                 "global async baseline must use a Spring-managed thread pool");
-        assertTrue(asyncConfig.contains("setThreadNamePrefix(THREAD_NAME_PREFIX)"),
+        assertTrue(asyncConfig.contains("THREAD_NAME_PREFIX") && asyncConfig.contains("setThreadNamePrefix(threadNamePrefix)"),
                 "global async baseline must expose a stable thread name prefix");
-        assertTrue(asyncConfig.contains("setQueueCapacity(QUEUE_CAPACITY)"),
+        assertTrue(asyncConfig.contains("QUEUE_CAPACITY") && asyncConfig.contains("setQueueCapacity(queueCapacity)"),
                 "global async baseline must use a bounded queue");
         assertTrue(asyncConfig.contains("setRejectedExecutionHandler(new LoggingCallerRunsPolicy())"),
                 "global async baseline must define an explicit rejection policy");

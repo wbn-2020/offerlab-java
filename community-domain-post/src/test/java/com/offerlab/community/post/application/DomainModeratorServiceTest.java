@@ -134,7 +134,7 @@ class DomainModeratorServiceTest {
         private final List<Long> requiredAdmins = new ArrayList<>();
 
         private AdminPermissionStub() {
-            super("", false, null, new StandardEnvironment());
+            super("", false, "test-local-open-token", null, new StandardEnvironment());
         }
 
         @Override

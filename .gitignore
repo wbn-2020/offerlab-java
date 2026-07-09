@@ -61,3 +61,5 @@ Thumbs.db
 # Application
 application-prod.yml
 application-test.yml
+application-local.yml
+db/local/

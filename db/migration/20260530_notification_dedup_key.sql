@@ -1,6 +1,5 @@
--- Add business idempotency key for notifications.
+﻿-- Add business idempotency key for notifications.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

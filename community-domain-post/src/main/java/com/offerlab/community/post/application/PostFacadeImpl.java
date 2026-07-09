@@ -31,6 +31,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -664,8 +665,40 @@ public class PostFacadeImpl implements PostFacade {
             copy.setFollowingCount(0L);
             copy.setPostCount(0L);
             copy.setPrivacyReason("PROFILE_RESTRICTED");
+            copy.setAcceptContactRequest(false);
+            copy.setContactRequestPolicy("off");
+            copy.setCanStartContactRequest(false);
+            copy.setContactRequestReasonCode("PROFILE_RESTRICTED");
+            copy.setContactRequestReasonMessage("PROFILE_RESTRICTED");
+        } else {
+            applyContactRequestPolicy(copy, viewerUid, effectiveTargetUid);
         }
         return copy;
+    }
+
+    private void applyContactRequestPolicy(UserBriefDTO dto, Long viewerUid, Long targetUid) {
+        if (dto == null || targetUid == null) {
+            return;
+        }
+        if (viewerUid == null) {
+            dto.setCanStartContactRequest(false);
+            dto.setContactRequestReasonCode("LOGIN_REQUIRED");
+            dto.setContactRequestReasonMessage("LOGIN_REQUIRED");
+            return;
+        }
+        if (viewerUid.equals(targetUid)) {
+            dto.setCanStartContactRequest(false);
+            dto.setContactRequestReasonCode("SELF_CONTACT");
+            dto.setContactRequestReasonMessage("SELF_CONTACT");
+            return;
+        }
+        ContactRequestPolicyCheckDTO policy = userFacade.checkContactRequestPolicy(viewerUid, targetUid);
+        dto.setCanStartContactRequest(Boolean.TRUE.equals(policy.getAllowed()));
+        dto.setContactRequestReasonCode(policy.getReasonCode());
+        dto.setContactRequestReasonMessage(policy.getReasonMessage());
+        dto.setContactRequestPolicy(policy.getContactRequestPolicy());
+        dto.setAcceptContactRequest(Boolean.TRUE.equals(policy.getAllowed())
+                || !"CONTACT_REQUEST_CLOSED".equals(policy.getReasonCode()));
     }
 
     private static UserBriefDTO copyUserBrief(UserBriefDTO dto) {
@@ -684,6 +717,11 @@ public class PostFacadeImpl implements PostFacade {
                 .profileVisible(dto.getProfileVisible())
                 .intentVisible(dto.getIntentVisible())
                 .privacyReason(dto.getPrivacyReason())
+                .acceptContactRequest(dto.getAcceptContactRequest())
+                .contactRequestPolicy(dto.getContactRequestPolicy())
+                .canStartContactRequest(dto.getCanStartContactRequest())
+                .contactRequestReasonCode(dto.getContactRequestReasonCode())
+                .contactRequestReasonMessage(dto.getContactRequestReasonMessage())
                 .build();
     }
 

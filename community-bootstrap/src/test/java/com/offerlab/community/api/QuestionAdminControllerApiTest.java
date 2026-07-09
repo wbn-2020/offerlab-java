@@ -149,7 +149,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"remark\":\"rebuild question index\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -565,7 +565,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"questionText\":\"updated question text\",\"remark\":\"fix low quality answer\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -637,7 +637,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"canonicalQuestionId\":99,\"remark\":\"choose canonical question\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -764,7 +764,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"remark\":\"disable obsolete alias\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -827,7 +827,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"ids\":[1,2],\"status\":1,\"remark\":\"approve reviewed questions\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);

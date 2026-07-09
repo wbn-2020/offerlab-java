@@ -1,8 +1,7 @@
--- 20260527_question_mistake_reason.sql
+﻿-- 20260527_question_mistake_reason.sql
 -- Non-destructive migration for adding lightweight review reason tags.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

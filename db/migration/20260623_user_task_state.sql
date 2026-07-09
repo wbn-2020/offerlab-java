@@ -1,5 +1,4 @@
-SET NAMES utf8mb4;
-USE offerlab;
+﻿SET NAMES utf8mb4;
 
 CREATE TABLE IF NOT EXISTS t_user_task_state (
     id                   BIGINT       NOT NULL PRIMARY KEY,

@@ -15,7 +15,9 @@ public interface PostRepository {
 
     Map<Long, Post> batchFindByIds(Collection<Long> ids);
 
-    void update(Post post);
+    boolean update(Post post);
+
+    boolean updateStatusIfCurrent(Long postId, Integer expectedStatus, Integer nextStatus, Integer expectedVersion);
 
     void softDelete(Long id);
 

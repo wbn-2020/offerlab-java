@@ -49,8 +49,9 @@ class FollowConsistencyGuardTest {
         assertTrue(facadeApi.contains("getFollowingPage"), "facade must expose following page rows including relation id");
         assertTrue(repository.contains("relationId(po.getId())"), "follow page DTO must carry relation table id");
         assertTrue(repository.contains("pageLimit(size)"), "follow repository must clamp LIMIT values before SQL suffixes");
-        assertTrue(controller.contains("toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, UserContext.get())"), "followers API must over-fetch and use relation cursor rows");
-        assertTrue(controller.contains("toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, UserContext.get())"), "following API must over-fetch and use relation cursor rows");
+        assertTrue(controller.contains("Long viewer = UserContext.get()"), "follow pages must resolve the viewer once before visibility and sanitization checks");
+        assertTrue(controller.contains("toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, viewer)"), "followers API must over-fetch and use relation cursor rows");
+        assertTrue(controller.contains("toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, viewer)"), "following API must over-fetch and use relation cursor rows");
         assertTrue(controller.contains("getRelationId()"), "nextCursor must come from follow relation id, not user id");
         assertTrue(controller.contains("sanitizeFollowBrief"), "follow pages must sanitize user briefs before returning them");
         assertTrue(controller.contains("userFacade.isProfileVisible(viewer, targetUid)"), "follow pages must respect profile visibility");

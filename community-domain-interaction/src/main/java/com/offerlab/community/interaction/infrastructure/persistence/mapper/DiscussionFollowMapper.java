@@ -44,7 +44,7 @@ public interface DiscussionFollowMapper extends BaseMapper<DiscussionFollowPO> {
 
     @Update("""
             UPDATE t_int_discussion_follow
-            SET last_notified_comment_id = #{commentId},
+            SET last_notified_comment_id = GREATEST(COALESCE(last_notified_comment_id, 0), #{commentId}),
                 update_time = update_time
             WHERE post_id = #{postId}
               AND uid = #{uid}
@@ -66,4 +66,23 @@ public interface DiscussionFollowMapper extends BaseMapper<DiscussionFollowPO> {
             """)
     List<Long> selectFollowerUidsForNotification(@Param("postId") Long postId,
                                                  @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT id, uid, post_id, follow_status, last_read_comment_id, last_notified_comment_id,
+                   create_time, update_time, is_deleted
+            FROM t_int_discussion_follow
+            WHERE post_id = #{postId}
+              AND follow_status = 1
+              AND is_deleted = 0
+              <if test="afterId != null">
+              AND id &gt; #{afterId}
+              </if>
+            ORDER BY id ASC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<DiscussionFollowPO> selectFollowerRowsForNotification(@Param("postId") Long postId,
+                                                               @Param("afterId") Long afterId,
+                                                               @Param("limit") int limit);
 }

@@ -2,6 +2,8 @@ package com.offerlab.community.user.domain.repository;
 
 import com.offerlab.community.user.domain.model.User;
 
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 
 public interface UserRepository {
@@ -10,6 +12,8 @@ public interface UserRepository {
     User register(User user);
 
     Optional<User> findById(Long id);
+
+    Map<Long, User> batchFindByIds(Collection<Long> ids);
 
     Optional<User> findByEmail(String email);
 

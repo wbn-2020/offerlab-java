@@ -5,6 +5,7 @@ import com.offerlab.community.infra.redis.cache.MultiLevelCacheImpl;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.infra.security.JwtAuthResult;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.common.exception.SystemException;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.RedisConnectionFailureException;
@@ -19,6 +20,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -95,7 +97,7 @@ class RedisDegradationBehaviorTest {
     }
 
     @Test
-    void jwtRevocationChecksDegradeOpenButInvalidationDoesNotThrow() {
+    void jwtRevocationChecksDegradeClosedAndInvalidationFailsClosed() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
@@ -113,9 +115,9 @@ class RedisDegradationBehaviorTest {
         JwtAuthResult authResult = jwtService.parse(token);
         assertEquals(123L, authResult.uid());
         assertTrue(authResult.revocationCheckDegraded());
-        assertEquals(123L, jwtService.parseUid(token));
-        assertDoesNotThrow(() -> jwtService.invalidate(token));
-        assertDoesNotThrow(() -> jwtService.invalidateAll(123L));
+        assertNull(jwtService.parseUid(token));
+        assertThrows(SystemException.class, () -> jwtService.invalidate(token));
+        assertThrows(SystemException.class, () -> jwtService.invalidateAll(123L));
     }
 
     private static RedisConnectionFailureException redisDown() {

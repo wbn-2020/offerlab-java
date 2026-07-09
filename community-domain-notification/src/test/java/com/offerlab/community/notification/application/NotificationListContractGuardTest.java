@@ -28,7 +28,7 @@ class NotificationListContractGuardTest {
         UserFacade userFacade = userFacadeStub(Map.of(12L, user(12L, "Bob")));
         NotificationFacadeImpl facade = new NotificationFacadeImpl(mapper, new SnowflakeIdGenerator(), new ObjectMapper(), userFacade);
 
-        PageResult<Map<String, Object>> result = facade.listNotifications(7L, null, 0, 20);
+        PageResult<Map<String, Object>> result = facade.listNotifications(7L, null, null, 20);
 
         assertEquals(1, result.getItems().size());
         Map<String, Object> item = result.getItems().get(0);

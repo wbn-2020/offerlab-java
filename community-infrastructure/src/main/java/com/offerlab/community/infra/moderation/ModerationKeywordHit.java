@@ -13,5 +13,11 @@ public class ModerationKeywordHit {
     private String keyword;
     private String action;
     private String contentSummary;
+    private String sourceType;
+    private Long sourceId;
+    private String reviewStatus;
+    private Long reviewerUid;
+    private String reviewNote;
+    private LocalDateTime reviewTime;
     private LocalDateTime createTime;
 }

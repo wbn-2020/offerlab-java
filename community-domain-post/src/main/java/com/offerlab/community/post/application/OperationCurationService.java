@@ -5,6 +5,7 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.CreatorCurationFeedbackFacade;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.PublicContentFilter;
@@ -649,7 +650,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         po.setTopicName(requireCleanText(cmd.getName(), 64, "topic name required"));
         po.setDescription(limit(clean(cmd.getDescription()), 500));
         po.setOperationType(normalizeOperationType(cmd.getOperationType(), false));
-        po.setCoverUrl(limit(clean(cmd.getCoverUrl()), 512));
+        po.setCoverUrl(normalizeCoverUrl(cmd.getCoverUrl()));
         po.setDomain(requireOptionalDomain(cmd.getDomain()));
         if (create) {
             po.setTopicStatus(requestedStatus == null ? STATUS_DRAFT : requireInitialTopicStatus(requestedStatus));
@@ -1694,6 +1695,13 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         }
         String trimmed = value.trim();
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
+    }
+
+    private static String normalizeCoverUrl(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return ExternalUrlSafety.requireSafeHttpUrl(value, "coverUrl", 512);
     }
 
     private static String token() {

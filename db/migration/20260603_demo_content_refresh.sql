@@ -1,9 +1,9 @@
--- 20260603_demo_content_refresh.sql
+﻿-- 20260603_demo_content_refresh.sql
 -- Non-destructive demo content refresh for existing local databases.
--- It upserts deterministic formal Chinese demo rows and keeps E2E/SMOKE/CODEX
--- records out of default product surfaces through application filters.
+-- It reuses an existing local/demo author and keeps E2E/SMOKE/CODEX records
+-- out of default product surfaces through application filters. This common
+-- migration must not create login-capable demo accounts.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_company_alias (
     id                BIGINT       NOT NULL PRIMARY KEY,
@@ -22,13 +22,6 @@ SET @demo_uid := COALESCE(
     990000000000000001
 );
 
-INSERT INTO t_user_account
-    (id, email, password_hash, password_salt, account_status)
-VALUES
-    (@demo_uid, 'demo.admin@offerlab.local', '$2a$10$0CN4aiMIujTsf.AmOBUj8OAO.IrhNxcI5Toug4dnCegzpvuYHYmcG', '', 1)
-ON DUPLICATE KEY UPDATE
-    id = id;
-
 INSERT INTO t_tag (id, tag_name, tag_type, use_count, is_official) VALUES
     (1001, 'Java', 1, 5, 1),
     (1004, 'Spring', 1, 3, 1),
@@ -37,12 +30,12 @@ INSERT INTO t_tag (id, tag_name, tag_type, use_count, is_official) VALUES
     (1007, 'Kafka', 1, 3, 1),
     (1008, 'Elasticsearch', 1, 0, 1),
     (1010, 'JVM', 1, 2, 1),
-    (2001, '字节跳动', 2, 1, 1),
-    (2002, '阿里巴巴', 2, 1, 1),
-    (2004, '美团', 2, 1, 1),
-    (2007, '深测科技', 2, 3, 1),
-    (3001, 'Java 后端', 3, 4, 1),
-    (3005, '后端工程师', 3, 2, 1)
+    (2001, '瀛楄妭璺冲姩', 2, 1, 1),
+    (2002, '闃块噷宸村反', 2, 1, 1),
+    (2004, '缇庡洟', 2, 1, 1),
+    (2007, '娣辨祴绉戞妧', 2, 3, 1),
+    (3001, 'Java 鍚庣', 3, 4, 1),
+    (3005, '鍚庣宸ョ▼甯?, 3, 2, 1)
 ON DUPLICATE KEY UPDATE
     tag_name = VALUES(tag_name),
     tag_type = VALUES(tag_type),
@@ -54,13 +47,13 @@ INSERT INTO t_user_profile
 VALUES
     (
         @demo_uid,
-        'OfferLab 演示管理员',
+        'OfferLab 婕旂ず绠＄悊鍛?,
         'https://api.dicebear.com/7.x/initials/svg?seed=OfferLab',
-        '正在准备 Java 后端面试，重点复盘高并发、缓存一致性、消息链路和项目表达。',
+        '姝ｅ湪鍑嗗 Java 鍚庣闈㈣瘯锛岄噸鐐瑰鐩橀珮骞跺彂銆佺紦瀛樹竴鑷存€с€佹秷鎭摼璺拰椤圭洰琛ㄨ揪銆?,
         JSON_OBJECT(
-            'targetCompanies', JSON_ARRAY('字节跳动', '阿里巴巴', '美团'),
-            'targetPositions', JSON_ARRAY('Java 后端', '后端工程师'),
-            'targetCity', '上海'
+            'targetCompanies', JSON_ARRAY('瀛楄妭璺冲姩', '闃块噷宸村反', '缇庡洟'),
+            'targetPositions', JSON_ARRAY('Java 鍚庣', '鍚庣宸ョ▼甯?),
+            'targetCity', '涓婃捣'
         )
     )
 ON DUPLICATE KEY UPDATE
@@ -84,14 +77,14 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO t_company_alias
     (id, canonical_company, alias, status)
 VALUES
-    (990010000000000001, '深测科技', '深测科技', 1),
-    (990010000000000002, '深测科技', '深测', 1),
-    (990010000000000003, '深测科技', '深测科技有限公司', 1),
-    (990010000000000004, '字节跳动', '字节跳动', 1),
-    (990010000000000005, '字节跳动', 'ByteDance', 1),
-    (990010000000000006, '阿里巴巴', '阿里巴巴', 1),
-    (990010000000000007, '阿里巴巴', '阿里', 1),
-    (990010000000000008, '美团', '美团', 1)
+    (990010000000000001, '娣辨祴绉戞妧', '娣辨祴绉戞妧', 1),
+    (990010000000000002, '娣辨祴绉戞妧', '娣辨祴', 1),
+    (990010000000000003, '娣辨祴绉戞妧', '娣辨祴绉戞妧鏈夐檺鍏徃', 1),
+    (990010000000000004, '瀛楄妭璺冲姩', '瀛楄妭璺冲姩', 1),
+    (990010000000000005, '瀛楄妭璺冲姩', 'ByteDance', 1),
+    (990010000000000006, '闃块噷宸村反', '闃块噷宸村反', 1),
+    (990010000000000007, '闃块噷宸村反', '闃块噷', 1),
+    (990010000000000008, '缇庡洟', '缇庡洟', 1)
 ON DUPLICATE KEY UPDATE
     canonical_company = VALUES(canonical_company),
     status = VALUES(status),
@@ -104,8 +97,8 @@ VALUES
         990100000000000001,
         @demo_uid,
         1,
-        '深测科技 Java 后端一面复盘：缓存、事务和慢 SQL',
-        '一面重点围绕 Spring 事务传播、Redis 缓存一致性、MySQL 慢 SQL 排查和项目中的降级设计。面试官会追问为什么这么设计，以及线上指标如何验证。',
+        '娣辨祴绉戞妧 Java 鍚庣涓€闈㈠鐩橈細缂撳瓨銆佷簨鍔″拰鎱?SQL',
+        '涓€闈㈤噸鐐瑰洿缁?Spring 浜嬪姟浼犳挱銆丷edis 缂撳瓨涓€鑷存€с€丮ySQL 鎱?SQL 鎺掓煡鍜岄」鐩腑鐨勯檷绾ц璁°€傞潰璇曞畼浼氳拷闂负浠€涔堣繖涔堣璁★紝浠ュ強绾夸笂鎸囨爣濡備綍楠岃瘉銆?,
         NULL,
         1,
         1,
@@ -117,8 +110,8 @@ VALUES
         990100000000000002,
         @demo_uid,
         1,
-        '深测科技二面复盘：Kafka 削峰、幂等消费和分布式排查',
-        '二面更关注系统设计和稳定性，聊到 Kafka 消费幂等、消息堆积定位、接口超时治理，以及如何把一次线上故障讲成结构化 STAR 案例。',
+        '娣辨祴绉戞妧浜岄潰澶嶇洏锛欿afka 鍓婂嘲銆佸箓绛夋秷璐瑰拰鍒嗗竷寮忔帓鏌?,
+        '浜岄潰鏇村叧娉ㄧ郴缁熻璁″拰绋冲畾鎬э紝鑱婂埌 Kafka 娑堣垂骞傜瓑銆佹秷鎭爢绉畾浣嶃€佹帴鍙ｈ秴鏃舵不鐞嗭紝浠ュ強濡備綍鎶婁竴娆＄嚎涓婃晠闅滆鎴愮粨鏋勫寲 STAR 妗堜緥銆?,
         NULL,
         1,
         1,
@@ -130,8 +123,8 @@ VALUES
         990100000000000003,
         @demo_uid,
         1,
-        '深测科技 HR 前技术加面：JVM、索引和项目亮点',
-        '这一轮题目覆盖 JVM 内存模型、索引选择性、接口压测结果复盘，以及如何把项目亮点和岗位要求连接起来。',
+        '娣辨祴绉戞妧 HR 鍓嶆妧鏈姞闈細JVM銆佺储寮曞拰椤圭洰浜偣',
+        '杩欎竴杞鐩鐩?JVM 鍐呭瓨妯″瀷銆佺储寮曢€夋嫨鎬с€佹帴鍙ｅ帇娴嬬粨鏋滃鐩橈紝浠ュ強濡備綍鎶婇」鐩寒鐐瑰拰宀椾綅瑕佹眰杩炴帴璧锋潵銆?,
         NULL,
         1,
         1,
@@ -143,8 +136,8 @@ VALUES
         990100000000000004,
         @demo_uid,
         1,
-        '字节跳动 Java 后端二面复盘：高并发接口、限流和降级',
-        '二面重点讨论活动页高并发接口设计，包含热点缓存预热、令牌桶限流、Redis 兜底、Spring 事务边界和 Kafka 异步削峰。面试官要求说明每个方案的取舍、监控指标和故障恢复流程。',
+        '瀛楄妭璺冲姩 Java 鍚庣浜岄潰澶嶇洏锛氶珮骞跺彂鎺ュ彛銆侀檺娴佸拰闄嶇骇',
+        '浜岄潰閲嶇偣璁ㄨ娲诲姩椤甸珮骞跺彂鎺ュ彛璁捐锛屽寘鍚儹鐐圭紦瀛橀鐑€佷护鐗屾《闄愭祦銆丷edis 鍏滃簳銆丼pring 浜嬪姟杈圭晫鍜?Kafka 寮傛鍓婂嘲銆傞潰璇曞畼瑕佹眰璇存槑姣忎釜鏂规鐨勫彇鑸嶃€佺洃鎺ф寚鏍囧拰鏁呴殰鎭㈠娴佺▼銆?,
         NULL,
         1,
         1,
@@ -156,8 +149,8 @@ VALUES
         990100000000000005,
         @demo_uid,
         1,
-        '美团后端工程师面经：MySQL 索引、订单一致性和压测复盘',
-        '这一轮围绕订单链路展开，重点问到 MySQL 组合索引设计、Redis 缓存穿透、库存一致性、接口压测指标以及如何把一次性能优化讲成可复盘的项目成果。',
+        '缇庡洟鍚庣宸ョ▼甯堥潰缁忥細MySQL 绱㈠紩銆佽鍗曚竴鑷存€у拰鍘嬫祴澶嶇洏',
+        '杩欎竴杞洿缁曡鍗曢摼璺睍寮€锛岄噸鐐归棶鍒?MySQL 缁勫悎绱㈠紩璁捐銆丷edis 缂撳瓨绌块€忋€佸簱瀛樹竴鑷存€с€佹帴鍙ｅ帇娴嬫寚鏍囦互鍙婂浣曟妸涓€娆℃€ц兘浼樺寲璁叉垚鍙鐩樼殑椤圭洰鎴愭灉銆?,
         NULL,
         1,
         1,
@@ -169,8 +162,8 @@ VALUES
         990100000000000006,
         @demo_uid,
         1,
-        '阿里巴巴 Java 后端终面准备：项目稳定性、消息链路和 STAR 表达',
-        '终面更关注项目深度和表达质量，需要把 JVM 排查、Kafka 消息补偿、Spring 服务拆分和线上稳定性治理串成完整案例，并用 STAR 说明个人贡献和量化结果。',
+        '闃块噷宸村反 Java 鍚庣缁堥潰鍑嗗锛氶」鐩ǔ瀹氭€с€佹秷鎭摼璺拰 STAR 琛ㄨ揪',
+        '缁堥潰鏇村叧娉ㄩ」鐩繁搴﹀拰琛ㄨ揪璐ㄩ噺锛岄渶瑕佹妸 JVM 鎺掓煡銆並afka 娑堟伅琛ュ伩銆丼pring 鏈嶅姟鎷嗗垎鍜岀嚎涓婄ǔ瀹氭€ф不鐞嗕覆鎴愬畬鏁存渚嬶紝骞剁敤 STAR 璇存槑涓汉璐＄尞鍜岄噺鍖栫粨鏋溿€?,
         NULL,
         1,
         1,
@@ -193,12 +186,12 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO t_post_extension
     (post_id, post_type, ext_json)
 VALUES
-    (990100000000000001, 1, JSON_OBJECT('company', '深测科技', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1)),
-    (990100000000000002, 1, JSON_OBJECT('company', '深测科技', 'position', '后端工程师', 'yearsOfExp', 4, 'interviewResult', 2)),
-    (990100000000000003, 1, JSON_OBJECT('company', '深测科技', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1)),
-    (990100000000000004, 1, JSON_OBJECT('company', '字节跳动', 'position', 'Java 后端', 'yearsOfExp', 3, 'interviewResult', 1)),
-    (990100000000000005, 1, JSON_OBJECT('company', '美团', 'position', '后端工程师', 'yearsOfExp', 4, 'interviewResult', 1)),
-    (990100000000000006, 1, JSON_OBJECT('company', '阿里巴巴', 'position', 'Java 后端', 'yearsOfExp', 5, 'interviewResult', 2))
+    (990100000000000001, 1, JSON_OBJECT('company', '娣辨祴绉戞妧', 'position', 'Java 鍚庣', 'yearsOfExp', 3, 'interviewResult', 1)),
+    (990100000000000002, 1, JSON_OBJECT('company', '娣辨祴绉戞妧', 'position', '鍚庣宸ョ▼甯?, 'yearsOfExp', 4, 'interviewResult', 2)),
+    (990100000000000003, 1, JSON_OBJECT('company', '娣辨祴绉戞妧', 'position', 'Java 鍚庣', 'yearsOfExp', 3, 'interviewResult', 1)),
+    (990100000000000004, 1, JSON_OBJECT('company', '瀛楄妭璺冲姩', 'position', 'Java 鍚庣', 'yearsOfExp', 3, 'interviewResult', 1)),
+    (990100000000000005, 1, JSON_OBJECT('company', '缇庡洟', 'position', '鍚庣宸ョ▼甯?, 'yearsOfExp', 4, 'interviewResult', 1)),
+    (990100000000000006, 1, JSON_OBJECT('company', '闃块噷宸村反', 'position', 'Java 鍚庣', 'yearsOfExp', 5, 'interviewResult', 2))
 ON DUPLICATE KEY UPDATE
     post_type = VALUES(post_type),
     ext_json = VALUES(ext_json),

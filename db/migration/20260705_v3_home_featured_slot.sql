@@ -1,7 +1,6 @@
 -- 20260705_v3_home_featured_slot.sql
 -- Non-destructive extension for OfferLab V3 HOME_FEATURED published slot snapshots.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 
@@ -11,7 +10,13 @@ CREATE PROCEDURE v20260705_add_operation_slot_column_if_missing(
     IN alter_sql TEXT
 )
 BEGIN
-    IF NOT EXISTS (
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name = 't_operation_slot'
+    )
+    AND NOT EXISTS (
         SELECT 1
         FROM information_schema.columns
         WHERE table_schema = DATABASE()
@@ -60,14 +65,15 @@ SELECT
     0,
     0
 FROM DUAL
-WHERE NOT EXISTS (
+WHERE EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = DATABASE()
+      AND table_name = 't_operation_slot'
+)
+  AND NOT EXISTS (
     SELECT 1
     FROM t_operation_slot
     WHERE slot_code = 'DISCOVERY_FEATURED_TOPICS'
       AND is_deleted = 0
-)
-  AND (
-    SELECT COUNT(*)
-    FROM t_operation_slot
-    WHERE is_deleted = 0
-  ) < 2;
+);

@@ -6,6 +6,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.CommunityTopicCmd;
@@ -219,9 +220,7 @@ public class CommunityTopicService {
         }
         boolean hasMore = rows.size() > pageSize;
         List<CommunityTopicFollowView> pageRows = hasMore ? rows.subList(0, pageSize) : rows;
-        List<CommunityTopicDTO> items = pageRows.stream()
-                .map(row -> toDto(row, topicTagMapper.selectTagsByTopicId(row.getId()), uid))
-                .toList();
+        List<CommunityTopicDTO> items = toDtoList(pageRows, uid);
         String next = hasMore && !pageRows.isEmpty()
                 ? String.valueOf(pageRows.get(pageRows.size() - 1).getRelationId())
                 : null;
@@ -390,14 +389,24 @@ public class CommunityTopicService {
                 .toList();
     }
 
-    private List<CommunityTopicDTO> toDtoList(List<CommunityTopicPO> topics, Long viewerUid) {
+    private List<CommunityTopicDTO> toDtoList(List<? extends CommunityTopicPO> topics, Long viewerUid) {
         if (topics == null || topics.isEmpty()) {
             return List.of();
         }
+        List<Long> topicIds = topics.stream()
+                .map(CommunityTopicPO::getId)
+                .filter(Objects::nonNull)
+                .toList();
         Set<Long> followedTopicIds = followedTopicIds(viewerUid, topics);
+        Map<Long, List<TagPO>> tagsByTopicId = tagsByTopicIds(topicIds);
+        Map<Long, Long> postCounts = postCountsByTopicIds(topicIds);
+        Map<Long, Long> followerCounts = followerCountsByTopicIds(topicIds);
         return topics.stream()
-                .map(topic -> toDto(topic, topicTagMapper.selectTagsByTopicId(topic.getId()),
-                        followedTopicIds.contains(topic.getId())))
+                .map(topic -> toDto(topic,
+                        tagsByTopicId.getOrDefault(topic.getId(), List.of()),
+                        followedTopicIds.contains(topic.getId()),
+                        postCounts.getOrDefault(topic.getId(), 0L),
+                        followerCounts.getOrDefault(topic.getId(), 0L)))
                 .toList();
     }
 
@@ -406,6 +415,13 @@ public class CommunityTopicService {
     }
 
     private CommunityTopicDTO toDto(CommunityTopicPO topic, List<TagPO> tags, boolean followed) {
+        return toDto(topic, tags, followed,
+                topicMapper.countPublicPosts(topic.getId(), topicKeyword(topic)),
+                topicFollowMapper.countByTopicId(topic.getId()));
+    }
+
+    private CommunityTopicDTO toDto(CommunityTopicPO topic, List<TagPO> tags, boolean followed,
+                                    long postCount, long followerCount) {
         List<TagDTO> tagDtos = tags == null ? List.of() : tags.stream().map(this::toTagDto).toList();
         return CommunityTopicDTO.builder()
                 .id(topic.getId())
@@ -417,8 +433,8 @@ public class CommunityTopicService {
                 .sortOrder(topic.getSortOrder())
                 .featured(topic.getFeatured() != null && topic.getFeatured() == 1)
                 .status(topic.getTopicStatus())
-                .postCount(topicMapper.countPublicPosts(topic.getId(), topicKeyword(topic)))
-                .followerCount(topicFollowMapper.countByTopicId(topic.getId()))
+                .postCount(postCount)
+                .followerCount(followerCount)
                 .followed(followed)
                 .virtualTopic(false)
                 .tags(tagDtos)
@@ -513,7 +529,7 @@ public class CommunityTopicService {
         return String.join(" ", words);
     }
 
-    private Set<Long> followedTopicIds(Long viewerUid, List<CommunityTopicPO> topics) {
+    private Set<Long> followedTopicIds(Long viewerUid, List<? extends CommunityTopicPO> topics) {
         if (viewerUid == null || topics == null || topics.isEmpty()) {
             return Set.of();
         }
@@ -522,6 +538,109 @@ public class CommunityTopicService {
             return Set.of();
         }
         return new java.util.HashSet<>(topicFollowMapper.selectFollowedTopicIds(viewerUid, topicIds));
+    }
+
+    private Map<Long, List<TagPO>> tagsByTopicIds(Collection<Long> topicIds) {
+        if (topicIds == null || topicIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<TagPO>> result = new HashMap<>();
+        List<Map<String, Object>> rows = topicTagMapper.selectTagsByTopicIds(topicIds);
+        if (rows == null || rows.isEmpty()) {
+            return result;
+        }
+        for (Map<String, Object> row : rows) {
+            Long topicId = asLong(row, "topicId", "topic_id", "TOPICID", "TOPIC_ID");
+            Long tagId = asLong(row, "id", "ID");
+            if (topicId == null || tagId == null) {
+                continue;
+            }
+            TagPO tag = new TagPO();
+            tag.setId(tagId);
+            tag.setTagName(asString(row, "tagName", "tag_name", "TAGNAME", "TAG_NAME"));
+            tag.setTagType(asInteger(row, "tagType", "tag_type", "TAGTYPE", "TAG_TYPE"));
+            tag.setUseCount(defaultLong(asLong(row, "useCount", "use_count", "USECOUNT", "USE_COUNT")));
+            tag.setIsOfficial(asInteger(row, "isOfficial", "is_official", "ISOFFICIAL", "IS_OFFICIAL"));
+            tag.setTagStatus(asInteger(row, "tagStatus", "tag_status", "TAGSTATUS", "TAG_STATUS"));
+            tag.setRecommended(asInteger(row, "recommended", "RECOMMENDED"));
+            tag.setSynonyms(asString(row, "synonyms", "SYNONYMS"));
+            tag.setMergeTargetId(asLong(row, "mergeTargetId", "merge_target_id", "MERGETARGETID", "MERGE_TARGET_ID"));
+            result.computeIfAbsent(topicId, ignored -> new ArrayList<>()).add(tag);
+        }
+        return result;
+    }
+
+    private Map<Long, Long> postCountsByTopicIds(Collection<Long> topicIds) {
+        if (topicIds == null || topicIds.isEmpty()) {
+            return Map.of();
+        }
+        return metricByTopicId(topicMapper.countPublicPostsByTopicIds(topicIds),
+                "postCount", "post_count", "POSTCOUNT", "POST_COUNT");
+    }
+
+    private Map<Long, Long> followerCountsByTopicIds(Collection<Long> topicIds) {
+        if (topicIds == null || topicIds.isEmpty()) {
+            return Map.of();
+        }
+        return metricByTopicId(topicMapper.countFollowersByTopicIds(topicIds),
+                "followerCount", "follower_count", "FOLLOWERCOUNT", "FOLLOWER_COUNT");
+    }
+
+    private Map<Long, Long> metricByTopicId(List<Map<String, Object>> rows, String... metricKeys) {
+        if (rows == null || rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> result = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            Long topicId = asLong(row, "topicId", "topic_id", "TOPICID", "TOPIC_ID");
+            if (topicId != null) {
+                result.put(topicId, defaultLong(asLong(row, metricKeys)));
+            }
+        }
+        return result;
+    }
+
+    private Long asLong(Map<String, Object> row, String... keys) {
+        Object value = value(row, keys);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Long.parseLong(text);
+        }
+        return null;
+    }
+
+    private Integer asInteger(Map<String, Object> row, String... keys) {
+        Object value = value(row, keys);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Integer.parseInt(text);
+        }
+        return null;
+    }
+
+    private String asString(Map<String, Object> row, String... keys) {
+        Object value = value(row, keys);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Object value(Map<String, Object> row, String... keys) {
+        if (row == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (row.containsKey(key)) {
+                return row.get(key);
+            }
+        }
+        return null;
+    }
+
+    private long defaultLong(Long value) {
+        return value == null ? 0L : value;
     }
 
     private boolean isFollowingTopic(Long viewerUid, Long topicId) {
@@ -545,7 +664,7 @@ public class CommunityTopicService {
             topic.setTopicType("custom");
         }
         if (cmd.getCoverUrl() != null) {
-            topic.setCoverUrl(limit(cmd.getCoverUrl(), 512));
+            topic.setCoverUrl(normalizeCoverUrl(cmd.getCoverUrl()));
         }
         if (cmd.getSortOrder() != null) {
             topic.setSortOrder(Math.max(0, Math.min(cmd.getSortOrder(), 9999)));
@@ -841,6 +960,13 @@ public class CommunityTopicService {
         }
         String trimmed = value.trim();
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
+    }
+
+    private String normalizeCoverUrl(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return ExternalUrlSafety.requireSafeHttpUrl(value, "coverUrl", 512);
     }
 
     private String slugOrDefault(String slug, String fallback) {

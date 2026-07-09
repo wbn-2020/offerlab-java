@@ -1,7 +1,10 @@
 package com.offerlab.community.interaction.controller;
 
+import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
@@ -14,16 +17,25 @@ import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.api.dto.DiscussionFollowStatusDTO;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
+import com.offerlab.community.interaction.api.dto.FavoriteBatchMoveCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.interaction.application.CommentReportService;
+import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
+import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.application.DomainModeratorService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -40,13 +52,16 @@ import java.util.Map;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1")
+@Validated
 public class InteractionController {
 
     private final InteractionFacade facade;
+    private final PostFacade postFacade;
     private final DiscussionFollowFacade discussionFollowFacade;
     private final CommentReportService reportService;
     private final DomainModeratorService domainModeratorService;
     private final ContentModerationService contentModerationService;
+    private final SnowflakeIdGenerator idGen;
 
     @PostMapping("/posts/{postId}/like")
     @RateLimit(key = "'like:' + #uid", rate = 60, per = 60)
@@ -66,8 +81,14 @@ public class InteractionController {
 
     @PublicApi
     @GetMapping("/posts/{postId}/interaction")
-    public Result<Map<String, Object>> postInteraction(@PathVariable Long postId) {
+    @RateLimit(key = "'public:post:interaction:' + #postId + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<Map<String, Object>> postInteraction(@PathVariable @Positive Long postId,
+                                                       HttpServletRequest request) {
         Long uid = UserContext.get();
+        PostDTO post = postFacade.getPost(postId, uid);
+        if (post == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
         // 匿名访问时固定返回 false，前端可直接渲染未互动状态而不必额外判断登录态。
         return Result.ok(Map.of(
                 "liked", uid != null && facade.hasLiked(uid, postId),
@@ -76,8 +97,8 @@ public class InteractionController {
     }
 
     @GetMapping("/users/me/liked-posts")
-    public Result<PageResult<PostBriefDTO>> likedPosts(@RequestParam(defaultValue = "0") long cursor,
-                                                       @RequestParam(defaultValue = "20") int size) {
+    public Result<PageResult<PostBriefDTO>> likedPosts(@RequestParam(defaultValue = "0") String cursor,
+                                                       @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(facade.listLikedPosts(UserContext.require(), cursor, size));
     }
 
@@ -99,12 +120,13 @@ public class InteractionController {
     }
 
     @GetMapping("/users/me/favorite-posts")
-    public Result<PageResult<PostBriefDTO>> favoritePosts(@RequestParam(defaultValue = "0") long cursor,
-                                                         @RequestParam(defaultValue = "20") int size) {
+    public Result<PageResult<PostBriefDTO>> favoritePosts(@RequestParam(defaultValue = "0") String cursor,
+                                                         @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(facade.listFavoritePosts(UserContext.require(), cursor, size));
     }
 
     @GetMapping("/users/me/favorite-folders")
+    @RateLimit(key = "'favorite-folder:list:' + #uid", rate = 120, per = 60)
     public Result<List<FavoriteFolderDTO>> favoriteFolders() {
         return Result.ok(facade.listFavoriteFolders(UserContext.require()));
     }
@@ -122,17 +144,25 @@ public class InteractionController {
         return Result.ok(facade.updateFavoriteFolder(UserContext.require(), folderId, cmd));
     }
 
+    @PostMapping("/users/me/favorite-folders/{folderId}/sort")
+    @RateLimit(key = "'favorite-folder:sort:' + #uid", rate = 60, per = 60)
+    public Result<FavoriteFolderDTO> sortFavoriteFolder(@PathVariable @Positive Long folderId,
+                                                        @Valid @RequestBody FavoriteFolderSortCmd cmd) {
+        return Result.ok(facade.sortFavoriteFolder(UserContext.require(), folderId, cmd));
+    }
+
     @DeleteMapping("/users/me/favorite-folders/{folderId}")
     @RateLimit(key = "'favorite-folder:delete:' + #uid", rate = 30, per = 60)
-    public Result<Void> deleteFavoriteFolder(@PathVariable Long folderId) {
-        facade.deleteFavoriteFolder(UserContext.require(), folderId);
+    public Result<Void> deleteFavoriteFolder(@PathVariable Long folderId,
+                                             @RequestParam(required = false) Long targetFolderId) {
+        facade.deleteFavoriteFolder(UserContext.require(), folderId, targetFolderId);
         return Result.ok();
     }
 
     @GetMapping("/users/me/favorite-folders/{folderId}/posts")
-    public Result<PageResult<PostBriefDTO>> favoriteFolderPosts(@PathVariable Long folderId,
-                                                               @RequestParam(defaultValue = "0") long cursor,
-                                                               @RequestParam(defaultValue = "20") int size) {
+    public Result<PageResult<PostBriefDTO>> favoriteFolderPosts(@PathVariable @Positive Long folderId,
+                                                               @RequestParam(defaultValue = "0") String cursor,
+                                                               @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(facade.listFavoritePostsInFolder(UserContext.require(), folderId, cursor, size));
     }
 
@@ -143,23 +173,50 @@ public class InteractionController {
         return Result.ok(facade.moveFavorite(UserContext.require(), postId, cmd));
     }
 
+    @PutMapping("/users/me/favorites/batch-folder")
+    @RateLimit(key = "'favorite:batch-move:' + #uid", rate = 20, per = 60)
+    public Result<FavoriteFolderDTO> batchMoveFavorites(@Valid @RequestBody FavoriteBatchMoveCmd cmd) {
+        return Result.ok(facade.batchMoveFavorites(UserContext.require(), cmd));
+    }
+
+    @PostMapping("/users/me/favorites/batch-move")
+    @RateLimit(key = "'favorite:batch-move:' + #uid", rate = 20, per = 60)
+    public Result<FavoriteFolderDTO> batchMoveFavoritesByDocumentedPath(@Valid @RequestBody FavoriteBatchMoveCmd cmd) {
+        return Result.ok(facade.batchMoveFavorites(UserContext.require(), cmd));
+    }
+
     @PublicApi
     @GetMapping("/favorite-folders/{folderId}")
-    public Result<FavoriteFolderDTO> publicFavoriteFolder(@PathVariable Long folderId) {
+    @RateLimit(key = "'public:favorite-folder:detail:' + #folderId + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<FavoriteFolderDTO> publicFavoriteFolder(@PathVariable @Positive Long folderId,
+                                                          HttpServletRequest request) {
         return Result.ok(facade.getPublicFavoriteFolder(folderId));
     }
 
     @PublicApi
+    @GetMapping("/users/{uid}/favorite-folders")
+    @RateLimit(key = "'public:favorite-folder:user:' + #uid + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<List<FavoriteFolderDTO>> publicFavoriteFoldersByUser(@PathVariable @Positive Long uid,
+                                                                       @RequestParam(defaultValue = "6") @Min(1) @Max(20) int limit,
+                                                                       HttpServletRequest request) {
+        return Result.ok(facade.listPublicFavoriteFoldersByUser(uid, limit));
+    }
+
+    @PublicApi
     @GetMapping("/favorite-folders/{folderId}/posts")
-    public Result<PageResult<PostBriefDTO>> publicFavoriteFolderPosts(@PathVariable Long folderId,
-                                                                      @RequestParam(defaultValue = "0") long cursor,
-                                                                      @RequestParam(defaultValue = "20") int size) {
+    @RateLimit(key = "'public:favorite-folder:posts:' + #folderId + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<PageResult<PostBriefDTO>> publicFavoriteFolderPosts(@PathVariable @Positive Long folderId,
+                                                                      @RequestParam(defaultValue = "0") String cursor,
+                                                                      @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                                      HttpServletRequest request) {
         return Result.ok(facade.listPublicFavoritePostsInFolder(folderId, cursor, size));
     }
 
     @PublicApi
     @GetMapping("/posts/{postId}/discussion-follow")
-    public Result<DiscussionFollowStatusDTO> discussionFollowStatus(@PathVariable Long postId) {
+    @RateLimit(key = "'public:discussion-follow:status:' + #postId + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<DiscussionFollowStatusDTO> discussionFollowStatus(@PathVariable @Positive Long postId,
+                                                                    HttpServletRequest request) {
         return Result.ok(discussionFollowFacade.status(UserContext.get(), postId));
     }
 
@@ -176,8 +233,8 @@ public class InteractionController {
     }
 
     @GetMapping("/users/me/discussion-follows")
-    public Result<PageResult<PostBriefDTO>> discussionFollows(@RequestParam(defaultValue = "0") long cursor,
-                                                              @RequestParam(defaultValue = "20") int size) {
+    public Result<PageResult<PostBriefDTO>> discussionFollows(@RequestParam(defaultValue = "0") @Min(0) long cursor,
+                                                              @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(discussionFollowFacade.listFollowedPosts(UserContext.require(), cursor, size));
     }
 
@@ -186,10 +243,13 @@ public class InteractionController {
     public Result<Map<String, Object>> comment(@PathVariable Long postId, @Valid @RequestBody CommentReq req) {
         Long uid = UserContext.require();
         contentModerationService.requireUserCanPublish(uid);
+        Long id = idGen.nextId();
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
-                uid, ContentModerationService.SCOPE_COMMENT, req.getContent());
+                uid, ContentModerationService.SCOPE_COMMENT, ContentModerationService.SOURCE_COMMENT, id,
+                req.getContent());
         // parentId/replyToUid 同时传入时表示楼中楼回复，领域层负责归并根评论关系。
-        Long id = facade.addComment(CommentCreateCmd.builder()
+        facade.addComment(CommentCreateCmd.builder()
+                .commentId(id)
                 .postId(postId)
                 .authorUid(uid)
                 .parentId(req.getParentId())
@@ -202,11 +262,24 @@ public class InteractionController {
 
     @PublicApi
     @GetMapping("/posts/{postId}/comments")
-    public Result<PageResult<CommentDTO>> comments(@PathVariable Long postId,
-                                                   @RequestParam(defaultValue = "0") long cursor,
-                                                   @RequestParam(defaultValue = "20") int size,
-                                                   @RequestParam(defaultValue = "latest") String sort) {
+    @RateLimit(key = "'public:comments:list:' + #postId + ':' + #request.remoteAddr", rate = 240, per = 60, failOpen = false)
+    public Result<PageResult<CommentDTO>> comments(@PathVariable @Positive Long postId,
+                                                   @RequestParam(defaultValue = "0") String cursor,
+                                                   @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                   @RequestParam(defaultValue = "latest") @Size(max = 16) String sort,
+                                                   HttpServletRequest request) {
         return Result.ok(facade.listComments(postId, UserContext.get(), cursor, size, sort));
+    }
+
+    @PublicApi
+    @GetMapping("/posts/{postId}/comments/{rootId}/replies")
+    @RateLimit(key = "'public:comments:replies:' + #postId + ':' + #rootId + ':' + #request.remoteAddr", rate = 240, per = 60, failOpen = false)
+    public Result<PageResult<CommentDTO>> commentReplies(@PathVariable @Positive Long postId,
+                                                        @PathVariable @Positive Long rootId,
+                                                        @RequestParam(defaultValue = "0") String cursor,
+                                                        @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                        HttpServletRequest request) {
+        return Result.ok(facade.listCommentReplies(postId, rootId, UserContext.get(), cursor, size));
     }
 
     @DeleteMapping("/comments/{commentId}")
@@ -224,8 +297,9 @@ public class InteractionController {
     }
 
     @GetMapping("/comments/reports/me")
+    @RateLimit(key = "'comment-report:list:me:' + #uid", rate = 120, per = 60)
     public Result<List<CommentReportDTO>> listMyCommentReports(@RequestParam(required = false) Integer status,
-                                                               @RequestParam(defaultValue = "20") int limit) {
+                                                               @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
         return Result.ok(reportService.listUserReports(UserContext.require(), status, limit));
     }
 
@@ -235,9 +309,10 @@ public class InteractionController {
     }
 
     @GetMapping("/comments/admin/reports")
+    @RateLimit(key = "'comment-report:list:admin:' + #uid", rate = 120, per = 60)
     public Result<List<CommentReportDTO>> listCommentReports(@RequestParam(required = false) Integer status,
                                                              @RequestParam(required = false) Integer domain,
-                                                             @RequestParam(defaultValue = "20") int limit,
+                                                             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
                                                              @RequestParam(defaultValue = "false") boolean includeTestData) {
         domainModeratorService.requireModerateDomain(UserContext.require(), domain);
         return Result.ok(reportService.listRecent(status, domain, limit, includeTestData));

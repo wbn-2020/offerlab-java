@@ -1,5 +1,6 @@
 package com.offerlab.community.notification.application;
 
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.interaction.api.DiscussionFollowFacade;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
 import com.offerlab.community.interaction.api.event.CommentLikedEvent;
@@ -7,6 +8,7 @@ import com.offerlab.community.interaction.api.event.CommentReportReviewedEvent;
 import com.offerlab.community.interaction.api.event.CommentQualitySignalChangedEvent;
 import com.offerlab.community.interaction.api.event.ContactRequestCreatedEvent;
 import com.offerlab.community.interaction.api.event.ContactRequestHandledEvent;
+import com.offerlab.community.interaction.api.event.ContactRequestReportReviewedEvent;
 import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
 import com.offerlab.community.notification.api.NotificationFacade;
@@ -45,7 +47,9 @@ public class NotificationEventListener {
     private static final int TYPE_FOLLOWER = 4;
     private static final int TYPE_SYSTEM = 5;
     private static final int TYPE_MENTION = 6;
-    private static final int DISCUSSION_FOLLOW_NOTIFICATION_LIMIT = 500;
+    private static final int POST_VIS_PUBLIC = 1;
+    private static final int POST_STATUS_PUBLISHED = 1;
+    private static final int DISCUSSION_FOLLOW_NOTIFICATION_BATCH_SIZE = 500;
     private static final String ACTION_DISCUSSION_FOLLOW_COMMENT = "discussion_follow_comment";
     private static final String ACTION_DISCUSSION_FOLLOW_FEATURED_REPLY = "discussion_follow_featured_reply";
     private static final String ACTION_DISCUSSION_FOLLOW_AUTHOR_PINNED = "discussion_follow_author_pinned";
@@ -58,8 +62,11 @@ public class NotificationEventListener {
     private static final String CONTACT_REQUEST_OUTBOX_PATH = "/me/contact-requests?tab=outbox";
     private static final String CONTACT_REQUEST_STATUS_ACCEPTED = "ACCEPTED";
     private static final String CONTACT_REQUEST_STATUS_REJECTED = "REJECTED";
+    private static final String CONTACT_REQUEST_STATUS_REPORTED = "REPORTED";
     private static final String SOURCE_POST_REPORT = "POST_REPORT";
     private static final String SOURCE_COMMENT_REPORT = "COMMENT_REPORT";
+    private static final String SOURCE_CONTACT_REQUEST_REPORT = "CONTACT_REQUEST_REPORT";
+    private static final String REPORT_USER_STATUS_PROCESSING = "PROCESSING";
     private static final String REPORT_USER_STATUS_ACTION_TAKEN = "ACTION_TAKEN";
     private static final String REPORT_USER_STATUS_NOT_ACCEPTED = "NOT_ACCEPTED";
     private static final String REPORT_USER_STATUS_CLOSED = "CLOSED";
@@ -70,15 +77,22 @@ public class NotificationEventListener {
     private final DiscussionFollowFacade discussionFollowFacade;
     private final NotificationRetryService retryService;
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostPublished(PostPublishedEvent event) {
+        if (!isPublicPublished(event)) {
+            log.warn("skip post publish notifications for non-public post: postId={} visibility={} status={}",
+                    event == null ? null : event.getPostId(),
+                    event == null ? null : event.getVisibility(),
+                    event == null ? null : event.getPostStatus());
+            return;
+        }
         notifyMentions(event.getAuthorId(), event.getPostId(), null,
                 textOf(event.getTitle(), event.getContent()), Set.of(event.getAuthorId()));
         notifyTopicFollowers(event);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostLiked(PostLikedEvent event) {
         runQuietly(() -> notificationFacade.notifyLike(
@@ -87,7 +101,7 @@ public class NotificationEventListener {
                 Map.of("action", "like", "targetType", TARGET_POST, "targetId", event.getPostId()));
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentLiked(CommentLikedEvent event) {
         runQuietly(() -> notificationFacade.notifyCommentLike(
@@ -97,7 +111,7 @@ public class NotificationEventListener {
                         "postId", event.getPostId(), "commentId", event.getCommentId()));
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentCreated(CommentCreatedEvent event) {
         runQuietly(() -> notificationFacade.notifyComment(
@@ -121,7 +135,7 @@ public class NotificationEventListener {
         notifyDiscussionFollowers(event, excluded);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentQualitySignalChanged(CommentQualitySignalChangedEvent event) {
         String action = actionForQualitySignal(event);
@@ -135,7 +149,7 @@ public class NotificationEventListener {
         notifyDiscussionFollowers(event, action, excluded);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onUserFollowed(UserFollowedEvent event) {
         runQuietly(() -> notificationFacade.notifyFollower(
@@ -144,7 +158,7 @@ public class NotificationEventListener {
                 Map.of("action", "follow", "userId", event.getFollowerId()));
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostFavorited(PostFavoritedEvent event) {
         runQuietly(() -> notificationFacade.notifyFavorite(
@@ -153,7 +167,7 @@ public class NotificationEventListener {
                 Map.of("action", "favorite", "postId", event.getPostId()));
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onOperationCurationSelected(OperationCurationSelectedEvent event) {
         String skippedReason = operationCurationSkippedReason(event);
@@ -167,7 +181,7 @@ public class NotificationEventListener {
                 "operation curation selected", event.getAuthorUid(), 0L, TYPE_SYSTEM, TARGET_POST, event.getContentId(), content);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostReportReviewed(PostReportReviewedEvent event) {
         if (event == null || event.getReporterUid() == null || event.getReportId() == null) {
@@ -180,7 +194,7 @@ public class NotificationEventListener {
                 "post report receipt", event.getReporterUid(), 0L, TYPE_SYSTEM, null, event.getReportId(), content);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentReportReviewed(CommentReportReviewedEvent event) {
         if (event == null || event.getReporterUid() == null || event.getReportId() == null) {
@@ -193,7 +207,7 @@ public class NotificationEventListener {
                 "comment report receipt", event.getReporterUid(), 0L, TYPE_SYSTEM, null, event.getReportId(), content);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onContactRequestCreated(ContactRequestCreatedEvent event) {
         if (event == null || event.getRequestId() == null
@@ -208,7 +222,7 @@ public class NotificationEventListener {
                 TYPE_SYSTEM, null, event.getRequestId(), content);
     }
 
-    @Async
+    @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onContactRequestHandled(ContactRequestHandledEvent event) {
         if (event == null || event.getRequestId() == null
@@ -230,7 +244,28 @@ public class NotificationEventListener {
                             event.getRequesterUid(), event.getReceiverUid(), event.getRequestId()),
                     "contact request rejected", event.getRequesterUid(), event.getReceiverUid(),
                     TYPE_SYSTEM, null, event.getRequestId(), content);
+        } else if (CONTACT_REQUEST_STATUS_REPORTED.equals(status)) {
+            Long reportId = event.getReportId() == null ? event.getRequestId() : event.getReportId();
+            Map<String, Object> content = contactRequestReportReceiptContent(reportId);
+            runQuietly(() -> notificationFacade.notifySystem(event.getReceiverUid(), null, reportId, content),
+                    "contact request report receipt", event.getReceiverUid(), 0L,
+                    TYPE_SYSTEM, null, reportId, content);
         }
+    }
+
+    @Async("notificationAsyncExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onContactRequestReportReviewed(ContactRequestReportReviewedEvent event) {
+        if (event == null || event.getReportId() == null || event.getReporterUid() == null) {
+            return;
+        }
+        String targetPath = event.getTargetPath() == null ? CONTACT_REQUEST_INBOX_PATH : event.getTargetPath();
+        Map<String, Object> content = reportReceiptContent(SOURCE_CONTACT_REQUEST_REPORT, event.getReportId(),
+                event.getUserStatus(), targetPath);
+        runQuietly(() -> notificationFacade.notifyReportReceipt(event.getReporterUid(), SOURCE_CONTACT_REQUEST_REPORT,
+                        event.getReportId(), event.getUserStatus(), targetPath),
+                "contact request report reviewed", event.getReporterUid(), 0L,
+                TYPE_SYSTEM, null, event.getReportId(), content);
     }
 
     private boolean runQuietly(Runnable runnable, String scene, Long receiverUid, Long senderUid,
@@ -279,61 +314,69 @@ public class NotificationEventListener {
             return;
         }
         String action = isAuthorReply(event) ? ACTION_DISCUSSION_FOLLOW_AUTHOR_REPLY : ACTION_DISCUSSION_FOLLOW_COMMENT;
-        List<Long> receiverUids;
-        try {
-            receiverUids = discussionFollowFacade.followerUidsForNotification(
-                    event.getPostId(), excluded, DISCUSSION_FOLLOW_NOTIFICATION_LIMIT);
-        } catch (Exception e) {
-            log.warn("load discussion followers failed: {}", e.getMessage());
-            return;
-        }
-        if (receiverUids == null || receiverUids.isEmpty()) {
-            return;
-        }
-        Set<Long> deliveredUids = new HashSet<>();
-        for (Long receiverUid : receiverUids) {
-            if (receiverUid == null || receiverUid <= 0 || excluded.contains(receiverUid) || !deliveredUids.add(receiverUid)) {
-                continue;
+        String cursor = null;
+        int fanoutCount = 0;
+        do {
+            PageResult<Long> page;
+            try {
+                page = discussionFollowFacade.followerUidsForNotification(
+                        event.getPostId(), excluded, cursor, DISCUSSION_FOLLOW_NOTIFICATION_BATCH_SIZE);
+            } catch (Exception e) {
+                log.warn("load discussion followers failed: {}", e.getMessage());
+                return;
             }
-            Map<String, Object> content = discussionFollowContent(action, event.getPostId(), event.getCommentId());
-            boolean created = runQuietly(
-                    () -> notifyDiscussionFollower(receiverUid, event.getUid(), event.getPostId(), event.getCommentId(), action),
-                    action, receiverUid, event.getUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
-            if (created) {
-                markDiscussionFollowerNotified(event, receiverUid);
+            for (Long receiverUid : safeItems(page)) {
+                if (receiverUid == null || receiverUid <= 0 || excluded.contains(receiverUid)) {
+                    continue;
+                }
+                Map<String, Object> content = discussionFollowContent(action, event.getPostId(), event.getCommentId());
+                boolean created = runQuietly(
+                        () -> notifyDiscussionFollower(receiverUid, event.getUid(), event.getPostId(), event.getCommentId(), action),
+                        action, receiverUid, event.getUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
+                if (created) {
+                    markDiscussionFollowerNotified(event, receiverUid);
+                }
+                fanoutCount++;
             }
-        }
+            cursor = page == null ? null : page.getNextCursor();
+        } while (cursor != null);
     }
 
     private void notifyDiscussionFollowers(CommentQualitySignalChangedEvent event, String action, Set<Long> excluded) {
         if (event == null || event.getPostId() == null || event.getCommentId() == null || event.getOperatorUid() == null) {
             return;
         }
-        List<Long> receiverUids;
-        try {
-            receiverUids = discussionFollowFacade.followerUidsForNotification(
-                    event.getPostId(), excluded, DISCUSSION_FOLLOW_NOTIFICATION_LIMIT);
-        } catch (Exception e) {
-            log.warn("load discussion followers for quality signal failed: {}", e.getMessage());
-            return;
-        }
-        if (receiverUids == null || receiverUids.isEmpty()) {
-            return;
-        }
-        Set<Long> deliveredUids = new HashSet<>();
-        for (Long receiverUid : receiverUids) {
-            if (receiverUid == null || receiverUid <= 0 || excluded.contains(receiverUid) || !deliveredUids.add(receiverUid)) {
-                continue;
+        String cursor = null;
+        int fanoutCount = 0;
+        do {
+            PageResult<Long> page;
+            try {
+                page = discussionFollowFacade.followerUidsForNotification(
+                        event.getPostId(), excluded, cursor, DISCUSSION_FOLLOW_NOTIFICATION_BATCH_SIZE);
+            } catch (Exception e) {
+                log.warn("load discussion followers for quality signal failed: {}", e.getMessage());
+                return;
             }
-            Map<String, Object> content = discussionFollowContent(action, event.getPostId(), event.getCommentId());
-            boolean created = runQuietly(
-                    () -> notificationFacade.notifyDiscussionFollowQualityComment(
-                            receiverUid, event.getOperatorUid(), event.getPostId(), event.getCommentId(), action),
-                    action, receiverUid, event.getOperatorUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
-            if (created) {
-                markDiscussionFollowerNotified(event.getPostId(), receiverUid, event.getCommentId());
+            for (Long receiverUid : safeItems(page)) {
+                if (receiverUid == null || receiverUid <= 0 || excluded.contains(receiverUid)) {
+                    continue;
+                }
+                Map<String, Object> content = discussionFollowContent(action, event.getPostId(), event.getCommentId());
+                boolean created = runQuietly(
+                        () -> notificationFacade.notifyDiscussionFollowQualityComment(
+                                receiverUid, event.getOperatorUid(), event.getPostId(), event.getCommentId(), action),
+                        action, receiverUid, event.getOperatorUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
+                if (created) {
+                    markDiscussionFollowerNotified(event.getPostId(), receiverUid, event.getCommentId());
+                }
+                fanoutCount++;
             }
-        }
+            cursor = page == null ? null : page.getNextCursor();
+        } while (cursor != null);
+    }
+
+    private List<Long> safeItems(PageResult<Long> page) {
+        return page == null || page.getItems() == null ? List.of() : page.getItems();
     }
 
     private void notifyDiscussionFollower(Long receiverUid, Long senderUid, Long postId, Long commentId, String action) {
@@ -398,9 +441,9 @@ public class NotificationEventListener {
 
     private String discussionFollowMessage(String action) {
         return switch (action) {
-            case ACTION_DISCUSSION_FOLLOW_FEATURED_REPLY -> "你关注的讨论有一条精选回复。";
-            case ACTION_DISCUSSION_FOLLOW_AUTHOR_PINNED -> "作者置顶了一条关键回应。";
-            case ACTION_DISCUSSION_FOLLOW_AUTHOR_REPLY -> "作者补充了新的回应。";
+            case ACTION_DISCUSSION_FOLLOW_FEATURED_REPLY -> "A followed discussion has a featured reply.";
+            case ACTION_DISCUSSION_FOLLOW_AUTHOR_PINNED -> "The author pinned an important reply.";
+            case ACTION_DISCUSSION_FOLLOW_AUTHOR_REPLY -> "The author added a new reply.";
             default -> null;
         };
     }
@@ -416,7 +459,7 @@ public class NotificationEventListener {
                 || event.getTopicNotificationTargets().isEmpty()) {
             return;
         }
-        if (!Integer.valueOf(1).equals(event.getVisibility()) || !Integer.valueOf(1).equals(event.getPostStatus())) {
+        if (!isPublicPublished(event)) {
             log.warn("skip topic notification for non-public post: postId={} visibility={} status={}",
                     event.getPostId(), event.getVisibility(), event.getPostStatus());
             return;
@@ -467,6 +510,12 @@ public class NotificationEventListener {
         return content;
     }
 
+    private boolean isPublicPublished(PostPublishedEvent event) {
+        return event != null
+                && Integer.valueOf(POST_VIS_PUBLIC).equals(event.getVisibility())
+                && Integer.valueOf(POST_STATUS_PUBLISHED).equals(event.getPostStatus());
+    }
+
     private Map<String, Object> operationCurationSelectedContent(OperationCurationSelectedEvent event) {
         Map<String, Object> content = new LinkedHashMap<>();
         String placementLabel = event.getPlacementKey();
@@ -503,10 +552,7 @@ public class NotificationEventListener {
         content.put("reportId", reportId);
         content.put("userStatus", normalizedStatus);
         content.put("targetPath", targetPath);
-        content.put("title", "你提交的举报已有处理结果。");
-        content.put("message", REPORT_USER_STATUS_ACTION_TAKEN.equals(normalizedStatus)
-                ? "平台已处理你举报的内容。"
-                : "经复核，暂未发现明确违规。");
+        content.put("title", "Report receipt");
         content.put("message", reportReceiptMessage(normalizedStatus));
         content.put("dedupKey", ACTION_REPORT_RECEIPT + ":" + sourceType + ":" + reportId);
         return content;
@@ -524,12 +570,12 @@ public class NotificationEventListener {
 
     private String reportReceiptMessage(String status) {
         if (REPORT_USER_STATUS_ACTION_TAKEN.equals(status)) {
-            return "平台已处理你举报的内容。";
+            return "Your report has been reviewed and action was taken.";
         }
         if (REPORT_USER_STATUS_CLOSED.equals(status)) {
-            return "举报已关闭，平台已记录该反馈。";
+            return "Your report has been closed with no further action.";
         }
-        return "经复核，暂未发现明确违规。";
+        return "Your report is being reviewed. Please watch for updates.";
     }
 
     private Map<String, Object> contactRequestContent(String action, Long requestId, String targetPath) {
@@ -538,6 +584,19 @@ public class NotificationEventListener {
         content.put("requestId", requestId);
         content.put("targetPath", targetPath);
         content.put("dedupKey", action + ":" + requestId);
+        return content;
+    }
+
+    private Map<String, Object> contactRequestReportReceiptContent(Long reportId) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", ACTION_REPORT_RECEIPT);
+        content.put("sourceType", SOURCE_CONTACT_REQUEST_REPORT);
+        content.put("reportId", reportId);
+        content.put("userStatus", REPORT_USER_STATUS_PROCESSING);
+        content.put("targetPath", CONTACT_REQUEST_INBOX_PATH);
+        content.put("title", "Contact request report submitted");
+        content.put("message", "Your contact request report has been submitted for review.");
+        content.put("dedupKey", ACTION_REPORT_RECEIPT + ":" + SOURCE_CONTACT_REQUEST_REPORT + ":" + reportId);
         return content;
     }
 

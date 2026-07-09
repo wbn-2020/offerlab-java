@@ -140,6 +140,7 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
               ON sp.series_id = s.id
              AND sp.is_deleted = 0
             WHERE s.is_deleted = 0
+              AND s.visibility = 1
               AND sp.post_id IN
               <foreach collection="postIds" item="postId" open="(" separator="," close=")">
                 #{postId}

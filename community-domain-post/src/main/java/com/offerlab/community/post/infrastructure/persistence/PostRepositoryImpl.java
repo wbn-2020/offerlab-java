@@ -1,6 +1,7 @@
 package com.offerlab.community.post.infrastructure.persistence;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.offerlab.community.common.utils.SqlLimits;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
@@ -80,10 +81,26 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     @Transactional
-    public void update(Post post) {
+    public boolean update(Post post) {
         PostPO po = toPO(post);
-        po.setVersion(post.getVersion());
-        postMapper.updateById(po);
+        Integer expectedVersion = post.getVersion();
+        LambdaUpdateWrapper<PostPO> update = new LambdaUpdateWrapper<PostPO>()
+                .eq(PostPO::getId, post.getId())
+                .eq(PostPO::getIsDeleted, 0)
+                .set(PostPO::getAuthorId, po.getAuthorId())
+                .set(PostPO::getPostType, po.getPostType())
+                .set(PostPO::getTitle, po.getTitle())
+                .set(PostPO::getContent, po.getContent())
+                .set(PostPO::getCoverUrl, po.getCoverUrl())
+                .set(PostPO::getVisibility, po.getVisibility())
+                .set(PostPO::getPostStatus, po.getPostStatus());
+        if (expectedVersion != null) {
+            update.eq(PostPO::getVersion, expectedVersion)
+                    .set(PostPO::getVersion, expectedVersion + 1);
+        }
+        if (postMapper.update(null, update) != 1) {
+            return false;
+        }
         if (post.getExtJson() != null) {
             PostExtensionPO existing = extMapper.selectById(post.getId());
             PostExtensionPO ext = new PostExtensionPO();
@@ -96,6 +113,27 @@ public class PostRepositoryImpl implements PostRepository {
                 extMapper.updateById(ext);
             }
         }
+        if (expectedVersion != null) {
+            post.setVersion(expectedVersion + 1);
+        }
+        return true;
+    }
+
+    @Override
+    public boolean updateStatusIfCurrent(Long postId, Integer expectedStatus, Integer nextStatus, Integer expectedVersion) {
+        if (postId == null || expectedStatus == null || nextStatus == null) {
+            return false;
+        }
+        LambdaUpdateWrapper<PostPO> update = new LambdaUpdateWrapper<PostPO>()
+                .eq(PostPO::getId, postId)
+                .eq(PostPO::getPostStatus, expectedStatus)
+                .eq(PostPO::getIsDeleted, 0)
+                .set(PostPO::getPostStatus, nextStatus);
+        if (expectedVersion != null) {
+            update.eq(PostPO::getVersion, expectedVersion)
+                    .set(PostPO::getVersion, expectedVersion + 1);
+        }
+        return postMapper.update(null, update) == 1;
     }
 
     @Override

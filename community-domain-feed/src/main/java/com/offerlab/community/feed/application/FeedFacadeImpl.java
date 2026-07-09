@@ -60,7 +60,7 @@ public class FeedFacadeImpl implements FeedFacade {
         if (domain != null) {
             return getDomainFollowingFeed(uid, maxScore, size, domain);
         }
-        Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readInboxWithScore(uid, maxScore, size);
+        Set<ZSetOperations.TypedTuple<String>> tuples = readFollowingInboxSafely(uid, maxScore, size);
         return assembleFromTuples(tuples, size, uid);
     }
 
@@ -223,6 +223,16 @@ public class FeedFacadeImpl implements FeedFacade {
         }
     }
 
+    private Set<ZSetOperations.TypedTuple<String>> readFollowingInboxSafely(Long uid, double maxScore, int size) {
+        try {
+            return feedRedis.readInboxWithScore(uid, maxScore, size);
+        } catch (Exception e) {
+            log.warn("feed redis following inbox read failed, uid={}, fallback to empty page: {}",
+                    LogMask.id(uid), e.toString());
+            return Set.of();
+        }
+    }
+
     private void addFeedItems(Map<Long, FeedItemVO> target, List<FeedItemVO> source) {
         if (source == null || source.isEmpty()) {
             return;
@@ -286,6 +296,8 @@ public class FeedFacadeImpl implements FeedFacade {
         var counters = postFacade.batchGetCounters(postIds);
         Set<Long> authorIds = posts.values().stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet());
         var authors = userFacade.batchGetUserBriefs(authorIds);
+        Set<Long> likedPostIds = viewerUid == null ? Set.of() : interactionFacade.likedPostIds(viewerUid, postIds);
+        Set<Long> favoritedPostIds = viewerUid == null ? Set.of() : interactionFacade.favoritedPostIds(viewerUid, postIds);
 
         List<FeedItemVO> items = new ArrayList<>(postIds.size());
         for (long[] pair : idsAndScores) {
@@ -295,10 +307,7 @@ public class FeedFacadeImpl implements FeedFacade {
             PostCounterDTO counter = counters.get(p.getId());
             FeedItemVO.MyInteraction my = null;
             if (viewerUid != null) {
-                my = FeedItemVO.MyInteraction.builder()
-                        .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
-                        .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
-                        .build();
+                my = myInteraction(p.getId(), likedPostIds, favoritedPostIds);
             }
             items.add(FeedItemVO.builder()
                     .post(p)
@@ -329,7 +338,7 @@ public class FeedFacadeImpl implements FeedFacade {
         while (matches.size() <= pageSize && scannedRows < MAX_DOMAIN_INBOX_SCAN_ROWS) {
             int remainingScanRows = MAX_DOMAIN_INBOX_SCAN_ROWS - scannedRows;
             int currentFetchSize = Math.min(fetchSize, remainingScanRows);
-            Set<ZSetOperations.TypedTuple<String>> tuples = feedRedis.readInboxWithScore(uid, scanMaxScore, currentFetchSize);
+            Set<ZSetOperations.TypedTuple<String>> tuples = readFollowingInboxSafely(uid, scanMaxScore, currentFetchSize);
             List<long[]> idsAndScores = idsAndScores(tuples);
             if (idsAndScores.isEmpty()) {
                 sourceHasMore = false;
@@ -423,14 +432,13 @@ public class FeedFacadeImpl implements FeedFacade {
                 .map(PostBriefDTO::getAuthorId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet()));
+        Set<Long> likedPostIds = viewerUid == null ? Set.of() : interactionFacade.likedPostIds(viewerUid, postIds);
+        Set<Long> favoritedPostIds = viewerUid == null ? Set.of() : interactionFacade.favoritedPostIds(viewerUid, postIds);
         List<FeedItemVO> items = visiblePosts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
                 .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
-                .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
-                        .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
-                        .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
-                        .build())
+                .myInteraction(viewerUid == null ? null : myInteraction(p.getId(), likedPostIds, favoritedPostIds))
                 .build()).toList();
         return PageResult.of(items, nextCursor, hasMore);
     }
@@ -464,6 +472,8 @@ public class FeedFacadeImpl implements FeedFacade {
                 .map(PostBriefDTO::getAuthorId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet()));
+        Set<Long> likedPostIds = viewerUid == null ? Set.of() : interactionFacade.likedPostIds(viewerUid, postIds);
+        Set<Long> favoritedPostIds = viewerUid == null ? Set.of() : interactionFacade.favoritedPostIds(viewerUid, postIds);
         List<CrossDomainRecommendationVO> items = posts.stream().map(post -> {
             PostCounterDTO counter = counters.get(post.getId());
             List<String> reasons = recommendationReasons(post, counter, intent, publicPostCountByAuthor);
@@ -473,10 +483,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     .author(feedAuthor(post, authors, viewerUid))
                     .counter(counter)
                     .recommendationReasons(reasons)
-                    .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
-                            .liked(interactionFacade.hasLiked(viewerUid, post.getId()))
-                            .favorited(interactionFacade.hasFavorited(viewerUid, post.getId()))
-                            .build())
+                    .myInteraction(viewerUid == null ? null : myInteraction(post.getId(), likedPostIds, favoritedPostIds))
                     .build();
             return CrossDomainRecommendationVO.builder()
                     .item(feedItem)
@@ -506,17 +513,23 @@ public class FeedFacadeImpl implements FeedFacade {
                 .map(PostBriefDTO::getAuthorId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet()));
+        Set<Long> likedPostIds = viewerUid == null ? Set.of() : interactionFacade.likedPostIds(viewerUid, postIds);
+        Set<Long> favoritedPostIds = viewerUid == null ? Set.of() : interactionFacade.favoritedPostIds(viewerUid, postIds);
         List<FeedItemVO> items = posts.stream().map(p -> FeedItemVO.builder()
                 .post(p)
                 .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
                 .recommendationReasons(recommendationReasons(p, counters.get(p.getId()), intent, publicPostCountByAuthor))
-                .myInteraction(viewerUid == null ? null : FeedItemVO.MyInteraction.builder()
-                        .liked(interactionFacade.hasLiked(viewerUid, p.getId()))
-                        .favorited(interactionFacade.hasFavorited(viewerUid, p.getId()))
-                        .build())
+                .myInteraction(viewerUid == null ? null : myInteraction(p.getId(), likedPostIds, favoritedPostIds))
                 .build()).toList();
         return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    private FeedItemVO.MyInteraction myInteraction(Long postId, Set<Long> likedPostIds, Set<Long> favoritedPostIds) {
+        return FeedItemVO.MyInteraction.builder()
+                .liked(likedPostIds != null && likedPostIds.contains(postId))
+                .favorited(favoritedPostIds != null && favoritedPostIds.contains(postId))
+                .build();
     }
 
     private UserBriefDTO sanitizeAuthor(Long viewerUid, Long targetUid, UserBriefDTO dto) {

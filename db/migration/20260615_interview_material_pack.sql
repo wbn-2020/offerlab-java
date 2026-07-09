@@ -1,8 +1,7 @@
--- 20260615_interview_material_pack.sql
+﻿-- 20260615_interview_material_pack.sql
 -- Non-destructive migration for personal interview material packs.
 -- Review and run manually on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_interview_material_pack (
     id                       BIGINT       NOT NULL PRIMARY KEY,

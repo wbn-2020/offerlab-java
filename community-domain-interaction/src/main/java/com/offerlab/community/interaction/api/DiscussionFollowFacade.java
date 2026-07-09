@@ -19,5 +19,7 @@ public interface DiscussionFollowFacade {
 
     List<Long> followerUidsForNotification(Long postId, Set<Long> excludedUids, int limit);
 
+    PageResult<Long> followerUidsForNotification(Long postId, Set<Long> excludedUids, String cursor, int limit);
+
     void markNotified(Long postId, Long uid, Long commentId);
 }

@@ -1,7 +1,6 @@
--- Domain moderators for OfferLab comprehensive community governance.
+﻿-- Domain moderators for OfferLab comprehensive community governance.
 -- Non-destructive migration: creates the association table if it is missing.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_domain_moderator (
     id              BIGINT      NOT NULL PRIMARY KEY,

@@ -1,8 +1,7 @@
--- 20260528_mock_interview.sql
+﻿-- 20260528_mock_interview.sql
 -- Non-destructive migration for lightweight mock interview practice sessions.
 -- Review before running on an existing database.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_mock_interview_session (
     id               BIGINT       NOT NULL PRIMARY KEY,

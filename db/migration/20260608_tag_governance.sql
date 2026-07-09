@@ -1,7 +1,6 @@
--- Tag governance extension for OfferLab community operations.
+﻿-- Tag governance extension for OfferLab community operations.
 -- Review duplicate rows before running this migration in production.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 
@@ -50,13 +49,13 @@ END $$
 DELIMITER ;
 
 CALL v20260608_add_column_if_missing('t_tag', 'tag_status',
-    'ALTER TABLE t_tag ADD COLUMN tag_status TINYINT NOT NULL DEFAULT 1 COMMENT ''1启用 0禁用/合并'' AFTER is_official');
+    'ALTER TABLE t_tag ADD COLUMN tag_status TINYINT NOT NULL DEFAULT 1 COMMENT ''1鍚敤 0绂佺敤/鍚堝苟'' AFTER is_official');
 CALL v20260608_add_column_if_missing('t_tag', 'recommended',
-    'ALTER TABLE t_tag ADD COLUMN recommended TINYINT NOT NULL DEFAULT 0 COMMENT ''1推荐标签'' AFTER tag_status');
+    'ALTER TABLE t_tag ADD COLUMN recommended TINYINT NOT NULL DEFAULT 0 COMMENT ''1鎺ㄨ崘鏍囩'' AFTER tag_status');
 CALL v20260608_add_column_if_missing('t_tag', 'synonyms',
-    'ALTER TABLE t_tag ADD COLUMN synonyms VARCHAR(512) NULL COMMENT ''同义词，逗号分隔'' AFTER recommended');
+    'ALTER TABLE t_tag ADD COLUMN synonyms VARCHAR(512) NULL COMMENT ''鍚屼箟璇嶏紝閫楀彿鍒嗛殧'' AFTER recommended');
 CALL v20260608_add_column_if_missing('t_tag', 'merge_target_id',
-    'ALTER TABLE t_tag ADD COLUMN merge_target_id BIGINT NULL COMMENT ''合并目标标签'' AFTER synonyms');
+    'ALTER TABLE t_tag ADD COLUMN merge_target_id BIGINT NULL COMMENT ''鍚堝苟鐩爣鏍囩'' AFTER synonyms');
 CALL v20260608_add_column_if_missing('t_tag', 'update_time',
     'ALTER TABLE t_tag ADD COLUMN update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) AFTER create_time');
 

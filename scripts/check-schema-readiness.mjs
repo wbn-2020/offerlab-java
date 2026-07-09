@@ -57,6 +57,13 @@ const expectations = [
     't_content_series_post',
     't_feed_recommend_support_stat',
     't_expert_cert_application',
+    't_int_contact_request',
+    't_user_privacy_setting',
+    't_int_discussion_follow',
+    't_int_favorite',
+    't_int_favorite_folder',
+    't_int_comment_quality_signal',
+    't_int_comment_helpful',
   ]),
   ...columns('t_tag', [
     'tag_status',
@@ -204,6 +211,78 @@ const expectations = [
     'is_deleted',
     'active_guard',
   ]),
+  ...columns('t_operation_curation_item', ['active_guard']),
+  ...columns('t_operation_slot_item', ['active_guard']),
+  ...columns('t_int_contact_request', [
+    'id',
+    'requester_uid',
+    'receiver_uid',
+    'request_status',
+    'dedup_key',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
+  ...columns('t_user_privacy_setting', [
+    'accept_contact_request',
+    'contact_request_policy',
+    'contact_request_daily_limit',
+  ]),
+  ...columns('t_int_discussion_follow', [
+    'id',
+    'uid',
+    'post_id',
+    'follow_status',
+    'last_read_comment_id',
+    'last_notified_comment_id',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
+  ...columns('t_int_favorite', [
+    'folder_id',
+    'sort_order',
+    'update_time',
+  ]),
+  ...columns('t_int_favorite_folder', [
+    'id',
+    'user_id',
+    'name',
+    'visibility',
+    'sort_order',
+    'post_count',
+    'is_default',
+    'is_deleted',
+    'default_active_key',
+    'name_active_key',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_int_comment', ['helpful_count']),
+  ...columns('t_int_comment_quality_signal', [
+    'id',
+    'post_id',
+    'comment_id',
+    'root_id',
+    'signal_type',
+    'signal_status',
+    'operator_uid',
+    'operator_role',
+    'source',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
+  ...columns('t_int_comment_helpful', [
+    'id',
+    'uid',
+    'post_id',
+    'comment_id',
+    'helpful_status',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
   ...indexes('t_post_report', ['idx_post_reporter_status']),
   ...indexes('t_comment_report', ['idx_comment_reporter_status']),
   ...indexes('t_interview_question', ['idx_status_time']),
@@ -261,6 +340,59 @@ const expectations = [
     'idx_expert_cert_applicant_domain',
     'idx_expert_cert_review_queue',
   ]),
+  ...indexes('t_user_follow', [
+    'idx_following_page',
+    'idx_follower_page',
+  ]),
+  ...indexes('t_notif_message', [
+    'idx_receiver_list',
+    'idx_receiver_unread_latest',
+  ]),
+  ...indexes('t_int_contact_request', [
+    'uk_contact_request_dedup',
+    'idx_contact_request_receiver_status',
+    'idx_contact_request_requester_status',
+    'idx_contact_request_pair_status',
+    'idx_contact_request_requester_day',
+    'idx_contact_request_receiver_page',
+    'idx_contact_request_requester_page',
+  ]),
+  ...indexes('t_user_privacy_setting', ['idx_contact_request_policy']),
+  ...indexes('t_int_discussion_follow', [
+    'uk_discussion_follow_user_post',
+    'idx_discussion_follow_post_status',
+    'idx_discussion_follow_uid_status',
+    'idx_discussion_follow_notify_page',
+    'idx_discussion_follow_uid_page',
+  ]),
+  ...indexes('t_int_favorite', [
+    'uk_user_post',
+    'idx_user_folder_sort',
+    'idx_folder_time',
+    'idx_favorite_user_page',
+    'idx_favorite_user_folder_page',
+  ]),
+  ...indexes('t_int_favorite_folder', [
+    'uk_favorite_folder_active_default',
+    'uk_favorite_folder_active_name',
+    'idx_favorite_folder_user_sort',
+    'idx_favorite_folder_user_default',
+  ]),
+  ...indexes('t_int_like', ['idx_like_user_page']),
+  ...indexes('t_int_comment', ['idx_comment_quality_roots']),
+  ...indexes('t_int_comment_quality_signal', [
+    'uk_comment_quality_signal_comment_type',
+    'idx_comment_quality_signal_post_type_status',
+    'idx_comment_quality_signal_root_type_status',
+    'idx_comment_quality_signal_operator_time',
+    'idx_comment_quality_post_comment',
+  ]),
+  ...indexes('t_int_comment_helpful', [
+    'uk_comment_helpful_uid_comment',
+    'idx_comment_helpful_comment_status',
+    'idx_comment_helpful_user_status',
+    'idx_comment_helpful_post_comment',
+  ]),
   ...primaryKeys('t_domain_moderator', ['id']),
   ...primaryKeys('t_domain_config', ['domain']),
   ...primaryKeys('t_growth_event', ['id']),
@@ -270,6 +402,13 @@ const expectations = [
   ...primaryKeys('t_content_series_post', ['id']),
   ...primaryKeys('t_feed_recommend_support_stat', ['id']),
   ...primaryKeys('t_expert_cert_application', ['id']),
+  ...primaryKeys('t_int_contact_request', ['id']),
+  ...primaryKeys('t_user_privacy_setting', ['user_id']),
+  ...primaryKeys('t_int_discussion_follow', ['id']),
+  ...primaryKeys('t_int_favorite', ['id']),
+  ...primaryKeys('t_int_favorite_folder', ['id']),
+  ...primaryKeys('t_int_comment_quality_signal', ['id']),
+  ...primaryKeys('t_int_comment_helpful', ['id']),
 ]
 
 const sql = `
@@ -411,10 +550,15 @@ function migrationForTable(table) {
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
+  if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
+  if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
+  if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
+  if (table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
   return 'earlier governance/init migration'
 }
 
-function migrationForColumn(table) {
+function migrationForColumn(table, name) {
   if (table === 't_tag') return 'db/migration/20260608_tag_governance.sql'
   if (table === 't_mock_interview_answer') return 'db/migration/20260608_mock_interview_ai_review_transparency.sql'
   if (table === 't_ai_extract_task') return 'db/migration/20260605_ai_extract_task_metrics.sql'
@@ -427,10 +571,24 @@ function migrationForColumn(table) {
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
+  if ((table === 't_operation_curation_item' || table === 't_operation_slot_item') && name === 'active_guard') return 'db/migration/20260708_operation_soft_delete_unique_guard.sql'
+  if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
+  if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
+  if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
+  if (table === 't_int_comment' || table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
   return 'unknown'
 }
 
-function migrationForIndex(table) {
+function migrationForIndex(table, name) {
+  if (table === 't_user_follow' && (name === 'idx_following_page' || name === 'idx_follower_page')) return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_notif_message' && (name === 'idx_receiver_list' || name === 'idx_receiver_unread_latest')) return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_int_contact_request' && (name === 'idx_contact_request_receiver_page' || name === 'idx_contact_request_requester_page')) return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_int_favorite' && (name === 'idx_favorite_user_page' || name === 'idx_favorite_user_folder_page')) return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_int_like' && name === 'idx_like_user_page') return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_int_comment' && name === 'idx_comment_quality_roots') return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_int_comment_quality_signal' && name === 'idx_comment_quality_post_comment') return 'db/migration/20260708_public_read_indexes.sql'
+  if (table === 't_int_discussion_follow' && (name === 'idx_discussion_follow_notify_page' || name === 'idx_discussion_follow_uid_page')) return 'db/migration/20260708_public_read_indexes.sql'
   if (table === 't_tag') return 'db/migration/20260608_tag_governance.sql'
   if (table.startsWith('t_community_topic')) return 'db/migration/20260608_community_topics.sql'
   if (table === 't_review_queue') return 'db/migration/20260608_review_queue.sql'
@@ -443,6 +601,11 @@ function migrationForIndex(table) {
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
+  if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
+  if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
+  if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
+  if (table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
   return 'earlier governance/init migration'
 }
 
@@ -455,5 +618,10 @@ function migrationForConstraint(table) {
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
+  if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
+  if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
+  if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
+  if (table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
   return 'unknown'
 }

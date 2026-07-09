@@ -11,17 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AuthRevocationGuardTest {
 
     @Test
-    void degradedRevocationMustFailClosedForPersonalDataReads() throws Exception {
+    void degradedRevocationMustFailClosedForProtectedEndpoints() throws Exception {
         String interceptor = read("src/main/java/com/offerlab/community/infra/web/interceptor/AuthInterceptor.java");
 
-        assertContains(interceptor, "\"/api/v1/users/me\"");
-        assertContains(interceptor, "\"/api/v1/notifications\"");
-        assertContains(interceptor, "\"/api/v1/contact-requests\"");
-        assertContains(interceptor, "\"/api/v1/comments/reports\"");
-        assertContains(interceptor, "\"/api/v1/posts/reports\"");
-        assertContains(interceptor, "\"/api/v1/post-drafts\"");
-        assertContains(interceptor, "\"/api/v1/mock-interviews\"");
-        assertContains(interceptor, "STRICT_REVOCATION_PREFIXES");
+        assertContains(interceptor, "if (uid != null && revocationCheckDegraded)");
+        assertContains(interceptor, "if (!isPublic)");
+        assertContains(interceptor, "throw new BizException(ErrorCode.UNAUTHORIZED)");
+        assertContains(interceptor, "continue anonymously");
+        assertContains(interceptor, "uid = null");
     }
 
     private static String read(String path) throws Exception {

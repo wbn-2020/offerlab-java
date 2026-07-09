@@ -34,7 +34,7 @@ class NotificationFacadeAggregationTest {
         UserFacade userFacade = userFacadeStub(users);
         NotificationFacadeImpl facade = new NotificationFacadeImpl(mapper, new SnowflakeIdGenerator(), new ObjectMapper(), userFacade);
 
-        PageResult<Map<String, Object>> result = facade.listNotifications(7L, null, 0, 20);
+        PageResult<Map<String, Object>> result = facade.listNotifications(7L, null, null, 20);
 
         assertEquals(2, result.getItems().size(), "same-target likes inside the aggregation window should collapse into one card");
         Map<String, Object> aggregated = result.getItems().get(0);

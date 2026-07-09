@@ -151,6 +151,29 @@ public class DiscussionFollowService implements DiscussionFollowFacade {
     }
 
     @Override
+    public PageResult<Long> followerUidsForNotification(Long postId, Set<Long> excludedUids, String cursor, int limit) {
+        requirePostId(postId);
+        int safeLimit = Math.max(1, Math.min(limit, MAX_NOTIFICATION_TARGETS));
+        Long afterId = parseFollowerCursor(cursor);
+        Set<Long> excluded = excludedUids == null ? Set.of() : new HashSet<>(excludedUids);
+        List<DiscussionFollowPO> rows = discussionFollowMapper.selectFollowerRowsForNotification(postId, afterId, safeLimit + 1);
+        if (rows == null || rows.isEmpty()) {
+            return PageResult.empty();
+        }
+        boolean hasMore = rows.size() > safeLimit;
+        List<DiscussionFollowPO> pageRows = hasMore ? rows.subList(0, safeLimit) : rows;
+        List<Long> items = pageRows.stream()
+                .map(DiscussionFollowPO::getUid)
+                .filter(Objects::nonNull)
+                .filter(uid -> uid > 0)
+                .filter(uid -> !excluded.contains(uid))
+                .distinct()
+                .toList();
+        String next = hasMore && !pageRows.isEmpty() ? String.valueOf(pageRows.get(pageRows.size() - 1).getId()) : null;
+        return PageResult.of(items, next, hasMore);
+    }
+
+    @Override
     public void markNotified(Long postId, Long uid, Long commentId) {
         if (postId == null || postId <= 0 || uid == null || uid <= 0 || commentId == null || commentId <= 0) {
             return;
@@ -196,6 +219,18 @@ public class DiscussionFollowService implements DiscussionFollowFacade {
             return null;
         }
         return String.valueOf(po.getUpdateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+    }
+
+    private static Long parseFollowerCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return null;
+        }
+        try {
+            long value = Long.parseLong(cursor.trim());
+            return value > 0 ? value : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static void requireUid(Long uid) {

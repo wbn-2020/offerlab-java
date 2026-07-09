@@ -42,7 +42,9 @@ public class PostFeaturedService {
         String beforeExtJson = post.getExtJson();
         String afterExtJson = writeFeaturedExt(beforeExtJson, featured, operatorUid, note);
         post.setExtJson(afterExtJson);
-        postRepo.update(post);
+        if (!postRepo.update(post)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
         postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
         postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
         String action = featured ? "POST_FEATURE_SET" : "POST_FEATURE_UNSET";

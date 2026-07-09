@@ -11,6 +11,7 @@ import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.domain.model.Post;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,25 +38,31 @@ public class FeedController {
 
     @PublicApi
     @GetMapping("/recommend")
+    @RateLimit(key = "'public:feed:recommend:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<FeedItemVO>> recommend(@RequestParam(required = false) String cursor,
                                                     @RequestParam(defaultValue = "20") int size,
-                                                    @RequestParam(required = false) Integer domain) {
+                                                    @RequestParam(required = false) Integer domain,
+                                                    HttpServletRequest request) {
         return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
     @GetMapping("/latest")
+    @RateLimit(key = "'public:feed:latest:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<FeedItemVO>> latest(@RequestParam(required = false) String cursor,
                                                  @RequestParam(defaultValue = "20") int size,
-                                                 @RequestParam(required = false) Integer domain) {
+                                                 @RequestParam(required = false) Integer domain,
+                                                 HttpServletRequest request) {
         return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
     @GetMapping("/hot")
+    @RateLimit(key = "'public:feed:hot:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<FeedItemVO>> hot(@RequestParam(required = false) String cursor,
                                               @RequestParam(defaultValue = "20") int size,
-                                              @RequestParam(required = false) Integer domain) {
+                                              @RequestParam(required = false) Integer domain,
+                                              HttpServletRequest request) {
         return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 

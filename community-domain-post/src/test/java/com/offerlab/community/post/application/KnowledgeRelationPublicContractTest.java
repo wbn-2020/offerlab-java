@@ -2,6 +2,7 @@ package com.offerlab.community.post.application;
 
 import com.offerlab.community.post.controller.KnowledgeController;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -25,7 +26,10 @@ class KnowledgeRelationPublicContractTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertEquals(5, controllerMethod.getParameterCount(),
+        long requestParams = Arrays.stream(controllerMethod.getParameters())
+                .filter(parameter -> parameter.isAnnotationPresent(RequestParam.class))
+                .count();
+        assertEquals(5, requestParams,
                 "public knowledge controller should only accept postId/tagId/topicId/domain/limit");
         assertEquals(5, serviceMethod.getParameterCount(),
                 "knowledge relation service should align with the public seed contract");

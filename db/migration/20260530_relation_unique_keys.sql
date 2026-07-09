@@ -1,7 +1,6 @@
--- Collapse relation uniqueness to one row per business pair.
+﻿-- Collapse relation uniqueness to one row per business pair.
 -- Review duplicate rows before running this migration in production.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DELIMITER $$
 

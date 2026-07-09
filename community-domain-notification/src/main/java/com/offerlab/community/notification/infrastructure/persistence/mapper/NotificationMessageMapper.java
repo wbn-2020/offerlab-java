@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -43,6 +44,16 @@ public interface NotificationMessageMapper extends BaseMapper<NotificationMessag
     NotificationMessagePO selectLatestUnread(@Param("uid") Long uid);
 
     @Select("""
+            SELECT notif_type AS notifType, COUNT(*) AS unreadCount
+            FROM t_notif_message
+            WHERE receiver_uid = #{uid}
+              AND is_read = 0
+              AND is_deleted = 0
+            GROUP BY notif_type
+            """)
+    List<java.util.Map<String, Object>> countUnreadGroupedByType(@Param("uid") Long uid);
+
+    @Select("""
             <script>
             SELECT id, receiver_uid, sender_uid, notif_type, target_type, target_id,
                    content_json, is_read, create_time, is_deleted
@@ -54,7 +65,10 @@ public interface NotificationMessageMapper extends BaseMapper<NotificationMessag
                 AND notif_type = #{notifType}
               </if>
               <if test="cursorTime != null">
-                AND create_time &lt; #{cursorTime}
+                AND (
+                  create_time &lt; #{cursorTime}
+                  OR (#{cursorId} IS NOT NULL AND create_time = #{cursorTime} AND id &lt; #{cursorId})
+                )
               </if>
             </where>
             ORDER BY create_time DESC, id DESC
@@ -64,6 +78,7 @@ public interface NotificationMessageMapper extends BaseMapper<NotificationMessag
     List<NotificationMessagePO> listByUser(@Param("uid") Long uid,
                                            @Param("notifType") Integer notifType,
                                            @Param("cursorTime") LocalDateTime cursorTime,
+                                           @Param("cursorId") Long cursorId,
                                            @Param("limit") int limit);
 
     @Insert("""
@@ -87,4 +102,15 @@ public interface NotificationMessageMapper extends BaseMapper<NotificationMessag
             )
             """)
     int insertLegacy(NotificationMessagePO message);
+
+    @Update("""
+            UPDATE t_notif_message
+            SET is_read = 1
+            WHERE receiver_uid = #{uid}
+              AND is_deleted = 0
+              AND is_read = 0
+            ORDER BY create_time ASC, id ASC
+            LIMIT #{limit}
+            """)
+    int markUnreadBatchAsRead(@Param("uid") Long uid, @Param("limit") int limit);
 }

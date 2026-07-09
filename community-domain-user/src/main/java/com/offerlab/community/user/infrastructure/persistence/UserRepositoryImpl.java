@@ -13,7 +13,12 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Repository
 @RequiredArgsConstructor
@@ -52,6 +57,32 @@ public class UserRepositoryImpl implements UserRepository {
         if (acc == null) return Optional.empty();
         UserProfilePO prof = profileMapper.selectById(id);
         return Optional.of(toDomain(acc, prof));
+    }
+
+    @Override
+    public Map<Long, User> batchFindByIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> normalizedIds = ids.stream()
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .limit(500)
+                .toList();
+        if (normalizedIds.isEmpty()) {
+            return Map.of();
+        }
+        List<UserAccountPO> accounts = accountMapper.selectBatchIds(normalizedIds);
+        if (accounts == null || accounts.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, UserProfilePO> profiles = profileMapper.selectBatchIds(normalizedIds).stream()
+                .collect(Collectors.toMap(UserProfilePO::getId, profile -> profile, (left, right) -> left));
+        Map<Long, User> result = new HashMap<>(accounts.size());
+        for (UserAccountPO account : accounts) {
+            result.put(account.getId(), toDomain(account, profiles.get(account.getId())));
+        }
+        return result;
     }
 
     @Override

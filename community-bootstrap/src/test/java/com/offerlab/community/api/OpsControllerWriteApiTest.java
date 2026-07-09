@@ -188,7 +188,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"uid\":99,\"roleCode\":\"OPS\",\"auditRemark\":\"grant ops role\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireAdmin(7L);
@@ -207,7 +207,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"enabled\":false,\"roleCode\":\"OPS\",\"auditRemark\":\"disable ops role\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireAdmin(7L);
@@ -294,7 +294,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
                 .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
 
@@ -400,7 +400,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"ids\":[1],\"remark\":\"retry failed outbox\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"outbox-kafka-down-1\",\"previewNonce\":\"" + previewNonce + "\"}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DEPENDENCY_ERROR.getCode()));
 
         verifyNoInteractions(outboxMessageMapper, adminAuditService);
@@ -418,7 +418,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"ids\":[1,2],\"remark\":\"retry failed outbox\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"outbox-audit-key-1\",\"previewNonce\":\"" + previewNonce + "\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);
@@ -476,7 +476,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
                 .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
 
@@ -571,7 +571,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
                 .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
 
@@ -707,7 +707,7 @@ class OpsControllerWriteApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
                 .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
 

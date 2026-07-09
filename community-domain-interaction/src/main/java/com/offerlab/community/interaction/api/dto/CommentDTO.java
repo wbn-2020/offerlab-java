@@ -37,6 +37,7 @@ public class CommentDTO {
     private Boolean canDelete;
     private Integer replyCount;
     private Boolean hasMoreReplies;
+    private String repliesNextCursor;
     private List<CommentDTO> replies;
     private LocalDateTime createTime;
 }

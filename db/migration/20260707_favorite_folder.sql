@@ -1,5 +1,18 @@
 SET NAMES utf8mb4;
-USE offerlab;
+
+-- Shared DB precheck / dry-run before execution:
+-- SELECT user_id, COUNT(*) AS active_default_count
+-- FROM t_int_favorite_folder
+-- WHERE is_default = 1 AND is_deleted = 0
+-- GROUP BY user_id
+-- HAVING COUNT(*) > 1;
+-- SELECT COUNT(*) AS favorites_without_folder
+-- FROM t_int_favorite
+-- WHERE is_deleted = 0 AND (folder_id IS NULL OR folder_id = 0);
+-- SELECT user_id, post_id, COUNT(*) AS duplicate_count
+-- FROM t_int_favorite
+-- GROUP BY user_id, post_id
+-- HAVING COUNT(*) > 1;
 
 CREATE TABLE IF NOT EXISTS t_int_favorite_folder (
     id              BIGINT       NOT NULL PRIMARY KEY,
@@ -14,9 +27,13 @@ CREATE TABLE IF NOT EXISTS t_int_favorite_folder (
     default_active_key TINYINT GENERATED ALWAYS AS (
         CASE WHEN is_default = 1 AND is_deleted = 0 THEN 1 ELSE NULL END
     ) STORED,
+    name_active_key TINYINT GENERATED ALWAYS AS (
+        CASE WHEN is_deleted = 0 THEN 1 ELSE NULL END
+    ) STORED,
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_favorite_folder_active_default (user_id, default_active_key),
+    UNIQUE KEY uk_favorite_folder_active_name (user_id, name, name_active_key),
     KEY idx_favorite_folder_user_sort (user_id, is_deleted, sort_order, id),
     KEY idx_favorite_folder_user_default (user_id, is_default, is_deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='favorite folders';
@@ -77,6 +94,57 @@ BEGIN
     END IF;
 END $$
 
+DROP PROCEDURE IF EXISTS v20260707_favorite_precheck $$
+CREATE PROCEDURE v20260707_favorite_precheck()
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT user_id, post_id
+            FROM t_int_favorite
+            GROUP BY user_id, post_id
+            HAVING COUNT(*) > 1
+            LIMIT 1
+        ) duplicates
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'duplicate t_int_favorite(user_id, post_id) rows must be merged before adding uk_user_post';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM t_int_favorite f
+        JOIN t_int_favorite_folder existing
+          ON existing.id = f.user_id
+         AND NOT (
+             existing.user_id = f.user_id
+             AND existing.is_default = 1
+             AND existing.is_deleted = 0
+         )
+        WHERE f.user_id > 0
+          AND (f.folder_id IS NULL OR f.folder_id = 0)
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'favorite default-folder backfill id collision; repair t_int_favorite_folder ids before migration';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT user_id, name
+            FROM t_int_favorite_folder
+            WHERE is_deleted = 0
+            GROUP BY user_id, name
+            HAVING COUNT(*) > 1
+            LIMIT 1
+        ) duplicate_names
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'duplicate active favorite folder names must be renamed before adding uk_favorite_folder_active_name';
+    END IF;
+END $$
+
 DELIMITER ;
 
 CALL v20260707_favorite_add_column_if_missing('t_int_favorite', 'folder_id',
@@ -85,6 +153,8 @@ CALL v20260707_favorite_add_column_if_missing('t_int_favorite', 'sort_order',
     'ALTER TABLE t_int_favorite ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER folder_id');
 CALL v20260707_favorite_add_column_if_missing('t_int_favorite', 'update_time',
     'ALTER TABLE t_int_favorite ADD COLUMN update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) AFTER create_time');
+
+CALL v20260707_favorite_precheck();
 
 CALL v20260707_favorite_add_index_if_missing('t_int_favorite', 'uk_user_post',
     'ALTER TABLE t_int_favorite ADD UNIQUE KEY uk_user_post (user_id, post_id)');
@@ -97,6 +167,8 @@ CALL v20260707_favorite_add_index_if_missing('t_int_favorite_folder', 'idx_favor
 CALL v20260707_favorite_add_index_if_missing('t_int_favorite_folder', 'idx_favorite_folder_user_default',
     'ALTER TABLE t_int_favorite_folder ADD KEY idx_favorite_folder_user_default (user_id, is_default, is_deleted)');
 
+-- Data repair: merge duplicate active default folders by moving favorites to the
+-- lowest folder id, then soft-delete the duplicate default folders.
 UPDATE t_int_favorite f
 JOIN t_int_favorite_folder dup
   ON dup.id = f.folder_id
@@ -132,16 +204,47 @@ SET dup.is_deleted = 1,
 WHERE dup.is_default = 1
   AND dup.is_deleted = 0;
 
+-- If a user already created an active non-default folder named like the
+-- backfilled default folder, rename it before adding the active-name unique
+-- guard. Otherwise the generated unique key can fail, or the default backfill
+-- can collide with user data.
+UPDATE t_int_favorite_folder ff
+LEFT JOIN t_int_favorite_folder existing_default
+  ON existing_default.user_id = ff.user_id
+ AND existing_default.is_default = 1
+ AND existing_default.is_deleted = 0
+SET ff.name = CONCAT(ff.name, ' #', ff.id),
+    ff.update_time = CURRENT_TIMESTAMP(3)
+WHERE ff.is_default = 0
+  AND ff.is_deleted = 0
+  AND LOWER(ff.name) = LOWER('Default Folder')
+  AND existing_default.id IS NULL
+  AND EXISTS (
+      SELECT 1
+      FROM t_int_favorite f
+      WHERE f.user_id = ff.user_id
+        AND f.is_deleted = 0
+        AND (f.folder_id IS NULL OR f.folder_id = 0)
+  );
+
+-- Structure migration: add the generated active-default guard only after the
+-- duplicate default-folder repair above, so the unique key can be created safely.
 CALL v20260707_favorite_add_column_if_missing('t_int_favorite_folder', 'default_active_key',
     'ALTER TABLE t_int_favorite_folder ADD COLUMN default_active_key TINYINT GENERATED ALWAYS AS (CASE WHEN is_default = 1 AND is_deleted = 0 THEN 1 ELSE NULL END) STORED AFTER is_deleted');
+CALL v20260707_favorite_add_column_if_missing('t_int_favorite_folder', 'name_active_key',
+    'ALTER TABLE t_int_favorite_folder ADD COLUMN name_active_key TINYINT GENERATED ALWAYS AS (CASE WHEN is_deleted = 0 THEN 1 ELSE NULL END) STORED AFTER default_active_key');
 CALL v20260707_favorite_add_index_if_missing('t_int_favorite_folder', 'uk_favorite_folder_active_default',
     'ALTER TABLE t_int_favorite_folder ADD UNIQUE KEY uk_favorite_folder_active_default (user_id, default_active_key)');
+CALL v20260707_favorite_add_index_if_missing('t_int_favorite_folder', 'uk_favorite_folder_active_name',
+    'ALTER TABLE t_int_favorite_folder ADD UNIQUE KEY uk_favorite_folder_active_name (user_id, name, name_active_key)');
 
+-- Backfill: create one default folder for users with active favorites still on
+-- the legacy root folder and then attach those favorites to the default folder.
 INSERT INTO t_int_favorite_folder (
     id, user_id, name, description, visibility, sort_order, post_count, is_default, create_time, update_time, is_deleted
 )
 SELECT
-    -f.user_id,
+    f.user_id,
     f.user_id,
     'Default Folder',
     NULL,
@@ -171,8 +274,9 @@ JOIN t_int_favorite_folder ff
  AND ff.is_deleted = 0
 SET f.folder_id = ff.id,
     f.update_time = CURRENT_TIMESTAMP(3)
-WHERE f.folder_id IS NULL
-   OR f.folder_id = 0;
+WHERE f.is_deleted = 0
+  AND (f.folder_id IS NULL
+   OR f.folder_id = 0);
 
 UPDATE t_int_favorite_folder ff
 LEFT JOIN (
@@ -189,3 +293,4 @@ WHERE ff.is_deleted = 0;
 
 DROP PROCEDURE IF EXISTS v20260707_favorite_add_column_if_missing;
 DROP PROCEDURE IF EXISTS v20260707_favorite_add_index_if_missing;
+DROP PROCEDURE IF EXISTS v20260707_favorite_precheck;

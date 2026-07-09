@@ -25,9 +25,11 @@ public interface ContentModerationMapper {
             WHERE enabled = 1
               AND (scope = 'ALL' OR scope = #{scope})
             ORDER BY update_time DESC
-            LIMIT 200
+            LIMIT #{limit} OFFSET #{offset}
             """)
-    List<ModerationKeyword> listEnabledKeywords(@Param("scope") String scope);
+    List<ModerationKeyword> listEnabledKeywords(@Param("scope") String scope,
+                                                @Param("limit") int limit,
+                                                @Param("offset") int offset);
 
     @Select("""
             SELECT uid,
@@ -70,18 +72,64 @@ public interface ContentModerationMapper {
 
     @Insert("""
             INSERT INTO t_moderation_keyword_hit (
-                id, scope, uid, keyword_id, keyword, action, content_summary
+                id, scope, uid, keyword_id, keyword, action, content_summary,
+                source_type, source_id
             )
             VALUES (
-                #{id}, #{scope}, #{uid}, #{keywordId}, #{keyword}, #{action}, #{contentSummary}
+                #{id}, #{scope}, #{uid}, #{keywordId}, #{keyword}, #{action}, #{contentSummary},
+                #{sourceType}, #{sourceId}
             )
             """)
     int insertKeywordHit(ModerationKeywordHit hit);
 
     @Select("""
+            SELECT id, scope, uid, keyword_id AS keywordId, keyword, action,
+                   content_summary AS contentSummary, source_type AS sourceType,
+                   source_id AS sourceId, review_status AS reviewStatus,
+                   reviewer_uid AS reviewerUid, review_note AS reviewNote,
+                   review_time AS reviewTime, create_time AS createTime
+            FROM t_moderation_keyword_hit
+            WHERE id = #{id}
+            """)
+    ModerationKeywordHit findKeywordHitById(@Param("id") Long id);
+
+    @Update("""
+            UPDATE t_moderation_keyword_hit
+            SET source_type = #{sourceType},
+                source_id = #{sourceId}
+            WHERE uid = #{uid}
+              AND scope = #{scope}
+              AND action = 'REVIEW'
+              AND source_id IS NULL
+              AND create_time >= DATE_SUB(NOW(3), INTERVAL #{withinSeconds} SECOND)
+            """)
+    int bindRecentReviewHits(@Param("uid") Long uid,
+                             @Param("scope") String scope,
+                             @Param("sourceType") String sourceType,
+                             @Param("sourceId") Long sourceId,
+                             @Param("withinSeconds") int withinSeconds);
+
+    @Update("""
+            UPDATE t_moderation_keyword_hit
+            SET review_status = #{reviewStatus},
+                reviewer_uid = #{reviewerUid},
+                review_note = #{reviewNote},
+                review_time = NOW(3)
+            WHERE id = #{id}
+              AND action = 'REVIEW'
+            """)
+    int reviewKeywordHit(@Param("id") Long id,
+                         @Param("reviewStatus") String reviewStatus,
+                         @Param("reviewerUid") Long reviewerUid,
+                         @Param("reviewNote") String reviewNote);
+
+    @Select("""
             <script>
             SELECT id, scope, uid, keyword_id AS keywordId, keyword, action,
-                   content_summary AS contentSummary, create_time AS createTime
+                   content_summary AS contentSummary, source_type AS sourceType,
+                   source_id AS sourceId, review_status AS reviewStatus,
+                   reviewer_uid AS reviewerUid, review_note AS reviewNote,
+                   review_time AS reviewTime, create_time AS createTime
             FROM t_moderation_keyword_hit
             WHERE 1 = 1
               <if test="scope != null and scope != ''">

@@ -39,6 +39,7 @@ import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRe
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -187,11 +188,21 @@ public class OpsController {
         Long uid = UserContext.require();
         boolean localOpen = adminPermissionService.isLocalOpenMode();
         boolean admin = adminPermissionService.isAdmin(uid) || localOpen;
+        boolean opsRole = localOpen || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS);
         Map<String, Object> permissions = new LinkedHashMap<>();
         permissions.put("uid", uid);
         permissions.put("adminMode", adminPermissionService.mode());
         permissions.put("admin", admin);
         permissions.put("ops", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS));
+        permissions.put("opsRole", opsRole);
+        permissions.put("opsOrchestration", Map.of(
+                "publish", opsRole,
+                "offline", opsRole,
+                "rollback", opsRole
+        ));
+        permissions.put("opsOrchestrationPublisher", opsRole);
+        permissions.put("opsOrchestrationOffline", opsRole);
+        permissions.put("opsOrchestrationRollback", opsRole);
         permissions.put("contentModerator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR));
         List<Integer> moderatedDomains = domainModeratorService.listModeratedDomains(uid);
         permissions.put("domainModerator", !moderatedDomains.isEmpty());
@@ -1163,7 +1174,7 @@ public class OpsController {
 
     private static String normalizeRoleCode(String roleCode) {
         if (!StringUtils.hasText(roleCode)) {
-            return AdminPermissionService.ROLE_ADMIN;
+            throw new BizException(ErrorCode.PARAM_ERROR);
         }
         String normalized = roleCode.trim().toUpperCase();
         if (List.of(
@@ -1179,7 +1190,7 @@ public class OpsController {
 
     public record AdminRequest(
             @NotNull @Positive Long uid,
-            @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
+            @NotBlank @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
             @Size(max = 200) String remark,
             @Size(max = 500) String auditRemark,
             @Size(max = 32) String confirmationPhrase) {
@@ -1187,7 +1198,7 @@ public class OpsController {
 
     public record AdminStatusRequest(
             @NotNull Boolean enabled,
-            @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
+            @NotBlank @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
             @Size(max = 200) String remark,
             @Size(max = 500) String auditRemark,
             @Size(max = 32) String confirmationPhrase) {

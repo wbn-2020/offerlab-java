@@ -1,5 +1,4 @@
-SET NAMES utf8mb4;
-USE offerlab;
+﻿SET NAMES utf8mb4;
 
 CREATE TABLE IF NOT EXISTS t_post_version_history (
     id                BIGINT       NOT NULL PRIMARY KEY,

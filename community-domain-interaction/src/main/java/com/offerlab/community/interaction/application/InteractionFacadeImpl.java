@@ -14,8 +14,10 @@ import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteBatchMoveCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
@@ -171,6 +173,36 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     @Override
+    public Set<Long> likedPostIds(Long uid, List<Long> postIds) {
+        if (uid == null || postIds == null || postIds.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> ids = postIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(likeMapper.selectActiveTargetIdsByUser(uid, TARGET_POST, ids));
+    }
+
+    @Override
+    public Set<Long> favoritedPostIds(Long uid, List<Long> postIds) {
+        if (uid == null || postIds == null || postIds.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> ids = postIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
+        return new HashSet<>(favoriteMapper.selectActivePostIdsByUser(uid, ids));
+    }
+
+    @Override
     @Transactional
     public void likeComment(Long uid, Long commentId) {
         CommentPO comment = commentMapper.selectById(commentId);
@@ -299,7 +331,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
         PostDTO post = postFacade.getPost(cmd.getPostId(), cmd.getAuthorUid());
         if (post == null) throw new BizException(ErrorCode.POST_NOT_FOUND);
 
-        long id = idGen.nextId();
+        long id = cmd.getCommentId() == null || cmd.getCommentId() <= 0 ? idGen.nextId() : cmd.getCommentId();
         CommentPO po = new CommentPO();
         po.setId(id);
         po.setPostId(cmd.getPostId());
@@ -319,7 +351,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
             }
             po.setParentId(cmd.getParentId());
             po.setRootId(parent.getRootId() == null || parent.getRootId() == 0 ? parent.getId() : parent.getRootId());
-            po.setReplyToUid(cmd.getReplyToUid() != null ? cmd.getReplyToUid() : parent.getAuthorId());
+            po.setReplyToUid(parent.getAuthorId());
         } else {
             po.setParentId(0L);
             po.setRootId(0L);
@@ -346,16 +378,16 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     @Override
-    public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size, String sort) {
+    public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, String cursor, int size, String sort) {
         requirePostVisible(postId, viewerUid);
         int limit = clampPageSize(size);
         boolean qualitySort = SORT_QUALITY.equalsIgnoreCase(sort == null ? "" : sort.trim());
-        LocalDateTime beforeCreateTime = cursor > 0
-                ? LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC)
-                : null;
+        Cursor parsedCursor = parseCursor(cursor);
+        LocalDateTime beforeCreateTime = parsedCursor.time();
+        Long beforeId = parsedCursor.id();
         List<CommentPO> roots;
         if (qualitySort) {
-            roots = commentMapper.selectQualityRoots(postId, beforeCreateTime, limit + 1);
+            roots = commentMapper.selectQualityRoots(postId, beforeCreateTime, beforeId, limit + 1);
         } else {
             LambdaQueryWrapper<CommentPO> q = new LambdaQueryWrapper<CommentPO>()
                     .eq(CommentPO::getPostId, postId)
@@ -363,9 +395,12 @@ public class InteractionFacadeImpl implements InteractionFacade {
                     .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
                     .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
                     .orderByDesc(CommentPO::getCreateTime)
+                    .orderByDesc(CommentPO::getId)
                     .last(SqlLimits.limit(limit + 1, 1, 51));
             if (beforeCreateTime != null) {
-                q.lt(CommentPO::getCreateTime, beforeCreateTime);
+                q.and(wrapper -> wrapper.lt(CommentPO::getCreateTime, beforeCreateTime)
+                        .or(beforeId != null, nested -> nested.eq(CommentPO::getCreateTime, beforeCreateTime)
+                                .lt(CommentPO::getId, beforeId)));
             }
             roots = commentMapper.selectList(q);
         }
@@ -398,13 +433,50 @@ public class InteractionFacadeImpl implements InteractionFacade {
         List<CommentDTO> items = roots.stream()
                 .map(po -> {
                     CommentDTO dto = toDto(po, viewerUid, users, likedCommentIds, helpfulCommentIds, signalsByComment, replyCountByRoot);
-                    dto.setReplies(repliesByRoot.getOrDefault(po.getId(), List.of()));
+                    List<CommentDTO> previewReplies = repliesByRoot.getOrDefault(po.getId(), List.of());
+                    dto.setReplies(previewReplies);
                     dto.setReplyCount(Math.max(dto.getReplyCount(), dto.getReplies().size()));
                     dto.setHasMoreReplies(dto.getReplyCount() > dto.getReplies().size());
+                    if (Boolean.TRUE.equals(dto.getHasMoreReplies()) && !previewReplies.isEmpty()) {
+                        dto.setRepliesNextCursor(commentCursor(previewReplies.get(previewReplies.size() - 1)));
+                    }
                     return dto;
                 })
                 .toList();
-        String next = hasMore ? String.valueOf(roots.get(roots.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli()) : null;
+        String next = hasMore ? commentCursor(roots.get(roots.size() - 1)) : null;
+        return PageResult.of(items, next, hasMore);
+    }
+
+    @Override
+    public PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size) {
+        requirePostVisible(postId, viewerUid);
+        if (rootId == null || rootId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        CommentPO root = requireNormalComment(rootId);
+        requireCommentInPost(root, postId);
+        if (root.getRootId() != null && root.getRootId() > 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int limit = clampPageSize(size);
+        Cursor parsedCursor = parseCursor(cursor);
+        List<CommentPO> rows = commentMapper.selectRepliesByRootId(
+                postId, rootId, parsedCursor.time(), parsedCursor.id(), limit + 1);
+        if (rows.isEmpty()) {
+            return PageResult.empty();
+        }
+        boolean hasMore = rows.size() > limit;
+        if (hasMore) {
+            rows = rows.subList(0, limit);
+        }
+        Map<Long, UserBriefDTO> users = usersFor(rows);
+        Set<Long> likedCommentIds = likedCommentIds(viewerUid, rows);
+        Set<Long> helpfulCommentIds = helpfulCommentIds(viewerUid, rows);
+        Map<Long, List<CommentQualitySignalPO>> signalsByComment = activeSignalsByComment(rows);
+        List<CommentDTO> items = rows.stream()
+                .map(po -> toDto(po, viewerUid, users, likedCommentIds, helpfulCommentIds, signalsByComment, Map.of()))
+                .toList();
+        String next = hasMore ? commentCursor(rows.get(rows.size() - 1)) : null;
         return PageResult.of(items, next, hasMore);
     }
 
@@ -541,34 +613,42 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     @Override
-    public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) {
+    public PageResult<PostBriefDTO> listLikedPosts(Long uid, String cursor, int size) {
         int limit = clampPageSize(size);
+        Cursor parsedCursor = parseCursor(cursor);
         LambdaQueryWrapper<LikePO> q = new LambdaQueryWrapper<LikePO>()
                 .eq(LikePO::getUserId, uid)
                 .eq(LikePO::getTargetType, TARGET_POST)
                 .eq(LikePO::getIsDeleted, 0)
                 .orderByDesc(LikePO::getCreateTime)
+                .orderByDesc(LikePO::getId)
                 .last(SqlLimits.limit(limit + 1, 1, 51));
-        if (cursor > 0) {
-            q.lt(LikePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        if (parsedCursor.time() != null) {
+            q.and(wrapper -> wrapper.lt(LikePO::getCreateTime, parsedCursor.time())
+                    .or(parsedCursor.id() != null, nested -> nested.eq(LikePO::getCreateTime, parsedCursor.time())
+                            .lt(LikePO::getId, parsedCursor.id())));
         }
         List<LikePO> list = likeMapper.selectList(q);
-        return postPage(list.stream().map(LikePO::getTargetId).toList(), list, limit);
+        return postPage(list.stream().map(LikePO::getTargetId).toList(), list, limit, uid);
     }
 
     @Override
-    public PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size) {
+    public PageResult<PostBriefDTO> listFavoritePosts(Long uid, String cursor, int size) {
         int limit = clampPageSize(size);
+        Cursor parsedCursor = parseCursor(cursor);
         LambdaQueryWrapper<FavoritePO> q = new LambdaQueryWrapper<FavoritePO>()
                 .eq(FavoritePO::getUserId, uid)
                 .eq(FavoritePO::getIsDeleted, 0)
                 .orderByDesc(FavoritePO::getCreateTime)
+                .orderByDesc(FavoritePO::getId)
                 .last(SqlLimits.limit(limit + 1, 1, 51));
-        if (cursor > 0) {
-            q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        if (parsedCursor.time() != null) {
+            q.and(wrapper -> wrapper.lt(FavoritePO::getCreateTime, parsedCursor.time())
+                    .or(parsedCursor.id() != null, nested -> nested.eq(FavoritePO::getCreateTime, parsedCursor.time())
+                            .lt(FavoritePO::getId, parsedCursor.id())));
         }
         List<FavoritePO> list = favoriteMapper.selectList(q);
-        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, limit);
+        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, limit, uid);
     }
 
     @Override
@@ -584,6 +664,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     @Transactional
     public FavoriteFolderDTO createFavoriteFolder(Long uid, FavoriteFolderCreateCmd cmd) {
         String name = normalizeFolderName(cmd.getName());
+        requireUniqueFavoriteFolderName(uid, name, null);
         FavoriteFolderPO po = new FavoriteFolderPO();
         po.setId(idGen.nextId());
         po.setUserId(uid);
@@ -608,7 +689,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(FavoriteFolderPO::getIsDeleted, 0);
         boolean changed = false;
         if (cmd.getName() != null && !cmd.getName().isBlank()) {
-            update.set(FavoriteFolderPO::getName, normalizeFolderName(cmd.getName()));
+            String name = normalizeFolderName(cmd.getName());
+            requireUniqueFavoriteFolderName(uid, name, folder.getId());
+            update.set(FavoriteFolderPO::getName, name);
             changed = true;
         }
         if (cmd.getDescription() != null) {
@@ -629,38 +712,62 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     @Override
     @Transactional
-    public void deleteFavoriteFolder(Long uid, Long folderId) {
+    public FavoriteFolderDTO sortFavoriteFolder(Long uid, Long folderId, FavoriteFolderSortCmd cmd) {
+        if (cmd == null || cmd.getSortOrder() == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        FavoriteFolderPO folder = requireOwnedFolder(uid, folderId);
+        favoriteFolderMapper.update(null, new LambdaUpdateWrapper<FavoriteFolderPO>()
+                .eq(FavoriteFolderPO::getId, folder.getId())
+                .eq(FavoriteFolderPO::getUserId, uid)
+                .eq(FavoriteFolderPO::getIsDeleted, 0)
+                .set(FavoriteFolderPO::getSortOrder, cmd.getSortOrder()));
+        return toFavoriteFolderDTO(favoriteFolderMapper.selectById(folder.getId()));
+    }
+
+    @Override
+    @Transactional
+    public void deleteFavoriteFolder(Long uid, Long folderId, Long targetFolderId) {
         FavoriteFolderPO folder = requireOwnedFolder(uid, folderId);
         if (isDefaultFolder(folder)) {
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "默认收藏夹不可删除");
         }
+        FavoriteFolderPO target = resolveFavoriteFolder(uid, targetFolderId);
+        if (Objects.equals(folder.getId(), target.getId())) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "迁移目标不能是当前收藏夹");
+        }
         long activeFavorites = countActiveFavoritesInFolder(uid, folderId);
         if (activeFavorites > 0) {
-            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "收藏夹非空，暂不支持迁移删除");
+            favoriteMapper.moveFolderFavorites(uid, folder.getId(), target.getId(), DEFAULT_SORT_ORDER);
         }
         favoriteFolderMapper.update(null, new LambdaUpdateWrapper<FavoriteFolderPO>()
                 .eq(FavoriteFolderPO::getId, folderId)
                 .eq(FavoriteFolderPO::getUserId, uid)
                 .eq(FavoriteFolderPO::getIsDeleted, 0)
                 .set(FavoriteFolderPO::getIsDeleted, 1));
+        syncFolderPostCount(uid, target.getId());
     }
 
     @Override
     @Transactional
-    public PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, long cursor, int size) {
+    public PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, String cursor, int size) {
         FavoriteFolderPO folder = resolveFavoriteFolder(uid, folderId);
         int limit = clampPageSize(size);
+        Cursor parsedCursor = parseCursor(cursor);
         LambdaQueryWrapper<FavoritePO> q = new LambdaQueryWrapper<FavoritePO>()
                 .eq(FavoritePO::getUserId, uid)
                 .eq(FavoritePO::getFolderId, folder.getId())
                 .eq(FavoritePO::getIsDeleted, 0)
                 .orderByDesc(FavoritePO::getCreateTime)
+                .orderByDesc(FavoritePO::getId)
                 .last(SqlLimits.limit(limit + 1, 1, 51));
-        if (cursor > 0) {
-            q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        if (parsedCursor.time() != null) {
+            q.and(wrapper -> wrapper.lt(FavoritePO::getCreateTime, parsedCursor.time())
+                    .or(parsedCursor.id() != null, nested -> nested.eq(FavoritePO::getCreateTime, parsedCursor.time())
+                            .lt(FavoritePO::getId, parsedCursor.id())));
         }
         List<FavoritePO> list = favoriteMapper.selectList(q);
-        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, limit);
+        return postPage(list.stream().map(FavoritePO::getPostId).toList(), list, limit, uid);
     }
 
     @Override
@@ -677,11 +784,50 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (Objects.equals(sourceFolderId, target.getId())) {
             return toFavoriteFolderDTO(target);
         }
-        if (favoriteMapper.moveToFolder(favorite.getId(), uid, target.getId(), DEFAULT_SORT_ORDER) <= 0) {
+        if (favoriteMapper.moveToFolder(favorite.getId(), uid, sourceFolderId, target.getId(), DEFAULT_SORT_ORDER) <= 0) {
             throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
         }
-        decrementFolderPostCount(uid, sourceFolderId);
-        incrementFolderPostCount(uid, target.getId(), 1);
+        syncFolderPostCounts(uid, sourceFolderId, target.getId());
+        return toFavoriteFolderDTO(favoriteFolderMapper.selectById(target.getId()));
+    }
+
+    @Override
+    @Transactional
+    public FavoriteFolderDTO batchMoveFavorites(Long uid, FavoriteBatchMoveCmd cmd) {
+        if (cmd == null || cmd.getPostIds() == null || cmd.getPostIds().isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        List<Long> postIds = cmd.getPostIds().stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .limit(51)
+                .toList();
+        if (postIds.isEmpty() || postIds.size() > 50) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "单次最多移动 50 条收藏");
+        }
+        FavoriteFolderPO target = resolveFavoriteFolder(uid, cmd.getFolderId());
+        List<FavoritePO> favorites = favoriteMapper.selectList(new LambdaQueryWrapper<FavoritePO>()
+                .eq(FavoritePO::getUserId, uid)
+                .eq(FavoritePO::getIsDeleted, 0)
+                .in(FavoritePO::getPostId, postIds));
+        if (favorites.isEmpty()) {
+            throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
+        }
+        Set<Long> touchedFolderIds = favorites.stream()
+                .map(FavoritePO::getFolderId)
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .collect(Collectors.toCollection(HashSet::new));
+        touchedFolderIds.add(target.getId());
+        for (FavoritePO favorite : favorites) {
+            if (Objects.equals(favorite.getFolderId(), target.getId())) {
+                continue;
+            }
+            if (favoriteMapper.moveToFolder(favorite.getId(), uid, favorite.getFolderId(), target.getId(), DEFAULT_SORT_ORDER) <= 0) {
+                throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
+            }
+        }
+        syncFolderPostCounts(uid, touchedFolderIds.toArray(Long[]::new));
         return toFavoriteFolderDTO(favoriteFolderMapper.selectById(target.getId()));
     }
 
@@ -693,17 +839,33 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResult<PostBriefDTO> listPublicFavoritePostsInFolder(Long folderId, long cursor, int size) {
+    public List<FavoriteFolderDTO> listPublicFavoriteFoldersByUser(Long uid, int limit) {
+        if (uid == null || uid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int safeLimit = Math.max(1, Math.min(limit <= 0 ? 6 : limit, 20));
+        return favoriteFolderMapper.selectPublicByUserId(uid, safeLimit).stream()
+                .map(this::toFavoriteFolderDTO)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResult<PostBriefDTO> listPublicFavoritePostsInFolder(Long folderId, String cursor, int size) {
         FavoriteFolderPO folder = requirePublicFolder(folderId);
         int limit = clampPageSize(size);
+        Cursor parsedCursor = parseCursor(cursor);
         LambdaQueryWrapper<FavoritePO> q = new LambdaQueryWrapper<FavoritePO>()
                 .eq(FavoritePO::getUserId, folder.getUserId())
                 .eq(FavoritePO::getFolderId, folder.getId())
                 .eq(FavoritePO::getIsDeleted, 0)
                 .orderByDesc(FavoritePO::getCreateTime)
+                .orderByDesc(FavoritePO::getId)
                 .last(SqlLimits.limit(limit + 1, 1, 51));
-        if (cursor > 0) {
-            q.lt(FavoritePO::getCreateTime, java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        if (parsedCursor.time() != null) {
+            q.and(wrapper -> wrapper.lt(FavoritePO::getCreateTime, parsedCursor.time())
+                    .or(parsedCursor.id() != null, nested -> nested.eq(FavoritePO::getCreateTime, parsedCursor.time())
+                            .lt(FavoritePO::getId, parsedCursor.id())));
         }
         List<FavoritePO> list = favoriteMapper.selectList(q);
         return publicPostPage(list.stream().map(FavoritePO::getPostId).toList(), list, limit);
@@ -767,7 +929,21 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     private void syncFolderPostCount(Long uid, Long folderId) {
-        favoriteFolderMapper.recountPostCount(folderId, uid);
+        if (favoriteFolderMapper.recountPostCount(folderId, uid) <= 0) {
+            throw new BizException(ErrorCode.DATABASE_ERROR);
+        }
+    }
+
+    private void syncFolderPostCounts(Long uid, Long... folderIds) {
+        if (folderIds == null || folderIds.length == 0) {
+            return;
+        }
+        java.util.Arrays.stream(folderIds)
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .sorted()
+                .forEach(folderId -> syncFolderPostCount(uid, folderId));
     }
 
     private long countActiveFavoritesInFolder(Long uid, Long folderId) {
@@ -791,6 +967,12 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     private static boolean isDefaultFolder(FavoriteFolderPO folder) {
         return folder != null && Objects.equals(folder.getIsDefault(), 1);
+    }
+
+    private void requireUniqueFavoriteFolderName(Long uid, String name, Long excludeId) {
+        if (favoriteFolderMapper.countActiveByName(uid, name, excludeId) > 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "favorite folder name already exists");
+        }
     }
 
     private static String normalizeFolderName(String name) {
@@ -966,11 +1148,11 @@ public class InteractionFacadeImpl implements InteractionFacade {
         return post;
     }
 
-    private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size) {
+    private PageResult<PostBriefDTO> postPage(List<Long> postIds, List<?> sourceRows, int size, Long viewerUid) {
         if (postIds.isEmpty()) return PageResult.empty();
         boolean hasMore = sourceRows.size() > size;
         List<Long> pagePostIds = hasMore ? postIds.subList(0, size) : postIds;
-        Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(pagePostIds);
+        Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(pagePostIds, viewerUid);
         List<PostBriefDTO> items = pagePostIds.stream()
                 .map(posts::get)
                 .filter(java.util.Objects::nonNull)
@@ -998,12 +1180,58 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     private static String extractCreateTimeCursor(Object row) {
         if (row instanceof LikePO po && po.getCreateTime() != null) {
-            return String.valueOf(po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+            return timeIdCursor(po.getCreateTime(), po.getId());
         }
         if (row instanceof FavoritePO po && po.getCreateTime() != null) {
-            return String.valueOf(po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
+            return timeIdCursor(po.getCreateTime(), po.getId());
         }
         return null;
+    }
+
+    private static String commentCursor(CommentPO po) {
+        return po == null ? null : timeIdCursor(po.getCreateTime(), po.getId());
+    }
+
+    private static String commentCursor(CommentDTO dto) {
+        return dto == null ? null : timeIdCursor(dto.getCreateTime(), dto.getId());
+    }
+
+    private static String timeIdCursor(LocalDateTime createTime, Long id) {
+        if (createTime == null) {
+            return null;
+        }
+        long millis = createTime.toInstant(ZoneOffset.UTC).toEpochMilli();
+        return id == null || id <= 0 ? String.valueOf(millis) : millis + ":" + id;
+    }
+
+    private static Cursor parseCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return Cursor.empty();
+        }
+        String trimmed = cursor.trim();
+        String[] parts = trimmed.split(":", 2);
+        try {
+            long millis = Long.parseLong(parts[0]);
+            if (millis <= 0) {
+                return Cursor.empty();
+            }
+            Long id = null;
+            if (parts.length > 1 && !parts[1].isBlank()) {
+                long parsedId = Long.parseLong(parts[1]);
+                if (parsedId > 0) {
+                    id = parsedId;
+                }
+            }
+            return new Cursor(LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneOffset.UTC), id);
+        } catch (NumberFormatException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+    }
+
+    private record Cursor(LocalDateTime time, Long id) {
+        private static Cursor empty() {
+            return new Cursor(null, null);
+        }
     }
 
     private Map<Long, UserBriefDTO> usersFor(List<CommentPO> comments) {

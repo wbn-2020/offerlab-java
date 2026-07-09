@@ -1,6 +1,7 @@
 package com.offerlab.community.notification.api;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.notification.api.dto.NotificationReadAllResultDTO;
 import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
 
 import java.util.List;
@@ -11,7 +12,7 @@ import java.util.Map;
  */
 public interface NotificationFacade {
 
-    PageResult<Map<String, Object>> listNotifications(Long uid, String type, long cursor, int size);
+    PageResult<Map<String, Object>> listNotifications(Long uid, String type, String cursor, int size);
 
     long getUnreadCount(Long uid);
 
@@ -21,7 +22,7 @@ public interface NotificationFacade {
 
     void markAsRead(Long uid, List<Long> notifIds);
 
-    void markAllAsRead(Long uid);
+    NotificationReadAllResultDTO markAllAsRead(Long uid);
 
     void notifyLike(Long receiverUid, Long senderUid, Integer targetType, Long targetId);
 

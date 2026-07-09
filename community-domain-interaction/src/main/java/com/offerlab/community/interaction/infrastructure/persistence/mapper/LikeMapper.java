@@ -7,6 +7,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 @Mapper
 public interface LikeMapper extends BaseMapper<LikePO> {
 
@@ -22,6 +24,23 @@ public interface LikeMapper extends BaseMapper<LikePO> {
     LikePO selectAnyByUserTarget(@Param("userId") Long userId,
                                  @Param("targetType") Integer targetType,
                                  @Param("targetId") Long targetId);
+
+    @Select("""
+            <script>
+            SELECT target_id
+            FROM t_int_like
+            WHERE user_id = #{userId}
+              AND target_type = #{targetType}
+              AND is_deleted = 0
+              AND target_id IN
+              <foreach collection="targetIds" item="targetId" open="(" separator="," close=")">
+                #{targetId}
+              </foreach>
+            </script>
+            """)
+    List<Long> selectActiveTargetIdsByUser(@Param("userId") Long userId,
+                                           @Param("targetType") Integer targetType,
+                                           @Param("targetIds") List<Long> targetIds);
 
     @Update("UPDATE t_int_like SET is_deleted = 0 WHERE id = #{id} AND is_deleted = 1")
     int restoreById(@Param("id") Long id);

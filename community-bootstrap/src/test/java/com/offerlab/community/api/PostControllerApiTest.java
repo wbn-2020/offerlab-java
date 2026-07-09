@@ -2,6 +2,7 @@ package com.offerlab.community.api;
 
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
@@ -62,6 +63,8 @@ class PostControllerApiTest {
     @Mock
     private ContentModerationService contentModerationService;
     @Mock
+    private SnowflakeIdGenerator idGenerator;
+    @Mock
     private JwtService jwtService;
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
@@ -73,7 +76,7 @@ class PostControllerApiTest {
         mvc = ApiTestSupport.mvc(
                 new PostController(postFacade, postService, reportService, featuredService, knowledgeReviewService,
                         draftService, domainModeratorService, adminPermissionService, contentModerationService,
-                        applicationEventPublisher),
+                        idGenerator, applicationEventPublisher),
                 jwtService);
     }
 

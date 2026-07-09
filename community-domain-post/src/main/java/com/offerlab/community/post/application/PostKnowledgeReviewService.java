@@ -51,7 +51,9 @@ public class PostKnowledgeReviewService {
         String beforeExtJson = post.getExtJson();
         String afterExtJson = writeKnowledgeExt(beforeExtJson, operatorUid, cmd);
         post.setExtJson(afterExtJson);
-        postRepo.update(post);
+        if (!postRepo.update(post)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
         postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
         postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
         adminAuditService.recordRequired(operatorUid, "POST_KNOWLEDGE_REVIEW_APPLY", "POST", postId,

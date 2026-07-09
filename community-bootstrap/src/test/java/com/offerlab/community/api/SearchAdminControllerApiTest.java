@@ -122,7 +122,7 @@ class SearchAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"remark\":\"rebuild post index\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireAdmin(7L);

@@ -5,7 +5,9 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.AdminPermissionService;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -29,13 +31,18 @@ import com.offerlab.community.post.application.PostKnowledgeReviewService;
 import com.offerlab.community.post.application.PostReportService;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -52,6 +59,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/posts")
 @RequiredArgsConstructor
+@Validated
 public class PostController {
 
     private final PostFacade postFacade;
@@ -63,6 +71,7 @@ public class PostController {
     private final DomainModeratorService domainModeratorService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
+    private final SnowflakeIdGenerator idGenerator;
     private final ApplicationEventPublisher applicationEventPublisher;
 
     private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
@@ -97,10 +106,14 @@ public class PostController {
     public Result<Map<String, Object>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
         Integer domain = requireOptionalDomain(req.getDomain());
+        requireSafeExternalImageUrl(req.getCoverUrl());
         contentModerationService.requireUserCanPublish(uid);
+        Long id = idGenerator.nextId();
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
-                uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
-        Long id = postFacade.publishPost(PostCreateCmd.builder()
+                uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, id,
+                req.getTitle(), req.getContent());
+        postFacade.publishPost(PostCreateCmd.builder()
+                .postId(id)
                 .authorId(uid)
                 .postType(req.getPostType())
                 .domain(domain)
@@ -126,9 +139,11 @@ public class PostController {
         }
         Long uid = UserContext.require();
         Integer domain = requireOptionalDomain(req.getDomain());
+        requireSafeExternalImageUrl(req.getCoverUrl());
         contentModerationService.requireUserCanPublish(uid);
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
-                uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
+                uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, postId,
+                req.getTitle(), req.getContent());
         // 更新后只返回成功状态；详情接口会按可见性重新拉取，避免私密帖被匿名视角误判为空。
         postFacade.updatePost(PostUpdateCmd.builder()
                 .postId(postId)
@@ -157,7 +172,9 @@ public class PostController {
 
     @PublicApi
     @GetMapping("/{postId}")
-    public Result<PostDTO> get(@PathVariable Long postId) {
+    @RateLimit(key = "'public:posts:detail:' + #postId + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<PostDTO> get(@PathVariable @Positive Long postId,
+                               HttpServletRequest request) {
         Long viewerUid = UserContext.get();
         PostDTO p = postFacade.getPost(postId, viewerUid);
         if (p == null) {
@@ -177,15 +194,17 @@ public class PostController {
 
     @PublicApi
     @GetMapping
-    public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) Long authorId,
-                                                 @RequestParam(required = false) Long tagId,
+    @RateLimit(key = "'public:posts:list:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) @Positive Long authorId,
+                                                 @RequestParam(required = false) @Positive Long tagId,
 
-                                                 @RequestParam(required = false, name = "tag") Long tag,
+                                                 @RequestParam(required = false, name = "tag") @Positive Long tag,
                                                  @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(required = false) Boolean featured,
                                                  @RequestParam(required = false) Integer domain,
-                                                 @RequestParam(defaultValue = "0") long cursor,
-                                                 @RequestParam(defaultValue = "20") int size) {
+                                                 @RequestParam(defaultValue = "0") @Min(0) long cursor,
+                                                 @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                 HttpServletRequest request) {
         Long effectiveTagId = tagId != null ? tagId : tag;
         return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured,
                 requireOptionalDomain(domain), cursor, size, false).publicView());
@@ -193,7 +212,8 @@ public class PostController {
 
     @PublicApi
     @GetMapping("/content-types")
-    public Result<List<PostContentTypeDTO>> contentTypes() {
+    @RateLimit(key = "'public:posts:content-types:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<List<PostContentTypeDTO>> contentTypes(HttpServletRequest request) {
         return Result.ok(CONTENT_TYPES);
     }
 
@@ -214,7 +234,8 @@ public class PostController {
     }
 
     @GetMapping("/reports")
-    public Result<List<PostReportReceiptDTO>> listMyReports(@RequestParam(defaultValue = "20") int limit) {
+    @RateLimit(key = "'post-report:list:me:' + #uid", rate = 120, per = 60)
+    public Result<List<PostReportReceiptDTO>> listMyReports(@RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
         return Result.ok(reportService.listMyReceipts(UserContext.require(), limit));
     }
 
@@ -224,15 +245,17 @@ public class PostController {
     }
 
     @GetMapping("/admin/reports")
+    @RateLimit(key = "'post-report:list:admin:' + #uid", rate = 120, per = 60)
     public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
                                                    @RequestParam(required = false) Integer domain,
-                                                   @RequestParam(defaultValue = "20") int limit,
+                                                   @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
                                                    @RequestParam(defaultValue = "false") boolean includeTestData) {
         domainModeratorService.requireModerateDomain(UserContext.require(), domain);
         return Result.ok(reportService.listRecent(status, domain, limit, includeTestData));
     }
 
     @PostMapping("/admin/reports/{reportId}/review")
+    @RateLimit(key = "'post-report:review:' + #uid", rate = 60, per = 60)
     public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
@@ -439,6 +462,10 @@ public class PostController {
             return domain;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static void requireSafeExternalImageUrl(String value) {
+        ExternalUrlSafety.requireSafeExternalImageUrl(value, "coverUrl");
     }
 
     private static boolean isPublicPost(PostDTO post) {

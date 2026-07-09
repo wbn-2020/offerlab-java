@@ -1,7 +1,6 @@
--- 20260608_review_queue.sql
+﻿-- 20260608_review_queue.sql
 -- Non-destructive migration for the unified community review queue.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_review_queue (
     id              BIGINT        NOT NULL PRIMARY KEY,
