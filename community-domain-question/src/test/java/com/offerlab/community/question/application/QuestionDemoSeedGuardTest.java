@@ -46,7 +46,7 @@ class QuestionDemoSeedGuardTest {
                 "existing database patch must still resolve the real retest admin uid");
         assertTrue(migration.contains("SET @demo_uid := COALESCE"),
                 "existing database patch must keep a deterministic fallback uid");
-        assertTrue(migration.contains("@demo_uid, 'company', '娣辨祴绉戞妧'"),
+        assertTrue(migration.contains("@demo_uid, 'company', '深测科技'"),
                 "prep targets must bind to the resolved demo uid");
         assertTrue(migration.contains("@demo_uid, 990200000000000001"),
                 "question progress must bind to the resolved demo uid");

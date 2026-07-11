@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.lang.Nullable;
@@ -23,13 +24,14 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
-public class SearchIndexTaskService {
+public class SearchIndexTaskService implements DisposableBean {
     private static final int MAX_RETAINED_TASKS = 100;
     private static final String TYPE_REBUILD = "POST_INDEX_REBUILD";
     private static final String STATUS_PENDING = "PENDING";
@@ -43,7 +45,8 @@ public class SearchIndexTaskService {
     private final StringRedisTemplate redis;
     private final Map<String, SearchIndexTask> tasks = new ConcurrentHashMap<>();
     private final Object rebuildSubmitLock = new Object();
-    private Executor rebuildExecutor = defaultRebuildExecutor();
+    private final ExecutorService ownedRebuildExecutor;
+    private Executor rebuildExecutor;
 
     public SearchIndexTaskService(PostSearchIndexer indexer) {
         this(indexer, null);
@@ -53,6 +56,8 @@ public class SearchIndexTaskService {
     public SearchIndexTaskService(PostSearchIndexer indexer, @Nullable StringRedisTemplate redis) {
         this.indexer = indexer;
         this.redis = redis;
+        this.ownedRebuildExecutor = defaultRebuildExecutor();
+        this.rebuildExecutor = ownedRebuildExecutor;
     }
 
     public SearchIndexTask submitRebuildTask(Long operatorUid) {
@@ -133,10 +138,23 @@ public class SearchIndexTaskService {
     }
 
     void setRebuildExecutorForTest(Executor rebuildExecutor) {
-        this.rebuildExecutor = rebuildExecutor == null ? defaultRebuildExecutor() : rebuildExecutor;
+        this.rebuildExecutor = rebuildExecutor == null ? ownedRebuildExecutor : rebuildExecutor;
     }
 
-    private static Executor defaultRebuildExecutor() {
+    @Override
+    public void destroy() {
+        ownedRebuildExecutor.shutdown();
+        try {
+            if (!ownedRebuildExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                ownedRebuildExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            ownedRebuildExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static ExecutorService defaultRebuildExecutor() {
         ThreadFactory threadFactory = runnable -> {
             Thread thread = new Thread(runnable, "offerlab-search-index-rebuild");
             thread.setDaemon(true);

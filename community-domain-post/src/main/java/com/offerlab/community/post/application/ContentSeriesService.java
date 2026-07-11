@@ -227,9 +227,6 @@ public class ContentSeriesService {
         if (post == null) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
-        if (!Objects.equals(post.getAuthorId(), operatorUid)) {
-            throw new BizException(ErrorCode.FORBIDDEN);
-        }
         requirePublicSeriesPost(post);
         if (contentSeriesPostMapper.existsActiveRelation(seriesId, postId) > 0) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION.getCode(), "Post already belongs to this series");

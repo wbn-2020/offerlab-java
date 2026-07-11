@@ -17,8 +17,14 @@ class Phase17UserSearchPrivacyGuardTest {
         String controller = read("src/main/java/com/offerlab/community/user/controller/UserController.java");
         String dto = read("src/main/java/com/offerlab/community/user/api/dto/UserBriefDTO.java");
 
-        assertTrue(service.contains(".filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))"),
-                "Author search must respect both searchable and profile visibility settings");
+        assertTrue(service.contains("privacySettingMapper.selectBatchIds(candidateIds)"),
+                "Author search must batch-load privacy settings");
+        assertTrue(service.contains("userFacade.batchIsFollowing(viewerUid, candidateIds)"),
+                "Follower-only visibility must use one batch follow-state query");
+        assertTrue(service.contains("userFacade.batchGetUserBriefs(discoverableIds)"),
+                "Author search must batch-load visible user briefs");
+        assertFalse(service.contains("userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid)"),
+                "Author search must not query privacy settings per candidate");
         assertTrue(service.contains(".filter(user -> !isSyntheticUser(user))"),
                 "Author search must not expose synthetic fallback users as real discovery results");
         assertTrue(controller.contains("userService.searchUsers(keyword, UserContext.get(), size, userFacade)"),

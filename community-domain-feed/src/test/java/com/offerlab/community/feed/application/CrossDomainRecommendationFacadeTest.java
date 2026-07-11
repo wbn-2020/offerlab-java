@@ -310,6 +310,7 @@ class CrossDomainRecommendationFacadeTest {
         @Override public FavoriteFolderDTO createFavoriteFolder(Long uid, FavoriteFolderCreateCmd cmd) { throw unsupported(); }
         @Override public FavoriteFolderDTO updateFavoriteFolder(Long uid, Long folderId, FavoriteFolderUpdateCmd cmd) { throw unsupported(); }
         @Override public FavoriteFolderDTO sortFavoriteFolder(Long uid, Long folderId, FavoriteFolderSortCmd cmd) { throw unsupported(); }
+        @Override public List<FavoriteFolderDTO> reorderFavoriteFolders(Long uid, FavoriteFolderReorderCmd cmd) { throw unsupported(); }
         @Override public void deleteFavoriteFolder(Long uid, Long folderId, Long targetFolderId) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, String cursor, int size) { throw unsupported(); }
         @Override public FavoriteFolderDTO moveFavorite(Long uid, Long postId, FavoriteMoveCmd cmd) { throw unsupported(); }

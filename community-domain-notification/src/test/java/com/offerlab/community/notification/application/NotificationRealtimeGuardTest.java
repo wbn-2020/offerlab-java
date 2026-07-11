@@ -1,11 +1,15 @@
 package com.offerlab.community.notification.application;
 
+import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
+import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NotificationRealtimeGuardTest {
@@ -30,11 +34,28 @@ class NotificationRealtimeGuardTest {
         assertTrue(facade.contains("getUnreadCountByType(uid)"), "status must reuse canonical unread counters");
         assertTrue(facade.contains("mapper.selectLatestUnread(uid)"), "status must include latest unread change marker");
         assertTrue(facade.contains("REALTIME_POLL_INTERVAL_SECONDS"), "status must return a controlled polling interval");
-        assertTrue(facade.contains("websocketEnabled(websocketEnabled)"), "status must gate WebSocket from backend configuration");
+        assertTrue(facade.contains("WEBSOCKET_TRANSPORT_AVAILABLE = false"),
+                "status must be based on an implemented transport, not only a configuration switch");
+        assertTrue(facade.contains("websocketEnabled(WEBSOCKET_TRANSPORT_AVAILABLE)"),
+                "status must expose the actual server transport capability");
         assertTrue(mapper.contains("selectLatestUnread"), "mapper must fetch the latest unread notification");
         assertTrue(mapper.contains("AND is_read = 0"), "latest marker must only inspect unread notifications");
         assertTrue(mapper.contains("AND is_deleted = 0"), "latest marker must ignore deleted notifications");
         assertTrue(mapper.contains("ORDER BY create_time DESC, id DESC"), "latest marker must be deterministic");
+    }
+
+    @Test
+    void realtimeStatusNeverClaimsWebsocketSupportWithoutAServerTransport() {
+        NotificationMessageMapper mapper = (NotificationMessageMapper) Proxy.newProxyInstance(
+                NotificationMessageMapper.class.getClassLoader(),
+                new Class<?>[]{NotificationMessageMapper.class},
+                (proxy, method, args) -> "tableExists".equals(method.getName()) ? 0 : null
+        );
+        NotificationFacadeImpl facade = new NotificationFacadeImpl(mapper, null, null, null);
+
+        NotificationRealtimeStatusDTO status = facade.getRealtimeStatus(7L);
+
+        assertFalse(status.isWebsocketEnabled());
     }
 
     private static String read(String path) throws Exception {

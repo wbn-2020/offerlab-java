@@ -10,6 +10,10 @@ if (-not (Test-Path $migrationDir)) {
 $files = Get-ChildItem -Path $migrationDir -Filter "*.sql" -File
 $violations = New-Object System.Collections.Generic.List[string]
 
+if ($files.Count -ne 53) {
+  $violations.Add("expected 53 canonical migration files, found $($files.Count)")
+}
+
 function Remove-SqlComments {
   param([string] $Sql)
 
@@ -87,5 +91,7 @@ if ($violations.Count -gt 0) {
   }
   exit 1
 }
+
+& (Join-Path $migrationDir "sync-flyway-resources.ps1")
 
 Write-Host "Migration safety check passed for $($files.Count) migration file(s)."

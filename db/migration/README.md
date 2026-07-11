@@ -1,31 +1,50 @@
 # OfferLab Database Migrations
 
-This folder contains non-destructive SQL for existing databases. `db/init/*`
-is used for fresh local initialization only.
+The dated SQL files in this directory are the canonical migration sources.
+`sync-flyway-resources.ps1` maps them to deterministic Flyway versions, copies
+the byte-identical runtime resources, and writes `flyway-manifest.json` with a
+SHA-256 checksum for every source.
 
-Record reviewed and applied scripts in `../schema-ledger.md` for acceptance or
-shared environments.
+The application automatically scans the 50 production-safe migrations from
+`classpath:db/flyway/core`. The three `demo_*` data seeds are tracked in
+`classpath:db/flyway/demo`, but are deliberately excluded from application
+startup so acceptance and production databases never receive demo content.
 
-Run migration scripts manually after reviewing them. Do not batch-run the folder
-blindly; the scripts are ordered by date, but each target environment may already
-have a different subset applied.
+## Existing schemas
 
-Before execution:
+Flyway uses baseline version `0`. The `dev` and local profiles allow a one-time
+automatic baseline for a non-empty legacy schema, then execute every guarded
+versioned migration so `flyway_schema_history` records the checksum of all 50
+core files. Acceptance and production keep `baseline-on-migrate` disabled by
+default. For their first adoption:
 
-- Run `scripts/check-migration-safety.ps1` from the repository root.
-- Read the header and precheck section of the target script.
-- For uniqueness/index migrations, execute the duplicate-data precheck first and
-  stop if it returns rows.
-- Record backup point, operator, maintenance window, and rollback plan.
-- Run one migration at a time and save the console output.
+1. Take and verify a full database backup.
+2. Run `scripts/check-migration-safety.ps1`.
+3. Run the uniqueness prechecks and stop on any duplicate row.
+4. Set `OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE=true` for exactly the first
+   deployment.
+5. Confirm `scripts/check-schema-readiness.mjs --json` reports 50 successful
+   core migrations, no failed rows, no missing checksums, and the expected latest
+   version.
+6. Remove the one-time baseline override from later deployments.
 
-Example manual execution after review:
+Never use `flyway clean` for this project; configuration keeps it disabled.
 
-```sql
-SOURCE db/migration/20260524_ops_governance.sql;
+## Editing workflow
+
+After adding or editing a canonical SQL file:
+
+```powershell
+.\db\migration\sync-flyway-resources.ps1 -Write
+.\scripts\check-migration-safety.ps1
+node .\scripts\test-flyway-migration-lifecycle.mjs
 ```
 
-Do not run schema reset, table drop, truncate, or broad data update commands
-against production data from this folder. If a future change truly needs a
-destructive operation, create a separate runbook with dry-run evidence, affected
-tables, backup/restore procedure, and explicit production approval.
+Do not edit generated files below
+`community-bootstrap/src/main/resources/db/flyway` directly. Checksum drift
+causes the guard and Flyway validation to fail.
+
+Do not run schema reset, table drop, truncate, or broad data updates against an
+existing database. A future destructive migration needs a separate runbook,
+dry-run evidence, backup and restore steps, a maintenance window, and explicit
+production approval.

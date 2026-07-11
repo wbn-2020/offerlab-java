@@ -85,6 +85,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class QuestionFacadeImpl implements QuestionFacade {
+    private static final int MAX_PUBLIC_QUESTION_OFFSET = 10_000;
+    private static final int MAX_ADMIN_QUESTION_OFFSET = 100_000;
     private static final Set<String> TECHNICAL_KEYWORDS = Set.of(
             "redis", "缓存", "一致", "mysql", "索引", "事务", "锁", "并发", "线程", "jvm",
             "spring", "kafka", "mq", "消息", "es", "elasticsearch", "数据库", "分布式",
@@ -315,7 +317,10 @@ public class QuestionFacadeImpl implements QuestionFacade {
         QuestionQuery q = query == null ? new QuestionQuery() : query;
         int pageSize = Math.max(1, Math.min(q.getPageSize() == null ? 20 : q.getPageSize(), 50));
         int page = Math.max(1, q.getPage() == null ? 1 : q.getPage());
-        int offset = (page - 1) * pageSize;
+        int offset = safePageOffset(page, pageSize, MAX_PUBLIC_QUESTION_OFFSET);
+        if (offset < 0) {
+            return PageResult.of(List.of(), null, false);
+        }
         String mistakeReason = normalizeOptionalMistakeReason(q.getMistakeReason());
         String progressStatus = normalizeOptionalProgress(q.getProgressStatus());
         boolean hasNote = Boolean.TRUE.equals(q.getHasNote());
@@ -587,7 +592,24 @@ public class QuestionFacadeImpl implements QuestionFacade {
             minQuality = maxQuality;
             maxQuality = tmp;
         }
-        int offset = (safePage - 1) * safePageSize;
+        int offset = safePageOffset(safePage, safePageSize, MAX_ADMIN_QUESTION_OFFSET);
+        long total = questionMapper.countAdminRecent(
+                query == null ? null : query.getStatus(),
+                cleanToNull(query == null ? null : query.getKeyword()),
+                cleanToNull(query == null ? null : query.getCompany()),
+                cleanToNull(query == null ? null : query.getPosition()),
+                minQuality,
+                maxQuality,
+                positiveLong(query == null ? null : query.getSourcePostId()),
+                normalizeTaskStatus(query == null ? null : query.getTaskStatus()));
+        if (offset < 0) {
+            return PageResult.<QuestionDTO>builder()
+                    .items(List.of())
+                    .nextCursor(null)
+                    .hasMore(false)
+                    .total(total)
+                    .build();
+        }
         List<QuestionDTO> items = toAdminQuestionDtos(questionMapper.selectAdminRecent(
                 query == null ? null : query.getStatus(),
                 cleanToNull(query == null ? null : query.getKeyword()),
@@ -599,16 +621,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 normalizeTaskStatus(query == null ? null : query.getTaskStatus()),
                 offset,
                 safePageSize), null);
-        long total = questionMapper.countAdminRecent(
-                query == null ? null : query.getStatus(),
-                cleanToNull(query == null ? null : query.getKeyword()),
-                cleanToNull(query == null ? null : query.getCompany()),
-                cleanToNull(query == null ? null : query.getPosition()),
-                minQuality,
-                maxQuality,
-                positiveLong(query == null ? null : query.getSourcePostId()),
-                normalizeTaskStatus(query == null ? null : query.getTaskStatus()));
-        boolean hasMore = (long) safePage * safePageSize < total;
+        boolean hasMore = (long) offset + items.size() < total;
         return PageResult.<QuestionDTO>builder()
                 .items(items)
                 .nextCursor(hasMore ? String.valueOf(safePage + 1) : null)
@@ -741,8 +754,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
         }
         int appearCount = Math.max(1, questionMapper.countVisibleSourcesByHash(question.getNormalizedHash()));
         questionMapper.updateAdminCanonicalGroup(question.getNormalizedHash(), canonical.getId(), appearCount);
-        questionMapper.selectAdminByHash(question.getNormalizedHash(), canonical.getId())
-                .forEach(row -> questionSearchIndexer.indexQuestion(row.getId()));
+        scheduleQuestionIndexes(questionMapper.selectAdminByHash(question.getNormalizedHash(), canonical.getId()).stream()
+                .map(InterviewQuestionPO::getId)
+                .toList(), "question canonical group index");
         return duplicateGroupDto(question.getId(), question.getNormalizedHash());
     }
 
@@ -770,8 +784,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         int appearCount = Math.max(1, questionMapper.countVisibleSourcesByHash(question.getNormalizedHash()))
                 + Math.max(1, questionMapper.countVisibleSourcesByHash(candidate.getNormalizedHash()));
         questionMapper.updateAdminCanonicalGroup(question.getNormalizedHash(), canonicalId, appearCount);
-        questionSearchIndexer.indexQuestion(question.getId());
-        questionSearchIndexer.indexQuestion(candidate.getId());
+        scheduleQuestionIndexes(List.of(question.getId(), candidate.getId()), "question duplicate merge index");
         return duplicateGroupDto(question.getId(), question.getNormalizedHash());
     }
 
@@ -991,7 +1004,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .filter(company -> company != null && !company.isBlank())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         questionMapper.hideByPostId(postId);
-        ids.forEach(questionSearchIndexer::indexQuestion);
+        scheduleQuestionIndexes(ids, "hidden post question index");
         changedHashes.forEach(this::refreshCanonicalGroup);
         affectedCompanies.forEach(this::evictQuestionCachesByCompany);
     }
@@ -1051,7 +1064,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         questionTagMapper.deleteByPostId(post.getId());
         questionMapper.delete(new LambdaQueryWrapper<InterviewQuestionPO>()
                 .eq(InterviewQuestionPO::getSourcePostId, post.getId()));
-        oldQuestionIds.forEach(questionSearchIndexer::deleteQuestion);
+        scheduleQuestionDeletes(oldQuestionIds, "replaced post question index delete");
         int count = 0;
         for (ExtractedQuestion item : extracted) {
             Long questionId = idGen.nextId();
@@ -1141,7 +1154,35 @@ public class QuestionFacadeImpl implements QuestionFacade {
         }
         int appearCount = Math.max(1, questionMapper.countVisibleSourcesByHash(hash));
         questionMapper.updateCanonicalGroup(hash, canonicalId, appearCount);
-        questionMapper.selectVisibleByHash(hash).forEach(row -> questionSearchIndexer.indexQuestion(row.getId()));
+        scheduleQuestionIndexes(questionMapper.selectVisibleByHash(hash).stream()
+                .map(InterviewQuestionPO::getId)
+                .toList(), "question canonical refresh index");
+    }
+
+    private void scheduleQuestionIndexes(Collection<Long> questionIds, String description) {
+        List<Long> ids = questionIds == null ? List.of() : questionIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return;
+        }
+        afterCommit.execute(() -> ids.forEach(questionSearchIndexer::indexQuestion),
+                description + ":" + ids.size());
+    }
+
+    private void scheduleQuestionDeletes(Collection<Long> questionIds, String description) {
+        List<Long> ids = questionIds == null ? List.of() : questionIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return;
+        }
+        afterCommit.execute(() -> ids.forEach(questionSearchIndexer::deleteQuestion),
+                description + ":" + ids.size());
     }
 
     private java.util.Optional<QuestionSearchResult> searchQuestionsByEs(QuestionQuery query, int offset, int limit) {
@@ -2399,6 +2440,14 @@ public class QuestionFacadeImpl implements QuestionFacade {
         } catch (Exception e) {
             return String.valueOf(value.hashCode());
         }
+    }
+
+    private int safePageOffset(int page, int pageSize, int maxOffsetExclusive) {
+        long offset = ((long) Math.max(1, page) - 1L) * Math.max(1, pageSize);
+        if (offset >= maxOffsetExclusive || offset > Integer.MAX_VALUE) {
+            return -1;
+        }
+        return (int) offset;
     }
 
     private String clean(String value) {

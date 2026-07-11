@@ -25,6 +25,7 @@ class InteractionSecurityGuardTest {
 
         assertContains(controller, "@PostMapping(\"/users/me/favorite-folders\")\n    @RateLimit");
         assertContains(controller, "@PutMapping(\"/users/me/favorite-folders/{folderId}\")\n    @RateLimit");
+        assertContains(controller, "@PostMapping(\"/users/me/favorite-folders/reorder\")\n    @RateLimit");
         assertContains(controller, "@DeleteMapping(\"/users/me/favorite-folders/{folderId}\")\n    @RateLimit");
         assertContains(controller, "@PutMapping(\"/users/me/favorites/{postId}/folder\")\n    @RateLimit");
         assertContains(controller, "@PostMapping(\"/posts/{postId}/discussion-follow\")\n    @RateLimit");

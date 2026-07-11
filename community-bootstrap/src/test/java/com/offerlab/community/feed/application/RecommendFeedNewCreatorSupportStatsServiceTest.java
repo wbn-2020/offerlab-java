@@ -32,7 +32,7 @@ class RecommendFeedNewCreatorSupportStatsServiceTest {
 
         assertDoesNotThrow(() -> service.recordRecommendFeedResponse(7L, 2, 6, 2));
 
-        verify(mapper, never()).insert(org.mockito.ArgumentMatchers.any());
+        verify(mapper, never()).insert(org.mockito.ArgumentMatchers.any(RecommendFeedNewCreatorSupportStatPO.class));
     }
 
     @Test
@@ -61,7 +61,8 @@ class RecommendFeedNewCreatorSupportStatsServiceTest {
                 new RecommendFeedNewCreatorSupportStatsService(mapper, idGenerator);
         when(mapper.tableExists()).thenReturn(1);
         when(idGenerator.nextId()).thenReturn(123456L);
-        doThrow(new RuntimeException("insert failed")).when(mapper).insert(org.mockito.ArgumentMatchers.any());
+        doThrow(new RuntimeException("insert failed")).when(mapper)
+                .insert(org.mockito.ArgumentMatchers.any(RecommendFeedNewCreatorSupportStatPO.class));
 
         assertDoesNotThrow(() -> service.recordRecommendFeedResponse(7L, null, 3, 1));
     }

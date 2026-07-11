@@ -3,6 +3,7 @@ package com.offerlab.community;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
+import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.question.application.QuestionIndexRetryService;
 import com.offerlab.community.search.application.SearchIndexRetryService;
@@ -58,14 +59,23 @@ public class HealthController {
         this.applicationContext = applicationContext;
     }
 
+    @PublicApi
     @GetMapping(value = "/liveness", produces = MediaType.APPLICATION_JSON_VALUE)
     public Map<String, Object> liveness() {
         return Map.of("status", "UP");
     }
 
+    @PublicApi
     @GetMapping(value = "/readiness", produces = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, Object> readiness() {
-        return readinessSnapshot();
+    public ResponseEntity<Map<String, Object>> readiness() {
+        Map<String, Object> snapshot = readinessSnapshot();
+        boolean ready = "UP".equals(snapshot.get("status"));
+        Map<String, Object> publicSnapshot = Map.of(
+                "status", snapshot.get("status"),
+                "ready", ready
+        );
+        return ResponseEntity.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE)
+                .body(publicSnapshot);
     }
 
     @GetMapping(value = "/readiness/strict", produces = MediaType.APPLICATION_JSON_VALUE)

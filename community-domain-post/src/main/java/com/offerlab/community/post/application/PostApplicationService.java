@@ -58,7 +58,7 @@ public class PostApplicationService {
     private final PostVersionHistoryService versionHistoryService;
     private final PostPublishQualityValidator qualityValidator;
     private final AfterCommitExecutor afterCommit;
-    private final CommunityTopicService communityTopicService;
+    private final CommunityTopicNotificationTargetService communityTopicNotificationTargetService;
     private final MigrationCheckService migrationCheckService;
     private final DomainConfigService domainConfigService;
     private final ContentModerationService contentModerationService;
@@ -433,7 +433,7 @@ public class PostApplicationService {
             return List.of();
         }
         return migrationCheckService.tagGovernanceReady()
-                ? tagMapper.selectByIds(tagIds)
+                ? tagMapper.selectActiveByIds(tagIds)
                 : tagMapper.selectByIdsCompat(tagIds);
     }
 
@@ -475,6 +475,6 @@ public class PostApplicationService {
                 || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)) {
             return List.of();
         }
-        return communityTopicService.notificationTargetsForPost(tagIds, post.getAuthorId());
+        return communityTopicNotificationTargetService.targetsForPost(tagIds, post.getAuthorId());
     }
 }

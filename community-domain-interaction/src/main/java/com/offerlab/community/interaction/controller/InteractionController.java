@@ -17,6 +17,7 @@ import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.api.dto.DiscussionFollowStatusDTO;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderReorderCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteBatchMoveCmd;
@@ -149,6 +150,12 @@ public class InteractionController {
     public Result<FavoriteFolderDTO> sortFavoriteFolder(@PathVariable @Positive Long folderId,
                                                         @Valid @RequestBody FavoriteFolderSortCmd cmd) {
         return Result.ok(facade.sortFavoriteFolder(UserContext.require(), folderId, cmd));
+    }
+
+    @PostMapping("/users/me/favorite-folders/reorder")
+    @RateLimit(key = "'favorite-folder:reorder:' + #uid", rate = 30, per = 60)
+    public Result<List<FavoriteFolderDTO>> reorderFavoriteFolders(@Valid @RequestBody FavoriteFolderReorderCmd cmd) {
+        return Result.ok(facade.reorderFavoriteFolders(UserContext.require(), cmd));
     }
 
     @DeleteMapping("/users/me/favorite-folders/{folderId}")

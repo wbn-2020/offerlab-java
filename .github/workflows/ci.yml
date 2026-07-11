@@ -1,0 +1,47 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - dev-v2
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Compile and test
+        run: mvn -B -ntp test
+
+      - name: Package and generate aggregate SBOM
+        run: mvn -B -ntp -Psbom -DskipTests package
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: offerlab-backend-sbom
+          path: |
+            target/offerlab-sbom.json
+            target/offerlab-sbom.xml
+          if-no-files-found: error

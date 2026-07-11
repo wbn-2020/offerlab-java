@@ -94,8 +94,7 @@ public class SearchContentGapService {
     }
 
     private SearchContentGapDTO toGap(GapStats stats, int days) {
-        long totalSignals = stats.searchCount + stats.noResultCount + stats.weakResultCount;
-        boolean minSampleMet = totalSignals >= MIN_SAMPLE_COUNT;
+        boolean minSampleMet = stats.searchCount >= MIN_SAMPLE_COUNT;
         SearchContentGapDTO.RiskLevel riskLevel = riskLevel(stats.keyword, minSampleMet);
         SearchContentGapDTO.GapStatus status = status(minSampleMet, riskLevel);
         SearchContentGapDTO.CreatedFrom createdFrom = stats.createdFrom == null

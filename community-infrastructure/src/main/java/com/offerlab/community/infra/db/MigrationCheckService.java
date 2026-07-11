@@ -12,6 +12,9 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class MigrationCheckService {
+    private static final int EXPECTED_CORE_MIGRATIONS = 50;
+    private static final String LATEST_CORE_MIGRATION = "20260709.01";
+
     private final JdbcTemplate jdbcTemplate;
 
     public Map<String, Object> governanceStatus() {
@@ -538,11 +541,17 @@ public class MigrationCheckService {
         constraints.put("t_int_favorite_folder.PRIMARY(id)", primaryKeyExists("t_int_favorite_folder", "id"));
         constraints.put("t_int_comment_quality_signal.PRIMARY(id)", primaryKeyExists("t_int_comment_quality_signal", "id"));
         constraints.put("t_int_comment_helpful.PRIMARY(id)", primaryKeyExists("t_int_comment_helpful", "id"));
+        Map<String, Object> migrationLifecycle = flywayLifecycleStatus();
+        boolean migrationLifecycleReady = Boolean.TRUE.equals(migrationLifecycle.get("ready"));
         boolean ready = tables.values().stream().allMatch(Boolean::booleanValue)
                 && columns.values().stream().allMatch(Boolean::booleanValue)
                 && indexes.values().stream().allMatch(Boolean::booleanValue)
-                && constraints.values().stream().allMatch(Boolean::booleanValue);
+                && constraints.values().stream().allMatch(Boolean::booleanValue)
+                && migrationLifecycleReady;
         List<String> missing = missingItems(tables, columns, indexes, constraints);
+        if (!migrationLifecycleReady) {
+            missing.add("flyway:migration-lifecycle");
+        }
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("ready", ready);
         status.put("status", ready ? "UP" : "BLOCKED_BY_SCHEMA");
@@ -550,8 +559,9 @@ public class MigrationCheckService {
         status.put("columns", columns);
         status.put("indexes", indexes);
         status.put("constraints", constraints);
+        status.put("migrationLifecycle", migrationLifecycle);
         status.put("missing", missing);
-        status.put("migration", "See status.migrations for the required schema files.");
+        status.put("migration", "Flyway manages the ordered files listed in status.migrations.");
         status.put("migrations", List.of(
                 "db/migration/20260608_tag_governance.sql",
                 "db/migration/20260605_ai_extract_task_metrics.sql",
@@ -579,7 +589,7 @@ public class MigrationCheckService {
                 "db/migration/20260709_retry_task_claim_indexes.sql"
         ));
         if (!ready) {
-            status.put("message", "数据库迁移未补齐，治理、领域配置、增长埋点、内容助手、系列能力和专家认证试点会降级或被阻断。");
+            status.put("message", "数据库结构或 Flyway 执行历史未补齐，相关功能会降级或被阻断。");
         }
         return status;
     }
@@ -878,6 +888,83 @@ public class MigrationCheckService {
         for (String index : indexNames) {
             indexes.put(tableName + "." + index, indexExists(tableName, index));
         }
+    }
+
+    private Map<String, Object> flywayLifecycleStatus() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        boolean historyTableExists = tableExists("flyway_schema_history");
+        status.put("historyTableExists", historyTableExists);
+        status.put("expectedCoreMigrations", EXPECTED_CORE_MIGRATIONS);
+        status.put("latestExpectedVersion", LATEST_CORE_MIGRATION);
+        status.put("baselineVersion", "0");
+        if (!historyTableExists) {
+            status.put("ready", false);
+            status.put("appliedCoreMigrations", 0);
+            status.put("failedMigrations", 0);
+            status.put("missingChecksums", EXPECTED_CORE_MIGRATIONS);
+            status.put("duplicateVersions", 0);
+            status.put("latestAppliedVersion", null);
+            return status;
+        }
+
+        int appliedCoreMigrations = queryCount("""
+                SELECT COUNT(*)
+                FROM flyway_schema_history
+                WHERE type = 'SQL'
+                  AND success = 1
+                """);
+        int failedMigrations = queryCount("""
+                SELECT COUNT(*)
+                FROM flyway_schema_history
+                WHERE success = 0
+                """);
+        int missingChecksums = queryCount("""
+                SELECT COUNT(*)
+                FROM flyway_schema_history
+                WHERE type = 'SQL'
+                  AND checksum IS NULL
+                """);
+        int duplicateVersions = queryCount("""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT version
+                    FROM flyway_schema_history
+                    WHERE version IS NOT NULL
+                    GROUP BY version
+                    HAVING COUNT(*) > 1
+                ) duplicate_versions
+                """);
+        List<String> latestVersions = jdbcTemplate.query(
+                """
+                SELECT version
+                FROM flyway_schema_history
+                WHERE type = 'SQL'
+                  AND success = 1
+                  AND version IS NOT NULL
+                ORDER BY installed_rank DESC
+                LIMIT 1
+                """,
+                (resultSet, rowNumber) -> resultSet.getString(1)
+        );
+        String latestAppliedVersion = latestVersions.isEmpty() ? null : latestVersions.get(0);
+        boolean ready = appliedCoreMigrations == EXPECTED_CORE_MIGRATIONS
+                && failedMigrations == 0
+                && missingChecksums == 0
+                && duplicateVersions == 0
+                && LATEST_CORE_MIGRATION.equals(latestAppliedVersion);
+
+        status.put("ready", ready);
+        status.put("appliedCoreMigrations", appliedCoreMigrations);
+        status.put("failedMigrations", failedMigrations);
+        status.put("missingChecksums", missingChecksums);
+        status.put("duplicateVersions", duplicateVersions);
+        status.put("latestAppliedVersion", latestAppliedVersion);
+        return status;
+    }
+
+    private int queryCount(String sql) {
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
+        return count == null ? 0 : count;
     }
 
     private List<String> missingItems(Map<String, Boolean>... groups) {

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 
 const args = new Map()
 for (const arg of process.argv.slice(2)) {
@@ -30,8 +31,33 @@ if (!mysqlBin) {
 const childEnv = { ...process.env }
 if (config.password) childEnv.MYSQL_PWD = config.password
 
+const migrationManifest = JSON.parse(
+  readFileSync(new URL('../db/migration/flyway-manifest.json', import.meta.url), 'utf8'),
+)
+const coreMigrations = migrationManifest.migrations.filter(({ stream }) => stream === 'core')
+const migrationAssetChecks = migrationManifest.migrations.map((migration) => {
+  let ready = false
+  try {
+    const source = readFileSync(new URL(`../${migration.source}`, import.meta.url))
+    const resource = readFileSync(new URL(`../${migration.resource}`, import.meta.url))
+    const sha256 = createHash('sha256').update(source).digest('hex')
+    ready = sha256 === migration.sha256 && source.equals(resource)
+  } catch {
+    ready = false
+  }
+  return {
+    type: 'migrationAsset',
+    table: 'flyway',
+    name: migration.version,
+    key: `migrationAsset:${migration.version}`,
+    ready,
+    migration: migration.source,
+  }
+})
+
 const expectations = [
   ...tables([
+    'flyway_schema_history',
     't_admin_audit_log',
     't_moderation_keyword',
     't_moderation_keyword_hit',
@@ -475,6 +501,8 @@ const checks = expectations.map((item) => {
     migration: item.migration,
   }
 })
+const lifecycle = inspectFlywayHistory(found.get('table:flyway_schema_history') === true)
+checks.push(...migrationAssetChecks, ...lifecycle.checks)
 const missing = checks.filter((item) => !item.ready)
 const byMigration = missing.reduce((acc, item) => {
   const migration = item.migration || 'unknown'
@@ -490,6 +518,7 @@ if (config.json) {
     checked: checks.length,
     missing: missing.map((item) => item.key),
     byMigration,
+    migrationLifecycle: lifecycle.summary,
   }, null, 2))
 } else {
   console.log(`Schema readiness checked ${checks.length} item(s) in database '${config.database}'.`)
@@ -535,7 +564,93 @@ function escapeSql(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll("'", "''")
 }
 
+function inspectFlywayHistory(historyTableExists) {
+  const rows = []
+  if (historyTableExists) {
+    const historySql = `
+SELECT COALESCE(version, ''), script, type, COALESCE(CAST(checksum AS CHAR), ''), success
+FROM flyway_schema_history
+ORDER BY installed_rank;
+`
+    let historyOutput
+    try {
+      historyOutput = execFileSync(mysqlBin, [
+        '--batch',
+        '--raw',
+        '--skip-column-names',
+        '-h', config.host,
+        '-P', config.port,
+        '-u', config.user,
+        config.database,
+        '-e',
+        historySql,
+      ], { encoding: 'utf8', env: childEnv }).trim()
+    } catch (error) {
+      console.error(`schema readiness failed to query Flyway history: ${error.message}`)
+      process.exit(2)
+    }
+    if (historyOutput) {
+      for (const line of historyOutput.split(/\r?\n/)) {
+        const [version, script, type, checksum, success] = line.split(/\t/)
+        rows.push({ version, script, type, checksum, success: success === '1' })
+      }
+    }
+  }
+
+  const rowsByVersion = new Map()
+  for (const row of rows) {
+    const values = rowsByVersion.get(row.version) || []
+    values.push(row)
+    rowsByVersion.set(row.version, values)
+  }
+
+  const historyChecks = coreMigrations.map((migration) => {
+    const matchingRows = rowsByVersion.get(migration.version) || []
+    const expectedScript = migration.resource.split('/').at(-1)
+    const ready = matchingRows.length === 1
+      && matchingRows[0].success
+      && matchingRows[0].type === 'SQL'
+      && matchingRows[0].script === expectedScript
+      && matchingRows[0].checksum !== ''
+    return {
+      type: 'flywayHistory',
+      table: 'flyway_schema_history',
+      name: migration.version,
+      key: `flywayHistory:${migration.version}`,
+      ready,
+      migration: migration.source,
+    }
+  })
+  const failedRows = rows.filter(({ success }) => !success)
+  const duplicateVersions = [...rowsByVersion.entries()]
+    .filter(([version, matchingRows]) => version && matchingRows.length > 1)
+    .map(([version]) => version)
+  const appliedCore = historyChecks.filter(({ ready }) => ready).length
+  const latestApplied = rows
+    .filter(({ version, success, type }) => version && success && type === 'SQL')
+    .map(({ version }) => version)
+    .sort((left, right) => left.localeCompare(right, 'en', { numeric: true }))
+    .at(-1) || null
+
+  return {
+    checks: historyChecks,
+    summary: {
+      historyTableExists,
+      baselineVersion: migrationManifest.baselineVersion,
+      expectedCoreMigrations: coreMigrations.length,
+      appliedCoreMigrations: appliedCore,
+      latestExpectedVersion: coreMigrations.at(-1)?.version || null,
+      latestAppliedVersion: latestApplied,
+      failedScripts: failedRows.map(({ script }) => script),
+      duplicateVersions,
+      assetsReady: migrationAssetChecks.every(({ ready }) => ready),
+      demoMigrationsAutoApplied: false,
+    },
+  }
+}
+
 function migrationForTable(table) {
+  if (table === 'flyway_schema_history') return 'Flyway lifecycle metadata'
   if (table.startsWith('t_community_topic')) return 'db/migration/20260608_community_topics.sql'
   if (table === 't_review_queue') return 'db/migration/20260608_review_queue.sql'
   if (table === 't_mock_interview_answer') return 'db/migration/20260608_mock_interview_ai_review_transparency.sql'

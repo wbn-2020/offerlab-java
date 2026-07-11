@@ -57,6 +57,19 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
 
     @Update("""
             UPDATE t_outbox_message
+            SET lock_until = #{lockUntil},
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND msg_status = 3
+              AND lock_owner = #{owner}
+              AND lock_until > NOW(3)
+            """)
+    int renewClaim(@Param("id") Long id,
+                   @Param("owner") String owner,
+                   @Param("lockUntil") LocalDateTime lockUntil);
+
+    @Update("""
+            UPDATE t_outbox_message
             SET msg_status = 1,
                 lock_owner = NULL,
                 lock_until = NULL,

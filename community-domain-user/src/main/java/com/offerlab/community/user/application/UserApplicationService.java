@@ -40,7 +40,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 用户应用服务：编排领域逻辑，事务边界
@@ -336,15 +338,46 @@ public class UserApplicationService {
         if (StringUtils.hasText(keyword)) {
             query.like(UserProfilePO::getNickname, keyword.trim());
         }
-        return profileMapper.selectList(query)
-                .stream()
+        List<Long> candidateIds = profileMapper.selectList(query).stream()
                 .map(UserProfilePO::getId)
-                .filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))
-                .map(userFacade::getUserBrief)
+                .toList();
+        if (candidateIds.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, UserPrivacySettingPO> settings = privacySettingMapper.selectBatchIds(candidateIds).stream()
+                .collect(Collectors.toMap(UserPrivacySettingPO::getUserId, setting -> setting, (left, right) -> left));
+        Map<Long, Boolean> following = viewerUid == null
+                ? Map.of()
+                : userFacade.batchIsFollowing(viewerUid, candidateIds);
+        List<Long> discoverableIds = candidateIds.stream()
+                .filter(uid -> isDiscoverableUser(viewerUid, uid, settings.get(uid), following.get(uid)))
+                .toList();
+        Map<Long, UserBriefDTO> users = userFacade.batchGetUserBriefs(discoverableIds);
+        return discoverableIds.stream()
+                .map(users::get)
                 .filter(java.util.Objects::nonNull)
                 .filter(user -> !isSyntheticUser(user))
                 .limit(limit)
                 .toList();
+    }
+
+    private static boolean isDiscoverableUser(Long viewerUid,
+                                              Long targetUid,
+                                              UserPrivacySettingPO setting,
+                                              Boolean viewerFollowsTarget) {
+        if (targetUid == null || setting != null && Integer.valueOf(0).equals(setting.getSearchable())) {
+            return false;
+        }
+        if (targetUid.equals(viewerUid)) {
+            return true;
+        }
+        String visibility = setting == null || !StringUtils.hasText(setting.getProfileVisibility())
+                ? "PUBLIC"
+                : setting.getProfileVisibility().trim();
+        if ("PRIVATE".equalsIgnoreCase(visibility)) {
+            return false;
+        }
+        return !"FOLLOWERS".equalsIgnoreCase(visibility) || Boolean.TRUE.equals(viewerFollowsTarget);
     }
 
     private static boolean isSyntheticUser(UserBriefDTO user) {

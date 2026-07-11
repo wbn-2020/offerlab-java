@@ -5,9 +5,10 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
-import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.infra.review.ReviewQueueUpsertRequestedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -50,7 +51,7 @@ public class ContentModerationService {
 
     private final ContentModerationMapper mapper;
     private final SnowflakeIdGenerator idGen;
-    private final ReviewQueuePublisher reviewQueuePublisher;
+    private final ApplicationEventPublisher events;
 
     public ModerationKeywordHit findKeywordHit(Long hitId) {
         if (hitId == null || hitId <= 0) {
@@ -172,7 +173,7 @@ public class ContentModerationService {
             hit.setSourceId(sourceId);
             mapper.insertKeywordHit(hit);
             if ("REVIEW".equals(action)) {
-                reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
+                events.publishEvent(new ReviewQueueUpsertRequestedEvent(new ReviewQueueItemCommand(
                         "MODERATION_HIT",
                         hit.getId(),
                         "敏感词待审核：" + keyword.getKeyword(),
@@ -182,7 +183,7 @@ public class ContentModerationService {
                         60,
                         "{\"scope\":\"" + scope + "\",\"keywordId\":" + keyword.getId() + "}",
                         "moderation review hit"
-                ));
+                )));
             }
         } catch (BizException e) {
             throw e;

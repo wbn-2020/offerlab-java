@@ -47,11 +47,9 @@ public class FeedFanoutService {
 
         long followerCount = 0L;
         int failedWrites = 0;
-        boolean partialProgress = false;
         try {
             long ts = event.getTimestamp() == null ? System.currentTimeMillis() : event.getTimestamp();
             feedRedis.addToAuthorTimeline(authorId, postId, ts);
-            partialProgress = true;
             feedRedis.addToGlobalLatest(postId, ts);
 
             long cursor = 0L;
@@ -69,7 +67,6 @@ public class FeedFanoutService {
                     try {
                         feedRedis.addToInbox(follower.getUid(), postId, ts);
                         followerCount++;
-                        partialProgress = true;
                     } catch (RuntimeException e) {
                         failedWrites++;
                         log.warn("feed fanout inbox write failed: source={} postId={} authorId={} followerUid={} written={} failed={}",
@@ -90,11 +87,9 @@ public class FeedFanoutService {
                     source, LogMask.id(postId), LogMask.id(authorId), followerCount, batches, FANOUT_BATCH_SIZE);
             return true;
         } catch (Exception e) {
-            if (!partialProgress) {
-                idempotentChecker.release(idempotentKey, CONSUMER_NAME);
-            }
+            idempotentChecker.release(idempotentKey, CONSUMER_NAME);
             log.error("feed fanout failed: source={} postId={} authorId={} followers={} failedWrites={} retryReleased={}",
-                    source, LogMask.id(postId), LogMask.id(authorId), followerCount, failedWrites, !partialProgress, e);
+                    source, LogMask.id(postId), LogMask.id(authorId), followerCount, failedWrites, true, e);
             throw e;
         }
     }

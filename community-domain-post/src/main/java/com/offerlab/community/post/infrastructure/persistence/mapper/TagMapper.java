@@ -136,7 +136,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
               </foreach>
             </script>
             """)
-    List<TagPO> selectByIds(@Param("ids") Collection<Long> ids);
+    List<TagPO> selectActiveByIds(@Param("ids") Collection<Long> ids);
 
     @Select("""
             <script>

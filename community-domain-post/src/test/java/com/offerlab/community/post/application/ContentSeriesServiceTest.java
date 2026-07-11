@@ -123,7 +123,7 @@ class ContentSeriesServiceTest {
     }
 
     @Test
-    void addPostRequiresSeriesOwnerAndPostAuthorAndReturnsProgress() {
+    void addPostRequiresSeriesOwnerAndAllowsCuratingPublicPosts() {
         SeriesMapperState seriesState = new SeriesMapperState(1);
         SeriesPostMapperState relationState = new SeriesPostMapperState();
         Map<Long, PostPO> posts = new LinkedHashMap<>();
@@ -133,18 +133,19 @@ class ContentSeriesServiceTest {
         Long seriesId = created.getId();
 
         posts.put(9001L, post(9001L, 8L, Post.STATUS_PUBLISHED));
-        BizException forbidden = assertThrows(BizException.class,
-                () -> service.addPost(seriesId, addPostCmd(9001L), 7L));
-        assertEquals(ErrorCode.FORBIDDEN.getCode(), forbidden.getCode());
-
-        posts.put(9002L, post(9002L, 7L, Post.STATUS_PUBLISHED));
-        ContentSeriesDTO afterAdd = service.addPost(seriesId, addPostCmd(9002L), 7L);
+        ContentSeriesDTO afterAdd = service.addPost(seriesId, addPostCmd(9001L), 7L);
 
         assertEquals(1L, afterAdd.getProgress().getPublishedPostCount());
         assertEquals(1L, afterAdd.getProgress().getTotalPostCount());
         assertEquals(100, afterAdd.getProgress().getCompletionRate());
         assertEquals(1, relationState.activeLinks(seriesId).size());
+        assertEquals(9001L, relationState.activeLinks(seriesId).get(0).getPostId());
         assertEquals(0, relationState.activeLinks(seriesId).get(0).getSortOrder());
+
+        posts.put(9002L, post(9002L, 8L, Post.STATUS_PUBLISHED));
+        BizException forbidden = assertThrows(BizException.class,
+                () -> service.addPost(seriesId, addPostCmd(9002L), 8L));
+        assertEquals(ErrorCode.FORBIDDEN.getCode(), forbidden.getCode());
     }
 
     @Test

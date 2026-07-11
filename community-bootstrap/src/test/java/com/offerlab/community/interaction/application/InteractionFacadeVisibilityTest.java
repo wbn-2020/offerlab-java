@@ -136,7 +136,7 @@ class InteractionFacadeVisibilityTest {
         when(commentMapper.selectList(any())).thenReturn(List.of(root), List.of());
         when(userFacade.batchGetUserBriefs(any(Set.class))).thenReturn(Map.of(
                 10L, UserBriefDTO.builder().uid(10L).nickname("author").build()));
-        when(likeMapper.selectList(any())).thenReturn(List.of());
+        when(likeMapper.selectActiveTargetIdsByUser(10L, 2, List.of(1L))).thenReturn(List.of());
 
         PageResult<CommentDTO> page = facade.listComments(100L, 10L, 0L, 20);
 

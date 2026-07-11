@@ -1,4 +1,4 @@
-﻿-- 05_analytics.sql
+-- 05_analytics.sql
 SET NAMES utf8mb4;
 
 DROP TABLE IF EXISTS t_ana_extracted_question;
@@ -17,7 +17,7 @@ CREATE TABLE t_ana_extracted_question (
     KEY idx_source_post (source_post_id),
     KEY idx_company_position (company, position),
     KEY idx_simhash (similarity_hash)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 鎻愬彇鐨勯潰璇曢';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 提取的面试题';
 
 CREATE TABLE IF NOT EXISTS t_search_analytics_event (
     id           BIGINT       NOT NULL PRIMARY KEY,

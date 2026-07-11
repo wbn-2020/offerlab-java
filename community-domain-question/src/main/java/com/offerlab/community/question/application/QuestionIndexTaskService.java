@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.question.infrastructure.persistence.mapper.QuestionIndexTaskMapper;
 import com.offerlab.community.question.infrastructure.persistence.po.QuestionIndexTaskPO;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.lang.Nullable;
@@ -22,13 +23,14 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
-public class QuestionIndexTaskService {
+public class QuestionIndexTaskService implements DisposableBean {
     private static final String TYPE_REBUILD = "QUESTION_INDEX_REBUILD";
     private static final String STATUS_PENDING = "PENDING";
     private static final String STATUS_RUNNING = "RUNNING";
@@ -41,7 +43,8 @@ public class QuestionIndexTaskService {
     private final QuestionIndexTaskMapper taskMapper;
     private final StringRedisTemplate redis;
     private final Object rebuildSubmitLock = new Object();
-    private Executor rebuildExecutor = defaultRebuildExecutor();
+    private final ExecutorService ownedRebuildExecutor;
+    private Executor rebuildExecutor;
 
     public QuestionIndexTaskService(QuestionSearchIndexer indexer, QuestionIndexTaskMapper taskMapper) {
         this(indexer, taskMapper, null);
@@ -54,6 +57,8 @@ public class QuestionIndexTaskService {
         this.indexer = indexer;
         this.taskMapper = taskMapper;
         this.redis = redis;
+        this.ownedRebuildExecutor = defaultRebuildExecutor();
+        this.rebuildExecutor = ownedRebuildExecutor;
     }
 
     public QuestionIndexTask submitRebuildTask(Long operatorUid) {
@@ -170,7 +175,7 @@ public class QuestionIndexTaskService {
     }
 
     void setRebuildExecutorForTest(Executor rebuildExecutor) {
-        this.rebuildExecutor = rebuildExecutor == null ? defaultRebuildExecutor() : rebuildExecutor;
+        this.rebuildExecutor = rebuildExecutor == null ? ownedRebuildExecutor : rebuildExecutor;
     }
 
     private void ensureTableReady() {
@@ -191,7 +196,20 @@ public class QuestionIndexTaskService {
         }
     }
 
-    private static Executor defaultRebuildExecutor() {
+    @Override
+    public void destroy() {
+        ownedRebuildExecutor.shutdown();
+        try {
+            if (!ownedRebuildExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                ownedRebuildExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            ownedRebuildExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static ExecutorService defaultRebuildExecutor() {
         ThreadFactory threadFactory = runnable -> {
             Thread thread = new Thread(runnable, "offerlab-question-index-rebuild");
             thread.setDaemon(true);

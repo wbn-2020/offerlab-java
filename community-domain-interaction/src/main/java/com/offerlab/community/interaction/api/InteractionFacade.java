@@ -5,6 +5,7 @@ import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderReorderCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteBatchMoveCmd;
@@ -105,6 +106,8 @@ public interface InteractionFacade {
     FavoriteFolderDTO updateFavoriteFolder(Long uid, Long folderId, FavoriteFolderUpdateCmd cmd);
 
     FavoriteFolderDTO sortFavoriteFolder(Long uid, Long folderId, FavoriteFolderSortCmd cmd);
+
+    List<FavoriteFolderDTO> reorderFavoriteFolders(Long uid, FavoriteFolderReorderCmd cmd);
 
     void deleteFavoriteFolder(Long uid, Long folderId, Long targetFolderId);
 

@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReviewQueueSourceIntegrationGuardTest {
@@ -13,9 +14,11 @@ class ReviewQueueSourceIntegrationGuardTest {
     @Test
     void legacyReviewSourcesMustPublishAndResolveUnifiedQueueItems() throws Exception {
         String command = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueueItemCommand.java");
+        String event = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueueUpsertRequestedEvent.java");
         String publisher = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueuePublisher.java");
         String noop = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/NoopReviewQueuePublisher.java");
         String service = read("src/main/java/com/offerlab/community/search/application/ReviewQueueService.java");
+        String eventListener = read("src/main/java/com/offerlab/community/search/application/ReviewQueueUpsertRequestedEventListener.java");
         String mapper = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/mapper/ReviewQueueMapper.java");
         String postReport = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostReportService.java");
         String commentReport = read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/application/CommentReportService.java");
@@ -23,11 +26,13 @@ class ReviewQueueSourceIntegrationGuardTest {
         String questionFacade = read("../community-domain-question/src/main/java/com/offerlab/community/question/application/QuestionFacadeImpl.java");
 
         assertTrue(command.contains("record ReviewQueueItemCommand"), "legacy sources must share a typed review queue command");
+        assertTrue(event.contains("record ReviewQueueUpsertRequestedEvent"), "infrastructure moderation must cross the domain boundary through an event");
         assertTrue(publisher.contains("void upsert(ReviewQueueItemCommand command)"), "publisher must expose source upsert");
         assertTrue(publisher.contains("void resolve(String sourceType, Long sourceId"), "publisher must expose source resolve");
         assertTrue(noop.contains("@ConditionalOnMissingBean(ReviewQueuePublisher.class)"), "domain modules must have a no-op fallback outside the search module");
 
         assertTrue(service.contains("implements ReviewQueuePublisher"), "search review queue service must implement the shared publisher");
+        assertTrue(eventListener.contains("reviewQueueService.upsert(event.command())"), "search must consume moderation queue events");
         assertTrue(service.contains("@Primary"), "real queue publisher must win over the no-op fallback when search module is present");
         assertTrue(service.contains("upsertInternal"), "manual and source-created items must share queue creation logic");
         assertTrue(service.contains("resolveSourceRequired"), "operator-triggered source resolution must have a fail-closed path");
@@ -51,6 +56,10 @@ class ReviewQueueSourceIntegrationGuardTest {
 
         assertTrue(moderation.contains("\"MODERATION_HIT\""), "REVIEW keyword hits must publish MODERATION_HIT queue items");
         assertTrue(moderation.contains("\"REVIEW\".equals(action)"), "only review hits should enqueue moderation review items");
+        assertTrue(moderation.contains("events.publishEvent(new ReviewQueueUpsertRequestedEvent"),
+                "moderation review hits must be delivered through the event boundary");
+        assertFalse(moderation.contains("private final ReviewQueuePublisher"),
+                "moderation must not directly depend on the search queue publisher and recreate a bean cycle");
 
         assertTrue(questionFacade.contains("\"QUESTION_PENDING\""), "pending questions must publish QUESTION_PENDING queue items");
         assertTrue(questionFacade.contains("publishPendingQuestionQueueItem(po)"), "question extraction must enqueue pending questions");

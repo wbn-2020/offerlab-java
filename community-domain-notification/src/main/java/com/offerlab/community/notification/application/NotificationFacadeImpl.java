@@ -15,7 +15,6 @@ import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +36,7 @@ import java.util.stream.Collectors;
 public class NotificationFacadeImpl implements NotificationFacade {
 
     private static final int REALTIME_POLL_INTERVAL_SECONDS = 20;
+    private static final boolean WEBSOCKET_TRANSPORT_AVAILABLE = false;
     private static final long AGGREGATION_WINDOW_MINUTES = 30L;
     private static final int MAX_READ_BATCH_SIZE = 200;
     private static final int MARK_ALL_READ_BATCH_SIZE = 500;
@@ -68,9 +68,6 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private final UserFacade userFacade;
     private volatile Boolean messageTableReadyCache;
     private volatile Boolean dedupKeyColumnReadyCache;
-
-    @Value("${offerlab.realtime.websocket-enabled:false}")
-    private boolean websocketEnabled;
 
     @Override
     public PageResult<Map<String, Object>> listNotifications(Long uid, String type, String cursor, int size) {
@@ -141,7 +138,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .latestUnreadAt(latestUnread == null ? null : latestUnread.getCreateTime())
                 .serverTime(System.currentTimeMillis())
                 .pollIntervalSeconds(REALTIME_POLL_INTERVAL_SECONDS)
-                .websocketEnabled(websocketEnabled)
+                .websocketEnabled(WEBSOCKET_TRANSPORT_AVAILABLE)
                 .build();
     }
 

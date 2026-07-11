@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -40,6 +41,18 @@ class QuestionIndexTaskServiceGateTest {
         Object executor = field.get(service);
 
         assertNotSame(ForkJoinPool.commonPool(), executor);
+    }
+
+    @Test
+    void destroyShutsDownOwnedExecutor() throws Exception {
+        QuestionIndexTaskService service = new QuestionIndexTaskService(indexer(), mapper(new MapperState()));
+        Field field = QuestionIndexTaskService.class.getDeclaredField("ownedRebuildExecutor");
+        field.setAccessible(true);
+        ExecutorService executor = (ExecutorService) field.get(service);
+
+        service.destroy();
+
+        assertTrue(executor.isShutdown());
     }
 
     @Test

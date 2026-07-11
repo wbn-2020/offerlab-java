@@ -2,6 +2,7 @@ package com.offerlab.community.question.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
+import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.question.api.dto.QuestionQuery;
 import com.offerlab.community.question.infrastructure.persistence.mapper.InterviewQuestionMapper;
 import com.offerlab.community.question.infrastructure.persistence.mapper.InterviewQuestionTagMapper;
@@ -13,11 +14,13 @@ import org.springframework.stereotype.Component;
 
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -72,7 +75,9 @@ public class QuestionSearchIndexer {
             }
             return deleted;
         }
-        boolean indexed = elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(questionId), toDocument(rows.get(0)));
+        Map<Long, List<PostTagView>> tagsByQuestion = loadTagsByQuestionIds(List.of(questionId));
+        boolean indexed = elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(questionId),
+                toDocument(rows.get(0), tagsByQuestion.getOrDefault(questionId, List.of())));
         if (!indexed) {
             publishRetry(enqueueOnFailure, questionId, QuestionIndexRetryService.OP_INDEX, "question index returned false");
         }
@@ -112,8 +117,12 @@ public class QuestionSearchIndexer {
             if (rows.isEmpty()) {
                 break;
             }
+            Map<Long, List<PostTagView>> tagsByQuestion = loadTagsByQuestionIds(rows.stream()
+                    .map(InterviewQuestionPO::getId)
+                    .toList());
             for (InterviewQuestionPO row : rows) {
-                if (elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(row.getId()), toDocument(row))) {
+                if (elasticsearch.indexDocument(elasticsearch.questionIndex(), String.valueOf(row.getId()),
+                        toDocument(row, tagsByQuestion.getOrDefault(row.getId(), List.of())))) {
                     indexed++;
                 } else {
                     failed++;
@@ -158,8 +167,8 @@ public class QuestionSearchIndexer {
         return (int) Math.min(Math.max(0L, (long) offset), maxOffset);
     }
 
-    private Map<String, Object> toDocument(InterviewQuestionPO row) {
-        List<Map<String, Object>> tags = questionTagMapper.selectTagsByQuestionIds(List.of(row.getId())).stream()
+    private Map<String, Object> toDocument(InterviewQuestionPO row, List<PostTagView> questionTags) {
+        List<Map<String, Object>> tags = questionTags.stream()
                 .map(tag -> {
                     Map<String, Object> doc = new LinkedHashMap<>();
                     doc.put("id", tag.getId());
@@ -192,6 +201,14 @@ public class QuestionSearchIndexer {
         doc.put("createTime", row.getCreateTime() == null ? 0L : row.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
         doc.put("updateTime", row.getUpdateTime() == null ? 0L : row.getUpdateTime().toInstant(ZoneOffset.UTC).toEpochMilli());
         return doc;
+    }
+
+    private Map<Long, List<PostTagView>> loadTagsByQuestionIds(Collection<Long> questionIds) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return Map.of();
+        }
+        return questionTagMapper.selectTagsByQuestionIds(questionIds).stream()
+                .collect(Collectors.groupingBy(PostTagView::getPostId, LinkedHashMap::new, Collectors.toList()));
     }
 
     private Map<String, Object> buildQuery(QuestionQuery query) {

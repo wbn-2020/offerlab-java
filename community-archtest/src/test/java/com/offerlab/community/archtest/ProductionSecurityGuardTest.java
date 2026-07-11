@@ -170,7 +170,7 @@ class ProductionSecurityGuardTest {
         assertTrue(prodConfig.contains("bootstrap-servers: ${KAFKA_BROKERS}"), "prod must require explicit Kafka brokers");
         assertTrue(prodConfig.contains("url: ${ELASTICSEARCH_URL}"), "prod must require an explicit Elasticsearch URL");
         assertTrue(prodConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "prod must require explicit CORS origins");
-        assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfiguration"),
+        assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfigurationV2"),
                 "dev profile must exclude Redisson auto configuration so Redis outages do not block local startup");
         assertTrue(devConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}"),
                 "dev profile must disable Redis Pub/Sub by default and opt in through OFFERLAB_REDIS_PUBSUB_ENABLED");

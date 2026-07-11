@@ -65,6 +65,8 @@ class OutboxMessageMapperMySqlIT {
 
             List<OutboxMessage> claimed = mapper.findClaimed(owner, 10);
             assertEquals(List.of(10L, 30L), claimed.stream().map(OutboxMessage::getId).toList());
+            assertEquals(1, mapper.renewClaim(10L, owner, LocalDateTime.now().plusMinutes(2)));
+            assertEquals(0, mapper.renewClaim(10L, "stale-owner", LocalDateTime.now().plusMinutes(2)));
             assertEquals(1, mapper.markSent(10L, owner));
             assertEquals(1, mapper.updateRetry(30L, owner, OutboxMessageMapper.STATUS_PENDING, 2, LocalDateTime.now().plusMinutes(5)));
 

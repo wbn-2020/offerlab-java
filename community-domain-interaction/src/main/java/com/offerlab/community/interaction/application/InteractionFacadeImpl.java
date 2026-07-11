@@ -17,6 +17,7 @@ import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.api.dto.FavoriteBatchMoveCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
+import com.offerlab.community.interaction.api.dto.FavoriteFolderReorderCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
@@ -393,7 +394,6 @@ public class InteractionFacadeImpl implements InteractionFacade {
                     .eq(CommentPO::getPostId, postId)
                     .eq(CommentPO::getRootId, 0L)             // 仅一级
                     .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
-                    .eq(CommentPO::getCommentStatus, COMMENT_STATUS_NORMAL)
                     .orderByDesc(CommentPO::getCreateTime)
                     .orderByDesc(CommentPO::getId)
                     .last(SqlLimits.limit(limit + 1, 1, 51));
@@ -723,6 +723,42 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 .eq(FavoriteFolderPO::getIsDeleted, 0)
                 .set(FavoriteFolderPO::getSortOrder, cmd.getSortOrder()));
         return toFavoriteFolderDTO(favoriteFolderMapper.selectById(folder.getId()));
+    }
+
+    @Override
+    @Transactional
+    public List<FavoriteFolderDTO> reorderFavoriteFolders(Long uid, FavoriteFolderReorderCmd cmd) {
+        if (cmd == null || cmd.getFolderIds() == null || cmd.getFolderIds().isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        List<Long> requestedIds = cmd.getFolderIds();
+        Set<Long> uniqueIds = new HashSet<>(requestedIds);
+        if (uniqueIds.size() != requestedIds.size()) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "收藏夹顺序不能包含重复项");
+        }
+
+        List<FavoriteFolderPO> activeFolders = favoriteFolderMapper.selectActiveByUserId(uid);
+        List<Long> sortableIds = activeFolders.stream()
+                .filter(folder -> !isDefaultFolder(folder))
+                .map(FavoriteFolderPO::getId)
+                .toList();
+        if (sortableIds.size() != requestedIds.size() || !new HashSet<>(sortableIds).equals(uniqueIds)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "请提交全部可排序收藏夹的完整顺序");
+        }
+
+        for (int index = 0; index < requestedIds.size(); index++) {
+            Long folderId = requestedIds.get(index);
+            int updated = favoriteFolderMapper.update(null, new LambdaUpdateWrapper<FavoriteFolderPO>()
+                    .eq(FavoriteFolderPO::getId, folderId)
+                    .eq(FavoriteFolderPO::getUserId, uid)
+                    .eq(FavoriteFolderPO::getIsDefault, 0)
+                    .eq(FavoriteFolderPO::getIsDeleted, 0)
+                    .set(FavoriteFolderPO::getSortOrder, (index + 1) * 10));
+            if (updated != 1) {
+                throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "收藏夹顺序已变化，请刷新后重试");
+            }
+        }
+        return listFavoriteFolders(uid);
     }
 
     @Override
@@ -1251,15 +1287,16 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (viewerUid == null || comments == null || comments.isEmpty()) {
             return Set.of();
         }
-        List<Long> ids = comments.stream().map(CommentPO::getId).toList();
-        return likeMapper.selectList(new LambdaQueryWrapper<LikePO>()
-                        .eq(LikePO::getUserId, viewerUid)
-                        .eq(LikePO::getTargetType, TARGET_COMMENT)
-                        .in(LikePO::getTargetId, ids)
-                        .eq(LikePO::getIsDeleted, 0))
-                .stream()
-                .map(LikePO::getTargetId)
-                .collect(Collectors.toSet());
+        List<Long> ids = comments.stream()
+                .map(CommentPO::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> likedIds = likeMapper.selectActiveTargetIdsByUser(viewerUid, TARGET_COMMENT, ids);
+        return likedIds == null || likedIds.isEmpty() ? Set.of() : new HashSet<>(likedIds);
     }
 
     private Set<Long> helpfulCommentIds(Long viewerUid, List<CommentPO> comments) {

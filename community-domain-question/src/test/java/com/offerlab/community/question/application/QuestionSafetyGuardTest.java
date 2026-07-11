@@ -169,7 +169,9 @@ class QuestionSafetyGuardTest {
         assertTrue(facadeSource.contains("changedHashes.forEach(this::refreshCanonicalGroup)"), "extraction must refresh canonical appear counts after replacement");
         assertTrue(facadeSource.contains("affectedCompanies.forEach(this::evictQuestionCachesByCompany)"), "company prep caches must be evicted after question replacement or hiding");
         assertTrue(facadeSource.contains("questionMapper.updateCanonicalGroup(hash, canonicalId, appearCount)"), "canonical refresh must write grouped appear counts");
-        assertTrue(facadeSource.contains("questionSearchIndexer.indexQuestion(row.getId())"), "updated frequency values must be reflected in the search index");
+        assertTrue(facadeSource.contains("scheduleQuestionIndexes(")
+                        && facadeSource.contains("questionSearchIndexer::indexQuestion"),
+                "updated frequency values must be reflected in the search index after the transaction commits");
         assertTrue(migrationSql.contains("idx_normalized_status"), "existing databases must receive the normalized hash index non-destructively");
         assertFalse(migrationSql.contains("drop table"), "canonical migration must not drop data");
     }

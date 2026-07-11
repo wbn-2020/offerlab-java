@@ -13,6 +13,19 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 2
 
+  flyway:
+    enabled: ${OFFERLAB_FLYWAY_ENABLED:true}
+    locations: ${OFFERLAB_FLYWAY_LOCATIONS:classpath:db/flyway/core}
+    table: flyway_schema_history
+    baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}
+    baseline-version: "0"
+    baseline-description: legacy schema baseline
+    validate-on-migrate: true
+    validate-migration-naming: true
+    out-of-order: false
+    clean-disabled: true
+    connect-retries: ${OFFERLAB_FLYWAY_CONNECT_RETRIES:10}
+
   data:
     redis:
       host: ${REDIS_HOST}

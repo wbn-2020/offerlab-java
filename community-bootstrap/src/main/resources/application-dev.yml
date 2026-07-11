@@ -2,11 +2,13 @@
 spring:
   autoconfigure:
     exclude:
-      - org.redisson.spring.starter.RedissonAutoConfiguration
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/offerlab?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:offerlab}
     password: ${DB_PASSWORD:offerlab123}
+  flyway:
+    baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:true}
   data:
     redis:
       host: ${REDIS_HOST:localhost}

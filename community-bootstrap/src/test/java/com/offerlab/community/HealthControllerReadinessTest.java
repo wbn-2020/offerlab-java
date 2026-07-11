@@ -3,6 +3,10 @@ package com.offerlab.community;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
+import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.infra.web.handler.GlobalExceptionHandler;
+import com.offerlab.community.infra.web.interceptor.AuthInterceptor;
+import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.question.application.QuestionIndexRetryService;
 import com.offerlab.community.search.application.SearchIndexRetryService;
@@ -15,6 +19,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
@@ -26,8 +32,13 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class HealthControllerReadinessTest {
     private DataSource dataSource;
@@ -79,7 +90,7 @@ class HealthControllerReadinessTest {
         when(elasticsearch.enabled()).thenReturn(false);
         when(elasticsearch.available()).thenReturn(false);
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> kafka = (Map<?, ?>) components.get("kafka");
         Map<?, ?> es = (Map<?, ?>) components.get("elasticsearch");
@@ -114,7 +125,7 @@ class HealthControllerReadinessTest {
                 )
         ));
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> schema = (Map<?, ?>) components.get("schema");
 
@@ -137,7 +148,7 @@ class HealthControllerReadinessTest {
         when(elasticsearch.enabled()).thenReturn(false);
         when(elasticsearch.available()).thenReturn(false);
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> kafka = (Map<?, ?>) components.get("kafka");
 
@@ -162,7 +173,7 @@ class HealthControllerReadinessTest {
         when(elasticsearch.available()).thenReturn(false);
         when(dbConnection.isValid(2)).thenReturn(false);
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> db = (Map<?, ?>) components.get("db");
 
@@ -183,7 +194,7 @@ class HealthControllerReadinessTest {
         when(elasticsearch.enabled()).thenReturn(true);
         when(elasticsearch.available()).thenReturn(false);
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> es = (Map<?, ?>) components.get("elasticsearch");
 
@@ -210,7 +221,7 @@ class HealthControllerReadinessTest {
         ));
         when(outboxMessageMapper.countDuePending()).thenReturn(3L);
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> outbox = (Map<?, ?>) components.get("outbox");
         Map<?, ?> byStatus = (Map<?, ?>) outbox.get("byStatus");
@@ -236,7 +247,7 @@ class HealthControllerReadinessTest {
         when(elasticsearch.available()).thenReturn(false);
         when(outboxMessageMapper.countDuePending()).thenThrow(new RuntimeException("outbox unavailable"));
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> outbox = (Map<?, ?>) components.get("outbox");
         Map<?, ?> kafka = (Map<?, ?>) components.get("kafka");
@@ -273,7 +284,7 @@ class HealthControllerReadinessTest {
         when(elasticsearch.available()).thenReturn(false);
         when(searchIndexRetryService.status()).thenReturn(Map.of("status", "UNKNOWN"));
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> searchRetry = (Map<?, ?>) components.get("searchIndexRetry");
 
@@ -293,7 +304,7 @@ class HealthControllerReadinessTest {
         when(questionIndexRetryService.status()).thenReturn(retryDown("question index retry table unavailable"));
         when(notificationRetryService.status()).thenReturn(retryDown("notification retry table unavailable"));
 
-        Map<String, Object> readiness = controller().readiness();
+        Map<String, Object> readiness = detailedReadiness();
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> searchRetry = (Map<?, ?>) components.get("searchIndexRetry");
         Map<?, ?> questionRetry = (Map<?, ?>) components.get("questionIndexRetry");
@@ -316,6 +327,52 @@ class HealthControllerReadinessTest {
         String source = Files.readString(Path.of("src/main/java/com/offerlab/community/HealthController.java"), StandardCharsets.UTF_8);
 
         assertFalse(source.contains("\"bootstrapServers\""), "public readiness must not expose internal Kafka broker addresses");
+    }
+
+    @Test
+    void anonymousReadinessUsesHttpStatusAndDoesNotExposeComponentDetails() throws Exception {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("offerlab.kafka.enabled", "true")
+                .withProperty("spring.kafka.bootstrap-servers", "");
+        when(applicationContext.getEnvironment()).thenReturn(environment);
+        when(elasticsearch.enabled()).thenReturn(false);
+        when(elasticsearch.available()).thenReturn(false);
+        JwtService jwtService = mock(JwtService.class);
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .addInterceptors(new AuthInterceptor(jwtService))
+                .build();
+
+        mvc.perform(get("/api/v1/health/readiness"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value("DEGRADED"))
+                .andExpect(jsonPath("$.ready").value(false))
+                .andExpect(jsonPath("$.components").doesNotExist());
+    }
+
+    @Test
+    void readinessIsPublicButStrictDetailsStillRequireAuthentication() throws Exception {
+        assertTrue(HealthController.class.getMethod("readiness").isAnnotationPresent(PublicApi.class));
+        assertFalse(HealthController.class.getMethod("strictReadiness").isAnnotationPresent(PublicApi.class));
+
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("offerlab.kafka.enabled", "false")
+                .withProperty("spring.kafka.bootstrap-servers", "");
+        when(applicationContext.getEnvironment()).thenReturn(environment);
+        when(elasticsearch.enabled()).thenReturn(false);
+        when(elasticsearch.available()).thenReturn(false);
+        JwtService jwtService = mock(JwtService.class);
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .addInterceptors(new AuthInterceptor(jwtService))
+                .build();
+
+        mvc.perform(get("/api/v1/health/readiness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.ready").value(true));
+        mvc.perform(get("/api/v1/health/readiness/strict"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -420,6 +477,12 @@ class HealthControllerReadinessTest {
                 migrationCheckService,
                 applicationContext
         );
+    }
+
+    private Map<String, Object> detailedReadiness() {
+        Map<String, Object> body = controller().strictReadiness().getBody();
+        assertNotNull(body);
+        return body;
     }
 
     private static Map<String, Object> retryDown(String message) {

@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS t_content_assist_record (
+    id BIGINT NOT NULL COMMENT 'snowflake id',
+    uid BIGINT NOT NULL COMMENT 'caller user id',
+    scene VARCHAR(32) NOT NULL COMMENT 'WRITING / QUALITY_SCORE / TAG_TOPIC_SUGGESTIONS',
+    provider VARCHAR(32) NOT NULL COMMENT 'deepseek / rules',
+    assist_status VARCHAR(32) NOT NULL COMMENT 'RULE_ONLY / AI_SUCCESS / AI_FALLBACK',
+    domain INT NULL COMMENT 'post domain snapshot',
+    content_length INT NOT NULL DEFAULT 0 COMMENT 'draft body length only',
+    content_hash CHAR(64) NOT NULL COMMENT 'sha256 hash of draft body',
+    prompt_tokens INT NOT NULL DEFAULT 0,
+    completion_tokens INT NOT NULL DEFAULT 0,
+    estimated_cost_micros BIGINT NOT NULL DEFAULT 0,
+    error_code VARCHAR(64) NULL,
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_content_assist_scene_time (scene, create_time),
+    KEY idx_content_assist_status_time (assist_status, create_time),
+    KEY idx_content_assist_provider_time (provider, create_time),
+    KEY idx_content_assist_uid_time (uid, create_time)
+) COMMENT='content assist metadata only, no raw draft body stored';

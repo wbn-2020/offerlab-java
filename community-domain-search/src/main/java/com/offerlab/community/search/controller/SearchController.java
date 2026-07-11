@@ -89,15 +89,7 @@ public class SearchController {
     @GetMapping("/status")
     @RateLimit(key = "'public:search:status:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
     public Result<SearchStatusDTO> status(HttpServletRequest request) {
-        SearchStatusDTO status = postSearchIndexer.publicStatus();
-        return Result.ok(SearchStatusDTO.builder()
-                .status(status.getStatus())
-                .enabled(status.isEnabled())
-                .available(Boolean.TRUE.equals(status.getPublicSearchAvailable()))
-                .publicSearchAvailable(status.getPublicSearchAvailable())
-                .publicSearchDegraded(status.getPublicSearchDegraded())
-                .message(status.getMessage())
-                .build());
+        return Result.ok(postSearchIndexer.publicStatus());
     }
 
     @PostMapping("/analytics/track")
@@ -258,6 +250,10 @@ public class SearchController {
 
         Map<String, Object> search = new LinkedHashMap<>();
         search.put("visible", containsPost(recall, postId));
+        search.put("source", recall.getSource());
+        search.put("degraded", recall.getDegraded());
+        search.put("fallbackReason", recall.getFallbackReason());
+        search.put("diagnostics", recall.getDiagnostics());
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("postId", postId);

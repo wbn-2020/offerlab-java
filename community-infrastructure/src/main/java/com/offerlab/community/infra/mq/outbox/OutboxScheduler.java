@@ -51,6 +51,12 @@ public class OutboxScheduler {
             log.debug("outbox flush: owner={} claimed={} loaded={}", owner, claimed, messages.size());
 
             for (OutboxMessage msg : messages) {
+                LocalDateTime renewedUntil = LocalDateTime.now().plusSeconds(CLAIM_LEASE_SECONDS);
+                int renewed = outboxMapper.renewClaim(msg.getId(), owner, renewedUntil);
+                if (renewed <= 0) {
+                    log.warn("outbox message skipped after claim lease was lost: id={} owner={}", msg.getId(), owner);
+                    continue;
+                }
                 try {
                     EventEnvelope envelope = objectMapper.readValue(msg.getPayload(), EventEnvelope.class);
                     Message<EventEnvelope> kafkaMsg = MessageBuilder
