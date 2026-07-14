@@ -1,6 +1,7 @@
 package com.offerlab.community.infra.mq.outbox;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -71,6 +72,7 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
     @Update("""
             UPDATE t_outbox_message
             SET msg_status = 1,
+                next_retry_time = NULL,
                 lock_owner = NULL,
                 lock_until = NULL,
                 update_time = NOW(3)
@@ -196,4 +198,16 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
             </script>
             """)
     int markFailedForRetryBatch(@Param("ids") List<Long> ids);
+
+    @Delete("""
+            DELETE FROM t_outbox_message
+            WHERE msg_status = #{status}
+              AND next_retry_time IS NULL
+              AND create_time < #{before}
+            ORDER BY create_time ASC
+            LIMIT #{limit}
+            """)
+    int deleteTerminalBefore(@Param("status") Integer status,
+                             @Param("before") LocalDateTime before,
+                             @Param("limit") int limit);
 }

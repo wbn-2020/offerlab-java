@@ -5,6 +5,7 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.CreatorCurationFeedbackFacade;
 import com.offerlab.community.post.api.PostFacade;
@@ -38,7 +39,6 @@ import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicP
 import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicSectionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -106,7 +106,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     private final AdminAuditService adminAuditService;
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
-    private final ApplicationEventPublisher applicationEventPublisher;
+    private final EventPublisher events;
 
     public List<OperationCandidateDTO> listCandidates(String keyword, Integer domain, Integer postType, int limit) {
         Integer activeDomain = requireOptionalDomain(domain);
@@ -1045,7 +1045,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
             if (!isAuthorVisibleFeedbackPost(post)) {
                 continue;
             }
-            applicationEventPublisher.publishEvent(OperationCurationSelectedEvent.builder()
+            events.publish(OperationCurationSelectedEvent.builder()
                     .authorUid(post.getAuthorId())
                     .contentId(post.getId())
                     .contentTitle(post.getTitle())
@@ -1077,7 +1077,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
                 continue;
             }
             String sectionKey = StringUtils.hasText(section.getTitle()) ? section.getTitle() : String.valueOf(section.getId());
-            applicationEventPublisher.publishEvent(OperationCurationSelectedEvent.builder()
+            events.publish(OperationCurationSelectedEvent.builder()
                     .authorUid(post.getAuthorId())
                     .contentId(post.getId())
                     .contentTitle(post.getTitle())

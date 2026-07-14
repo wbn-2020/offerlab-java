@@ -43,9 +43,10 @@ public class CommunityTopicController {
     @GetMapping
     @RateLimit(key = "'public:topics:list:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<List<CommunityTopicDTO>> list(@RequestParam(required = false) Boolean featured,
+                                                @RequestParam(required = false) @Size(max = 80) String keyword,
                                                 @RequestParam(defaultValue = "20") @Min(1) @Max(50) int limit,
                                                 HttpServletRequest request) {
-        return Result.ok(topicService.listPublic(featured, limit, UserContext.get()));
+        return Result.ok(topicService.listPublic(featured, keyword, limit, UserContext.get()));
     }
 
     @GetMapping("/me/following")

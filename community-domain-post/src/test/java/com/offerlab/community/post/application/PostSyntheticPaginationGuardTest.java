@@ -49,7 +49,9 @@ class PostSyntheticPaginationGuardTest {
                 "repository implementation must pass domain to the public post mapper");
         assertTrue(mapper.contains("@Param(\"domain\") Integer domain"),
                 "public post mapper must receive domain as a SQL parameter");
-        assertTrue(mapper.contains("COALESCE(e_domain.domain, 1) = #{domain}"),
-                "public post SQL must filter legacy null domains as TECH through t_post_extension.domain before ORDER BY/LIMIT");
+        assertTrue(mapper.contains("OR e_domain.domain = #{domain})"),
+                "public post SQL must filter only explicitly assigned domains before ORDER BY/LIMIT");
+        assertTrue(!mapper.contains("COALESCE(e_domain.domain, 1) = #{domain}"),
+                "legacy null domains must remain unclassified instead of being silently assigned to TECH");
     }
 }

@@ -111,6 +111,16 @@ public interface CommunityTopicMapper extends BaseMapper<CommunityTopicPO> {
                     )
                     OR p.title LIKE CONCAT('%', #{keyword}, '%')
                     OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.contextTopicId')) = CAST(#{topicId} AS CHAR)
+                    OR JSON_CONTAINS(JSON_EXTRACT(e.ext_json, '$.topicNames'), JSON_QUOTE(#{keyword}))
+                    OR EXISTS (
+                        SELECT 1
+                        FROM JSON_TABLE(
+                            COALESCE(JSON_EXTRACT(e.ext_json, '$.topicNames'), JSON_ARRAY()),
+                            '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                        ) AS topic_item
+                        WHERE LOWER(topic_item.topic_name) = LOWER(#{keyword})
+                    )
                     OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
                     OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
                   )
@@ -136,6 +146,19 @@ public interface CommunityTopicMapper extends BaseMapper<CommunityTopicPO> {
                                )
                                OR p.title LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
                                OR p.content LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
+                               OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.contextTopicId')) = CAST(t.id AS CHAR)
+                               OR JSON_CONTAINS(
+                                   JSON_EXTRACT(e.ext_json, '$.topicNames'),
+                                   JSON_QUOTE(COALESCE(t.topic_name, t.slug))
+                               )
+                               OR EXISTS (
+                                   SELECT 1
+                                   FROM JSON_TABLE(
+                                       COALESCE(JSON_EXTRACT(e.ext_json, '$.topicNames'), JSON_ARRAY()),
+                                       '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                                   ) AS topic_item
+                                   WHERE LOWER(topic_item.topic_name) = LOWER(COALESCE(t.topic_name, t.slug))
+                               )
                                OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
                                OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
                              )

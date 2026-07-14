@@ -56,6 +56,23 @@ class SearchAnalyticsGuardTest {
         assertTrue(searchControllerSource.contains("SearchAnalyticsTrackCmd"), "search tracking endpoint must use a typed DTO");
         assertTrue(searchControllerSource.contains("COMMUNITY_RECOMMEND_CLICK"), "search tracking endpoint must accept community recommendation click events");
         assertTrue(searchControllerSource.contains("recordCommunityRecommendClick"), "search tracking endpoint must record community recommendation clicks");
+        assertTrue(searchControllerSource.contains("Cache<String, RateBucket> TRACK_RATE_BUCKETS = Caffeine.newBuilder()"),
+                "tracking rate buckets must use the repository Caffeine pattern");
+        assertTrue(searchControllerSource.contains("Cache<String, DedupReservation> TRACK_DEDUP_KEYS = Caffeine.newBuilder()"),
+                "tracking dedup keys must use the repository Caffeine pattern");
+        assertTrue(searchControllerSource.contains(".maximumSize(TRACK_GUARD_MAX_ENTRIES)"),
+                "tracking guards must have a hard configured entry ceiling");
+        assertTrue(searchControllerSource.contains(".expireAfterWrite(Duration.ofMillis(TRACK_RATE_WINDOW_MS))")
+                        && searchControllerSource.contains(".expireAfterWrite(Duration.ofMillis(TRACK_DEDUP_WINDOW_MS))"),
+                "tracking guards must expire without request-thread table scans");
+        assertTrue(searchControllerSource.contains(".asMap().putIfAbsent(dedupKey, reservation)"),
+                "dedup reservation must be atomic");
+        assertTrue(searchControllerSource.contains(".asMap().remove(dedupKey, reservation)"),
+                "failed tracking must not remove a newer dedup reservation");
+        assertTrue(!searchControllerSource.contains("cleanupTrackGuards"),
+                "request threads must not scan tracking guard tables");
+        assertTrue(!searchControllerSource.contains("ConcurrentHashMap"),
+                "tracking guards must not regress to manually managed unbounded maps");
 
         assertTrue(opsControllerSource.contains("/search/analytics"), "ops controller must expose search analytics summary");
         assertTrue(opsControllerSource.contains("SearchAnalyticsDTO"), "ops search analytics endpoint must return structured DTO");
@@ -66,6 +83,7 @@ class SearchAnalyticsGuardTest {
     void mysqlFallbackSearchMustStayBoundedAndDatabaseFiltered() throws Exception {
         String facadeSource = Files.readString(Path.of("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java"), StandardCharsets.UTF_8);
         String postMapperSource = Files.readString(Path.of("../community-domain-post/src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/PostMapper.java"), StandardCharsets.UTF_8);
+        String tagMapperSource = Files.readString(Path.of("../community-domain-post/src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/TagMapper.java"), StandardCharsets.UTF_8);
 
         assertTrue(facadeSource.contains("MYSQL_FALLBACK_MAX_SCAN"), "MySQL fallback must have an explicit scan ceiling");
         assertTrue(facadeSource.contains("fallbackScanLimit(limit)"), "MySQL fallback must clamp per-request scan size");
@@ -87,5 +105,14 @@ class SearchAnalyticsGuardTest {
         assertTrue(postMapperSource.contains("e.company LIKE CONCAT('%', #{company}, '%')"), "company filter must run in SQL before loading rows");
         assertTrue(postMapperSource.contains("e.position = #{position}"), "position filter must run in SQL before loading rows");
         assertTrue(postMapperSource.contains("LIMIT #{limit}"), "fallback SQL must be limit-bound");
+        assertTrue(facadeSource.contains("tagMapper.selectHotTags(limit)")
+                        && facadeSource.contains("tagMapper.selectHotTagsCompat(limit)"),
+                "hot keyword lookup must use bounded tag mapper queries");
+        assertTrue(tagMapperSource.contains("List<TagPO> selectHotTags(@Param(\"limit\") int limit)")
+                        && tagMapperSource.contains("List<TagPO> selectHotTagsCompat(@Param(\"limit\") int limit)"),
+                "tag mapper must expose governed and compatibility hot-tag queries");
+        assertTrue(tagMapperSource.contains("ORDER BY use_count DESC, is_official DESC, id ASC")
+                        && tagMapperSource.contains("LIMIT #{limit}"),
+                "hot-tag SQL must preserve Java sorting semantics and apply the limit in the database");
     }
 }

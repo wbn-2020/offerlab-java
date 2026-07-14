@@ -85,6 +85,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class QuestionFacadeImpl implements QuestionFacade {
+    private static final int MAX_PREP_TARGETS_PER_USER = 20;
     private static final int MAX_PUBLIC_QUESTION_OFFSET = 10_000;
     private static final int MAX_ADMIN_QUESTION_OFFSET = 100_000;
     private static final Set<String> TECHNICAL_KEYWORDS = Set.of(
@@ -549,12 +550,20 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (value.isBlank() || value.length() > 128) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        if (prepTargetMapper.lockUser(uid) == null) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND);
+        }
+        UserPrepTargetPO existing = prepTargetMapper.selectByNaturalKey(uid, type, value);
+        if (existing == null && prepTargetMapper.countByUser(uid) >= MAX_PREP_TARGETS_PER_USER) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "A user can keep at most " + MAX_PREP_TARGETS_PER_USER + " prep targets");
+        }
         prepTargetMapper.insertIgnore(idGen.nextId(), uid, type, value, cmd == null ? null : cmd.getInterviewDate(), priority, note);
-        return prepTargetMapper.selectByUser(uid).stream()
-                .filter(item -> type.equals(item.getTargetType()) && value.equals(item.getTargetValue()))
-                .findFirst()
-                .map(this::toPrepTargetDto)
-                .orElseThrow(() -> new BizException(ErrorCode.SYSTEM_ERROR));
+        UserPrepTargetPO saved = prepTargetMapper.selectByNaturalKey(uid, type, value);
+        if (saved == null) {
+            throw new BizException(ErrorCode.SYSTEM_ERROR);
+        }
+        return toPrepTargetDto(saved);
     }
 
     @Override

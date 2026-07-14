@@ -21,6 +21,7 @@ public class DiscoveryMapDTO {
     private Map<String, DiscoveryModuleDTO> modules;
     private List<DiscoveryItemDTO> featuredTopics;
     private List<DiscoveryItemDTO> channels;
+    private List<DiscoveryItemDTO> contentForms;
     private List<DiscoveryItemDTO> activeTopics;
     private List<DiscoveryItemDTO> searchEntrypoints;
 
@@ -52,6 +53,7 @@ public class DiscoveryMapDTO {
         private String slug;
         private Long sourceId;
         private Integer domain;
+        private Integer postType;
         private String icon;
         private List<String> tags;
         private String reason;

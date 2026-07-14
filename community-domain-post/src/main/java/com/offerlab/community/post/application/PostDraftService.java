@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Objects;
 
 @Slf4j
 @Service
@@ -216,8 +217,14 @@ public class PostDraftService {
     private String normalizeDraftExtJson(String extJson, Integer domain, Boolean anonymous) {
         try {
             ObjectNode object = readObjectExtJson(extJson);
-            object.put("domain", draftDomain(domain, extJson));
-            object.put("anonymous", Boolean.TRUE.equals(anonymous) && draftDomain(domain, extJson) == Post.DOMAIN_CAREER);
+            Integer resolvedDomain = draftDomain(domain, extJson);
+            if (resolvedDomain == null) {
+                object.remove("domain");
+            } else {
+                object.put("domain", resolvedDomain);
+            }
+            object.put("anonymous", Boolean.TRUE.equals(anonymous)
+                    && Objects.equals(resolvedDomain, Post.DOMAIN_CAREER));
             return objectMapper.writeValueAsString(object);
         } catch (Exception e) {
             throw new BizException(ErrorCode.PARAM_ERROR);
@@ -229,7 +236,7 @@ public class PostDraftService {
             return requireDomain(explicitDomain);
         }
         Integer legacyDomain = readDomain(extJson);
-        return PostDomain.fromCode(legacyDomain).getCode();
+        return legacyDomain == null ? null : requireDomain(legacyDomain);
     }
 
     private Boolean draftAnonymous(Boolean explicitAnonymous, String extJson, Integer domain) {

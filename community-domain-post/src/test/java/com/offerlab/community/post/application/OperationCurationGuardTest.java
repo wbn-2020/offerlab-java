@@ -128,6 +128,10 @@ class OperationCurationGuardTest {
                 "DiscoveryMap href filtering must reject demo, fallback, fixture, and local demo paths");
         assertTrue(discoveryDto.contains("private Map<String, DiscoveryModuleDTO> modules;"),
                 "DiscoveryMap must expose module status separately from real items");
+        assertTrue(discoveryDto.contains("private List<DiscoveryItemDTO> contentForms;")
+                        && discoveryService.contains(".contentForms(contentForms)")
+                        && discoveryService.contains("modules.put(\"contentForms\""),
+                "DiscoveryMap must expose the five content forms as a first-class public module");
         assertTrue(discoveryService.contains("catch (BizException e)")
                         && count(discoveryService, "return List.of();") >= 2,
                 "DiscoveryMap module failures must degrade to empty modules instead of failing the whole public map");

@@ -15,6 +15,15 @@ import java.util.Map;
 public interface PostMapper extends BaseMapper<PostPO> {
 
     @Select("""
+            SELECT *
+            FROM t_post_main
+            WHERE id = #{id}
+              AND is_deleted = 0
+            FOR UPDATE
+            """)
+    PostPO selectByIdForUpdate(@Param("id") Long id);
+
+    @Select("""
             <script>
             SELECT DATE(p.create_time) AS label, COUNT(*) AS count
             FROM t_post_main p
@@ -24,7 +33,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             GROUP BY DATE(p.create_time)
             ORDER BY DATE(p.create_time) ASC
@@ -47,7 +56,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
                   <if test="domain != null">
-                  AND COALESCE(e.domain, 1) = #{domain}
+                  AND e.domain = #{domain}
                   </if>
             ) x
             WHERE x.company IS NOT NULL
@@ -95,7 +104,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
                   <if test="domain != null">
-                  AND COALESCE(e.domain, 1) = #{domain}
+                  AND e.domain = #{domain}
                   </if>
             ) x
             WHERE x.position IS NOT NULL
@@ -122,7 +131,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
                   <if test="domain != null">
-                  AND COALESCE(e.domain, 1) = #{domain}
+                  AND e.domain = #{domain}
                   </if>
             ) x
             WHERE x.result IS NOT NULL
@@ -162,7 +171,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             </script>
             """)
@@ -222,7 +231,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.post_status = 1
               AND p.visibility = 1
               AND (#{domain} IS NULL
-                   OR COALESCE(e_domain.domain, 1) = #{domain})
+                   OR e_domain.domain = #{domain})
               AND (
                 #{cursorScore} IS NULL
                 OR (
@@ -306,7 +315,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') NOT IN ('true', '1')
               </if>
               <if test="domain != null">
-              AND COALESCE(e_domain.domain, 1) = #{domain}
+              AND e_domain.domain = #{domain}
               </if>
               <if test="cursorTime != null">
               AND (p.create_time &lt; #{cursorTime}
@@ -335,7 +344,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.post_status = 1
               AND p.visibility = 1
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
               <if test="postType != null">
               AND p.post_type = #{postType}
@@ -408,6 +417,19 @@ public interface PostMapper extends BaseMapper<PostPO> {
                     </if>
                     p.title LIKE CONCAT('%', #{keyword}, '%')
                     OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.contextTopicId')) = CAST(#{topicId} AS CHAR)
+                    OR JSON_CONTAINS(
+                        JSON_EXTRACT(e_topic.ext_json, '$.topicNames'),
+                        JSON_QUOTE(#{keyword})
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM JSON_TABLE(
+                            COALESCE(JSON_EXTRACT(e_topic.ext_json, '$.topicNames'), JSON_ARRAY()),
+                            '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                        ) AS topic_item
+                        WHERE LOWER(topic_item.topic_name) = LOWER(#{keyword})
+                    )
                     OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
                     OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
                     OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
@@ -545,6 +567,9 @@ public interface PostMapper extends BaseMapper<PostPO> {
               <if test="type != null">
               AND p.post_type = #{type}
               </if>
+              <if test="domain != null">
+              AND e.domain = #{domain}
+              </if>
               <if test="cursorTime != null">
               AND p.create_time &lt; #{cursorTime}
               </if>
@@ -557,6 +582,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                            @Param("company") String company,
                                            @Param("position") String position,
                                            @Param("type") Integer type,
+                                           @Param("domain") Integer domain,
                                            @Param("cursorTime") LocalDateTime cursorTime,
                                            @Param("limit") int limit);
 
@@ -618,6 +644,9 @@ public interface PostMapper extends BaseMapper<PostPO> {
               <if test="type != null">
               AND p.post_type = #{type}
               </if>
+              <if test="domain != null">
+              AND e.domain = #{domain}
+              </if>
               <if test="cursorTime != null">
               AND p.create_time &lt; #{cursorTime}
               </if>
@@ -630,6 +659,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                                  @Param("company") String company,
                                                  @Param("position") String position,
                                                  @Param("type") Integer type,
+                                                 @Param("domain") Integer domain,
                                                  @Param("cursorTime") LocalDateTime cursorTime,
                                                  @Param("limit") int limit);
 
@@ -643,7 +673,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             GROUP BY p.post_type
             ORDER BY COUNT(*) DESC, p.post_type ASC
@@ -663,7 +693,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.create_time >= #{since}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             </script>
             """)
@@ -679,7 +709,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             </script>
             """)
@@ -698,7 +728,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.create_time >= #{since}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             ORDER BY count DESC, p.create_time DESC, p.id DESC
             LIMIT #{limit}
@@ -707,7 +737,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<Map<String, Object>> listFeaturedContent(@Param("since") LocalDateTime since, @Param("limit") int limit, @Param("domain") Integer domain);
 
     @Select("""
-            SELECT COALESCE(e.domain, 1) AS name,
+            SELECT e.domain AS name,
                    COUNT(*) AS count
             FROM t_post_main p
             LEFT JOIN t_post_extension e ON e.post_id = p.id
@@ -715,13 +745,13 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.post_status = 1
               AND p.visibility = 1
               AND p.create_time >= #{since}
-            GROUP BY COALESCE(e.domain, 1)
+            GROUP BY e.domain
             ORDER BY COUNT(*) DESC, name ASC
             """)
     List<Map<String, Object>> countDomainDistribution(@Param("since") LocalDateTime since);
 
     @Select("""
-            SELECT COALESCE(e.domain, 1) AS domain,
+            SELECT e.domain AS domain,
                    COUNT(*) AS postCount,
                    SUM(CASE WHEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1') THEN 1 ELSE 0 END) AS featuredCount,
                    COUNT(DISTINCT p.author_id) AS activeAuthors
@@ -731,7 +761,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.post_status = 1
               AND p.visibility = 1
               AND p.create_time >= #{since}
-            GROUP BY COALESCE(e.domain, 1)
+            GROUP BY e.domain
             ORDER BY domain ASC
             """)
     List<Map<String, Object>> listDomainComparisonStats(@Param("since") LocalDateTime since);
@@ -753,7 +783,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             ORDER BY count DESC, p.create_time DESC, p.id DESC
             LIMIT #{limit}
@@ -767,7 +797,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               SELECT grouped.*,
                      ROW_NUMBER() OVER (PARTITION BY grouped.domain ORDER BY grouped.count DESC, grouped.createTime DESC, grouped.postId DESC) AS rn
               FROM (
-                SELECT COALESCE(e.domain, 1) AS domain,
+                SELECT e.domain AS domain,
                        p.id AS postId,
                        p.create_time AS createTime,
                        p.title AS name,

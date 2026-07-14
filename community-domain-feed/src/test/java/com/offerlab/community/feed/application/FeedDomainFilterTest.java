@@ -38,13 +38,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class FeedDomainFilterTest {
 
     @Test
-    void latestDomainFilterTreatsMissingDomainAsTech() {
-        PostBriefDTO legacyTechPost = post(701L, 71L, null);
+    void latestDomainFilterExcludesUnclassifiedPostsFromConcreteDomains() {
+        PostBriefDTO unclassifiedPost = post(701L, 71L, null);
         PostBriefDTO careerPost = post(702L, 72L, Post.DOMAIN_CAREER);
         FeedFacadeImpl facade = new FeedFacadeImpl(
                 new EmptyFeedInboxRedis(),
                 new FixedHiddenFeedFeedbackStore(Set.of()),
-                new FakePostFacade(PageResult.of(List.of(legacyTechPost, careerPost), null, false)),
+                new FakePostFacade(PageResult.of(List.of(unclassifiedPost, careerPost), null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
@@ -53,7 +53,7 @@ class FeedDomainFilterTest {
         PageResult<FeedItemVO> techPage = facade.getLatestFeed(null, null, 3, Post.DOMAIN_TECH);
         PageResult<FeedItemVO> careerPage = facade.getLatestFeed(null, null, 3, Post.DOMAIN_CAREER);
 
-        assertEquals(List.of(701L), postIds(techPage));
+        assertEquals(List.of(), postIds(techPage));
         assertEquals(List.of(702L), postIds(careerPage));
     }
 
@@ -303,7 +303,7 @@ class FeedDomainFilterTest {
         @Override
         public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
             List<PostBriefDTO> filtered = latestPage.getItems().stream()
-                    .filter(post -> domain == null || (post.getDomain() == null ? Post.DOMAIN_TECH : post.getDomain()) == domain)
+                    .filter(post -> domain == null || java.util.Objects.equals(post.getDomain(), domain))
                     .limit(size)
                     .toList();
             return PageResult.of(filtered, null, false);
@@ -361,6 +361,7 @@ class FeedDomainFilterTest {
         @Override public Long addComment(CommentCreateCmd cmd) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, String cursor, int size, String sort) { throw unsupported(); }
+        @Override public CommentDTO getCommentContext(Long postId, Long commentId, Long viewerUid) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size) { throw unsupported(); }
         @Override public void deleteComment(Long commentId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) { throw unsupported(); }

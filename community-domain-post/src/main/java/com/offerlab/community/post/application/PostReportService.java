@@ -3,6 +3,7 @@ package com.offerlab.community.post.application;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.audit.AdminAuditService;
@@ -19,8 +20,6 @@ import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostReportMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostReportPO;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -55,19 +54,21 @@ public class PostReportService {
     private final AdminAuditService adminAuditService;
     private final ReviewQueuePublisher reviewQueuePublisher;
     private final DomainModeratorService domainModeratorService;
-
-    @Autowired(required = false)
-    private ApplicationEventPublisher applicationEventPublisher;
+    private final EventPublisher events;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
         if (reporterUid == null) {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
-        Post post = postRepo.findById(postId)
+        Post post = postRepo.findByIdForUpdate(postId)
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         if (!post.isVisibleTo(null, false)) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        if (reporterUid.equals(post.getAuthorId())) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "post authors cannot report their own post");
         }
         if (reportMapper.findPendingByReporter(postId, reporterUid) != null) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
@@ -156,6 +157,10 @@ public class PostReportService {
         Post post = postRepo.findById(report.getPostId())
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        if (reviewerUid.equals(report.getReporterUid()) || reviewerUid.equals(post.getAuthorId())) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "reporters and post authors cannot review this report");
+        }
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -195,6 +200,10 @@ public class PostReportService {
         Post post = postRepo.findById(report.getPostId())
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        if (reviewerUid.equals(report.getReporterUid()) || reviewerUid.equals(post.getAuthorId())) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "reporters and post authors cannot close this report");
+        }
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -230,10 +239,10 @@ public class PostReportService {
     }
 
     private void publishReportReviewedEvent(PostReportPO report, String userStatus) {
-        if (applicationEventPublisher == null || report == null || report.getReporterUid() == null || report.getId() == null) {
+        if (report == null || report.getReporterUid() == null || report.getId() == null) {
             return;
         }
-        applicationEventPublisher.publishEvent(PostReportReviewedEvent.builder()
+        events.publish(PostReportReviewedEvent.builder()
                 .reporterUid(report.getReporterUid())
                 .reportId(report.getId())
                 .postId(report.getPostId())

@@ -8,13 +8,16 @@ import com.offerlab.community.analytics.infrastructure.persistence.mapper.Growth
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -25,6 +28,7 @@ import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CreatorGrowthService {
 
     private static final int INVESTMENT_DOMAIN = 5;
@@ -33,6 +37,17 @@ public class CreatorGrowthService {
     private static final String AUTO_REPRESENTATIVE_SOURCE = "auto_profile_candidate";
     private static final String HIGH_RISK_REPRESENTATIVE_SOURCE = "neutral_profile_candidate";
     private static final String MANUAL_REPRESENTATIVE_SOURCE = "manual_profile_display";
+    private static final String TRUSTED_CONTENT_QUERY_FAILED = "TRUSTED_CONTENT_QUERY_FAILED";
+    private static final String TRUSTED_CONTENT_ROW_MISSING = "TRUSTED_CONTENT_ROW_MISSING";
+    private static final String TRUSTED_CONTENT_ROW_INVALID = "TRUSTED_CONTENT_ROW_INVALID";
+    private static final List<String> TRUSTED_CONTENT_METRIC_FIELDS = List.of(
+            "pendingSuggestions",
+            "freshnessAwaitingConfirmation",
+            "unresolvedQuestions",
+            "usefulFeedback7Days",
+            "usefulFeedback30Days",
+            "effectiveReads7Days",
+            "effectiveReads30Days");
 
     private final GrowthInsightMapper growthInsightMapper;
     private final ContentSeriesMapper contentSeriesMapper;
@@ -44,6 +59,7 @@ public class CreatorGrowthService {
         requireUser(uid);
         CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary = feedbackSummary(uid);
         LocalDateTime since30 = sinceDays(30);
+        CreatorGrowthWorkspaceDTO.TrustedContentDTO trustedContent = trustedContent(uid, since30);
         List<CreatorGrowthWorkspaceDTO.CreatorTopPostDTO> topPosts = topPosts(uid, since30);
         List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities = replyOpportunities(uid);
         List<CreatorGrowthWorkspaceDTO.PublicSeriesDTO> publicSeries = publicSeries(uid);
@@ -65,9 +81,16 @@ public class CreatorGrowthService {
         return CreatorGrowthWorkspaceDTO.builder()
                 .source(workspaceSource(summary, curationSummary, topPosts, replyOpportunities, curationFeedback))
                 .periodDays(30)
-                .degraded(curationSummary.isDegraded())
-                .fallbackReason(workspaceFallbackReason(summary, curationSummary, topPosts, replyOpportunities, curationFeedback))
+                .degraded(curationSummary.isDegraded() || trustedContent.isDegraded())
+                .fallbackReason(workspaceFallbackReason(
+                        summary,
+                        curationSummary,
+                        trustedContent,
+                        topPosts,
+                        replyOpportunities,
+                        curationFeedback))
                 .summary(workspaceSummary(summary, curationSummary, representativePosts, replyOpportunities))
+                .trustedContent(trustedContent)
                 .maintainablePosts(maintainablePosts)
                 .curationFeedback(curationFeedback)
                 .actions(actions)
@@ -85,6 +108,87 @@ public class CreatorGrowthService {
                         "Use representative posts, public series, and useful discussion as profile display.",
                         "Feedback is for creator review and follow-up planning, not commercial placement."))
                 .build();
+    }
+
+    public CreatorGrowthWorkspaceDTO.TrustedContentDTO trustedContent(Long uid) {
+        requireUser(uid);
+        return trustedContent(uid, sinceDays(30));
+    }
+
+    private CreatorGrowthWorkspaceDTO.TrustedContentDTO trustedContent(Long uid, LocalDateTime since30) {
+        try {
+            Map<String, Object> row = growthInsightMapper.selectTrustedContentSummary(
+                    uid,
+                    Post.TYPE_COMMUNITY_QUESTION,
+                    sinceDays(7),
+                    since30);
+            if (row == null) {
+                log.warn("creator trusted-content row missing: uid={}", uid);
+                return degradedTrustedContent(TRUSTED_CONTENT_ROW_MISSING);
+            }
+            Map<String, Long> metrics = new LinkedHashMap<>();
+            List<String> invalidFields = new ArrayList<>();
+            for (String field : TRUSTED_CONTENT_METRIC_FIELDS) {
+                Long metric = trustedContentMetric(row, field);
+                if (metric == null) {
+                    invalidFields.add(field);
+                } else {
+                    metrics.put(field, metric);
+                }
+            }
+            if (!invalidFields.isEmpty()) {
+                log.warn("creator trusted-content row invalid: uid={}, invalidFields={}", uid, invalidFields);
+                return degradedTrustedContent(TRUSTED_CONTENT_ROW_INVALID);
+            }
+            return CreatorGrowthWorkspaceDTO.TrustedContentDTO.builder()
+                    .degraded(false)
+                    .pendingSuggestions(metrics.get("pendingSuggestions"))
+                    .freshnessAwaitingConfirmation(metrics.get("freshnessAwaitingConfirmation"))
+                    .unresolvedQuestions(metrics.get("unresolvedQuestions"))
+                    .usefulFeedback7Days(metrics.get("usefulFeedback7Days"))
+                    .usefulFeedback30Days(metrics.get("usefulFeedback30Days"))
+                    .effectiveReads7Days(metrics.get("effectiveReads7Days"))
+                    .effectiveReads30Days(metrics.get("effectiveReads30Days"))
+                    .pendingSuggestionItems(taskItems(
+                            growthInsightMapper.selectPendingSuggestionItems(uid),
+                            true))
+                    .freshnessItems(taskItems(
+                            growthInsightMapper.selectFreshnessItems(uid),
+                            false))
+                    .pendingQuestionItems(taskItems(
+                            growthInsightMapper.selectPendingQuestionItems(uid, Post.TYPE_COMMUNITY_QUESTION),
+                            false))
+                    .build();
+        } catch (RuntimeException e) {
+            log.warn("creator trusted-content query failed: uid={}", uid, e);
+            return degradedTrustedContent(TRUSTED_CONTENT_QUERY_FAILED);
+        }
+    }
+
+    private static CreatorGrowthWorkspaceDTO.TrustedContentDTO degradedTrustedContent(String fallbackReason) {
+        return CreatorGrowthWorkspaceDTO.TrustedContentDTO.builder()
+                .degraded(true)
+                .fallbackReason(fallbackReason)
+                .build();
+    }
+
+    private static List<CreatorGrowthWorkspaceDTO.TrustedContentTaskItemDTO> taskItems(
+            List<Map<String, Object>> rows,
+            boolean suggestion
+    ) {
+        return safeRows(rows).stream()
+                .limit(5)
+                .map(row -> CreatorGrowthWorkspaceDTO.TrustedContentTaskItemDTO.builder()
+                        .postId(asLongObject(row.get("postId")))
+                        .suggestionId(suggestion ? asLongObject(row.get("suggestionId")) : null)
+                        .postTitle(compact(text(row.get("postTitle")), 160))
+                        .status(compact(text(row.get("status")), 64))
+                        .createdAt(asDateTime(row.get("createdAt")))
+                        .updatedAt(asDateTime(row.get("updatedAt")))
+                        .href("/post/" + asLongObject(row.get("postId")))
+                        .build())
+                .filter(item -> item.getPostId() != null)
+                .toList();
     }
 
     public CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO feedbackSummary(Long uid) {
@@ -393,11 +497,15 @@ public class CreatorGrowthService {
 
     private static String workspaceFallbackReason(CreatorGrowthWorkspaceDTO.CreatorFeedbackSummaryDTO summary,
                                                   CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO curationSummary,
+                                                  CreatorGrowthWorkspaceDTO.TrustedContentDTO trustedContent,
                                                   List<CreatorGrowthWorkspaceDTO.CreatorTopPostDTO> topPosts,
                                                   List<CreatorGrowthWorkspaceDTO.CreatorReplyOpportunityDTO> replyOpportunities,
                                                   List<CreatorCurationFeedbackDTO> curationFeedback) {
         if (curationSummary.isDegraded()) {
             return curationSummary.getFallbackReason();
+        }
+        if (trustedContent.isDegraded()) {
+            return trustedContent.getFallbackReason();
         }
         return hasPublicWorkspaceData(summary, topPosts, replyOpportunities, curationFeedback) ? null : "NO_PUBLIC_CONTENT";
     }
@@ -611,6 +719,44 @@ public class CreatorGrowthService {
 
     private static String text(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private static LocalDateTime asDateTime(Object value) {
+        if (value instanceof LocalDateTime dateTime) {
+            return dateTime;
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toLocalDateTime();
+        }
+        if (value instanceof java.util.Date date) {
+            return date.toInstant()
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toLocalDateTime();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(String.valueOf(value));
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static Long trustedContentMetric(Map<String, Object> row, String key) {
+        if (!row.containsKey(key)) {
+            return null;
+        }
+        Object value = row.get(key);
+        if (!StringUtils.hasText(value == null ? null : String.valueOf(value))) {
+            return null;
+        }
+        try {
+            long metric = new BigDecimal(String.valueOf(value)).longValueExact();
+            return metric >= 0 ? metric : null;
+        } catch (NumberFormatException | ArithmeticException ignored) {
+            return null;
+        }
     }
 
     private void requireRepresentativeTable() {

@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -40,6 +41,7 @@ public class PostCounterRedis {
     private static final String FIELD_FAVORITE = "favorite";
     private static final String FIELD_SHARE = "share";
     private static final int MAX_BATCH_GET_SIZE = 500;
+    private static final Duration COUNTER_TTL = Duration.ofDays(30);
 
     public record CounterValue(Long postId,
                                Long viewCount,
@@ -173,6 +175,7 @@ public class PostCounterRedis {
             hashOps.putIfAbsent(key, FIELD_COMMENT, "0");
             hashOps.putIfAbsent(key, FIELD_FAVORITE, "0");
             hashOps.putIfAbsent(key, FIELD_SHARE, "0");
+            refreshTtl(key);
         } catch (Exception e) {
             log.warn("post counter redis init degraded, postId={} reason={}", LogMask.id(postId), LogMask.message(e));
         }
@@ -193,8 +196,21 @@ public class PostCounterRedis {
         try {
             HashOperations<String, String, String> hashOps = redisTemplate.opsForHash();
             hashOps.putAll(key, map);
+            refreshTtl(key);
         } catch (Exception e) {
             log.warn("post counter redis fill degraded, postId={} reason={}", LogMask.id(postId), LogMask.message(e));
+        }
+    }
+
+    public void evict(Long postId) {
+        if (postId == null || postId <= 0) {
+            return;
+        }
+        try {
+            redisTemplate.delete(getKey(postId));
+        } catch (Exception e) {
+            log.warn("post counter redis eviction degraded, postId={} reason={}",
+                    LogMask.id(postId), LogMask.message(e));
         }
     }
 
@@ -202,6 +218,7 @@ public class PostCounterRedis {
         String key = getKey(postId);
         try {
             redisTemplate.opsForHash().increment(key, field, delta);
+            refreshTtl(key);
         } catch (Exception e) {
             log.warn("post counter redis increment degraded, postId={} field={} delta={} reason={}",
                     LogMask.id(postId), field, delta, LogMask.message(e));
@@ -210,6 +227,10 @@ public class PostCounterRedis {
 
     private String getKey(Long postId) {
         return KEY_PREFIX + postId;
+    }
+
+    private void refreshTtl(String key) {
+        redisTemplate.expire(key, COUNTER_TTL);
     }
 
     private CounterValue toCounterValue(Long postId, Map<String, String> entries) {

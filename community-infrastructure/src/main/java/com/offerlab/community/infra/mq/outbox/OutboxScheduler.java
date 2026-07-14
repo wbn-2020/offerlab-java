@@ -36,6 +36,10 @@ public class OutboxScheduler {
     private static final int BATCH_SIZE = 100;
     private static final int CLAIM_LEASE_SECONDS = 60;
     private static final int SEND_TIMEOUT_SECONDS = 5;
+    private static final int RETENTION_BATCH_SIZE = 1000;
+    private static final int MAX_RETENTION_BATCHES = 20;
+    private static final int SENT_RETENTION_DAYS = 30;
+    private static final int FAILED_RETENTION_DAYS = 180;
     private final String owner = buildOwner();
 
     @Scheduled(fixedDelay = 1000)
@@ -82,6 +86,23 @@ public class OutboxScheduler {
         }
     }
 
+    @Scheduled(cron = "${offerlab.outbox.retention-cleanup-cron:0 20 * * * *}")
+    public void cleanupTerminalMessages() {
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            int sentDeleted = deleteInBatches(
+                    OutboxMessageMapper.STATUS_SENT, now.minusDays(SENT_RETENTION_DAYS));
+            int failedDeleted = deleteInBatches(
+                    OutboxMessageMapper.STATUS_FAILED, now.minusDays(FAILED_RETENTION_DAYS));
+            if (sentDeleted + failedDeleted > 0) {
+                log.info("outbox retention cleanup completed: sentDeleted={} failedDeleted={}",
+                        sentDeleted, failedDeleted);
+            }
+        } catch (Exception e) {
+            log.warn("outbox retention cleanup failed", e);
+        }
+    }
+
     private void handleSendFailure(OutboxMessage msg, Exception e) {
         int newRetryCount = (msg.getRetryCount() == null ? 0 : msg.getRetryCount()) + 1;
 
@@ -96,6 +117,18 @@ public class OutboxScheduler {
             log.warn("outbox message retry scheduled: id={} topic={} owner={} nextRetry={} delaySeconds={} updated={}",
                     msg.getId(), msg.getTopic(), owner, nextRetryTime, delaySeconds, updated, e);
         }
+    }
+
+    private int deleteInBatches(int status, LocalDateTime before) {
+        int total = 0;
+        for (int batch = 0; batch < MAX_RETENTION_BATCHES; batch++) {
+            int deleted = outboxMapper.deleteTerminalBefore(status, before, RETENTION_BATCH_SIZE);
+            total += Math.max(0, deleted);
+            if (deleted < RETENTION_BATCH_SIZE) {
+                break;
+            }
+        }
+        return total;
     }
 
     private static String buildOwner() {

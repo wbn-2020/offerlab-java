@@ -99,14 +99,16 @@ public class KnowledgeRelationService {
                     .label(post.getTitle())
                     .domain(post.getDomain())
                     .build());
-            Integer postDomain = post.getDomain() == null ? PostDomain.TECH.getCode() : post.getDomain();
-            addNode(nodes, KnowledgeRelationNodeDTO.builder()
-                    .key("domain:" + postDomain)
-                    .type("domain")
-                    .label(PostDomain.fromCode(postDomain).name().toLowerCase())
-                    .domain(postDomain)
-                    .build());
-            addEdge(edges, "domain:" + postDomain, "post:" + post.getId(), "domain_post");
+            Integer postDomain = post.getDomain();
+            if (PostDomain.isValid(postDomain)) {
+                addNode(nodes, KnowledgeRelationNodeDTO.builder()
+                        .key("domain:" + postDomain)
+                        .type("domain")
+                        .label(PostDomain.fromCode(postDomain).name().toLowerCase())
+                        .domain(postDomain)
+                        .build());
+                addEdge(edges, "domain:" + postDomain, "post:" + post.getId(), "domain_post");
+            }
             for (TagDTO tag : post.getTags() == null ? List.<TagDTO>of() : post.getTags()) {
                 if (!isPublicTag(tag)) {
                     continue;
@@ -543,6 +545,7 @@ public class KnowledgeRelationService {
         result.addAll(discoveryMap.getActiveTopics() == null ? List.of() : discoveryMap.getActiveTopics());
         result.addAll(discoveryMap.getSearchEntrypoints() == null ? List.of() : discoveryMap.getSearchEntrypoints());
         result.addAll(discoveryMap.getChannels() == null ? List.of() : discoveryMap.getChannels());
+        result.addAll(discoveryMap.getContentForms() == null ? List.of() : discoveryMap.getContentForms());
         return result;
     }
 

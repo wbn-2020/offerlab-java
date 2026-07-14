@@ -67,7 +67,7 @@ class DomainModeratorGuardTest {
 
         assertContains(reportService, "listRecent(Integer status, Integer domain", "reports must support domain filtering");
         assertContains(reportService, "domainModeratorService.requireModerateDomain", "report review must enforce domain scope");
-        assertContains(reportMapper, "COALESCE(e.domain, 1) = #{domain}", "report query must filter by indexed post domain");
+        assertContains(reportMapper, "e.domain = #{domain}", "report query must filter by indexed post domain without classifying null as TECH");
         assertContains(featuredService, "domainModeratorService.requireModerateDomain", "featured updates must enforce domain scope");
         assertContains(knowledgeService, "domainModeratorService.requireModerateDomain", "knowledge review must enforce domain scope");
         assertContains(opsController, "domainModerator", "permissions endpoint must expose domain moderator flag");

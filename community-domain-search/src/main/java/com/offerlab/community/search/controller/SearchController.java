@@ -1,5 +1,9 @@
 package com.offerlab.community.search.controller;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
@@ -30,11 +34,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @PublicApi
@@ -49,9 +53,15 @@ public class SearchController {
     private static final int TRACK_RATE_LIMIT_PER_MINUTE = 20;
     private static final long TRACK_RATE_WINDOW_MS = 60_000L;
     private static final long TRACK_DEDUP_WINDOW_MS = 15_000L;
-    private static final int TRACK_MAP_CLEANUP_THRESHOLD = 10_000;
-    private static final ConcurrentHashMap<String, RateBucket> TRACK_RATE_BUCKETS = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, Long> TRACK_DEDUP_KEYS = new ConcurrentHashMap<>();
+    private static final int TRACK_GUARD_MAX_ENTRIES = 10_000;
+    private static final Cache<String, RateBucket> TRACK_RATE_BUCKETS = Caffeine.newBuilder()
+            .maximumSize(TRACK_GUARD_MAX_ENTRIES)
+            .expireAfterWrite(Duration.ofMillis(TRACK_RATE_WINDOW_MS))
+            .build();
+    private static final Cache<String, DedupReservation> TRACK_DEDUP_KEYS = Caffeine.newBuilder()
+            .maximumSize(TRACK_GUARD_MAX_ENTRIES)
+            .expireAfterWrite(Duration.ofMillis(TRACK_DEDUP_WINDOW_MS))
+            .build();
 
     private final SearchFacade facade;
     private final SearchAnalyticsService searchAnalyticsService;
@@ -64,11 +74,13 @@ public class SearchController {
                                                        @RequestParam(required = false) @Size(max = 128) String company,
                                                        @RequestParam(required = false) @Size(max = 128) String position,
                                                        @RequestParam(required = false) Integer type,
+                                                       @RequestParam(required = false) @Min(1) @Max(5) Integer domain,
                                                        @RequestParam(required = false) @Size(max = 16) String sort,
                                                        @RequestParam(required = false) @Size(max = 32) String cursor,
                                                        @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
                                                        HttpServletRequest request) {
-        return Result.ok(facade.searchPosts(keyword, company, position, type, sort, cursor, size, false).publicView());
+        domain = requireOptionalDomain(domain);
+        return Result.ok(facade.searchPosts(keyword, company, position, type, domain, sort, cursor, size, false).publicView());
     }
 
     @GetMapping("/suggest")
@@ -107,22 +119,20 @@ public class SearchController {
             return trackResult(false, null);
         }
 
-        long now = System.currentTimeMillis();
         String fingerprint = sha256Hex(clientFingerprint(request));
-        cleanupTrackGuards(now);
-        if (!allowTrackRate(fingerprint, now)) {
+        if (!allowTrackRate(fingerprint)) {
             return trackResult(false, null);
         }
 
         String dedupKey = sha256Hex(fingerprint + "|" + eventType + "|" + nullToEmpty(keyword) + "|" + target);
-        Long lastSeen = TRACK_DEDUP_KEYS.get(dedupKey);
-        if (lastSeen != null && now - lastSeen < TRACK_DEDUP_WINDOW_MS) {
+        DedupReservation reservation = reserveDedupKey(dedupKey);
+        if (reservation == null) {
             return trackResult(false, null);
         }
 
         boolean tracked = searchAnalyticsService.recordCommunityRecommendClick(keyword, target);
-        if (tracked) {
-            TRACK_DEDUP_KEYS.put(dedupKey, now);
+        if (!tracked) {
+            TRACK_DEDUP_KEYS.asMap().remove(dedupKey, reservation);
         }
         return trackResult(tracked, null);
     }
@@ -185,24 +195,14 @@ public class SearchController {
         return nullToEmpty(ip) + "|" + truncate(nullToEmpty(userAgent), 120);
     }
 
-    private static boolean allowTrackRate(String fingerprint, long now) {
-        RateBucket bucket = TRACK_RATE_BUCKETS.computeIfAbsent(fingerprint, key -> new RateBucket(now));
-        synchronized (bucket) {
-            if (now - bucket.windowStartMs >= TRACK_RATE_WINDOW_MS) {
-                bucket.windowStartMs = now;
-                bucket.count.set(0);
-            }
-            return bucket.count.incrementAndGet() <= TRACK_RATE_LIMIT_PER_MINUTE;
-        }
+    private static boolean allowTrackRate(String fingerprint) {
+        RateBucket bucket = TRACK_RATE_BUCKETS.get(fingerprint, key -> new RateBucket());
+        return bucket.count.incrementAndGet() <= TRACK_RATE_LIMIT_PER_MINUTE;
     }
 
-    private static void cleanupTrackGuards(long now) {
-        if (TRACK_DEDUP_KEYS.size() > TRACK_MAP_CLEANUP_THRESHOLD) {
-            TRACK_DEDUP_KEYS.entrySet().removeIf(entry -> now - entry.getValue() > TRACK_DEDUP_WINDOW_MS);
-        }
-        if (TRACK_RATE_BUCKETS.size() > TRACK_MAP_CLEANUP_THRESHOLD) {
-            TRACK_RATE_BUCKETS.entrySet().removeIf(entry -> now - entry.getValue().windowStartMs > TRACK_RATE_WINDOW_MS);
-        }
+    private static DedupReservation reserveDedupKey(String dedupKey) {
+        DedupReservation reservation = new DedupReservation();
+        return TRACK_DEDUP_KEYS.asMap().putIfAbsent(dedupKey, reservation) == null ? reservation : null;
     }
 
     private static String sha256Hex(String value) {
@@ -228,12 +228,10 @@ public class SearchController {
     }
 
     private static final class RateBucket {
-        private long windowStartMs;
         private final AtomicInteger count = new AtomicInteger();
+    }
 
-        private RateBucket(long windowStartMs) {
-            this.windowStartMs = windowStartMs;
-        }
+    private static final class DedupReservation {
     }
 
     @GetMapping("/posts/{postId}/publish-status")
@@ -266,6 +264,16 @@ public class SearchController {
     private static boolean containsPost(PageResult<PostBriefDTO> page, Long postId) {
         return page != null && page.getItems() != null && page.getItems().stream()
                 .anyMatch(post -> java.util.Objects.equals(post.getId(), postId));
+    }
+
+    private static Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (domain < 1 || domain > 5) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "频道不存在或已下线");
+        }
+        return domain;
     }
 
 }

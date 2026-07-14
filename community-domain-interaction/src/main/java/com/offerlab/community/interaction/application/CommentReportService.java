@@ -6,11 +6,13 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.event.CommentReportReviewedEvent;
+import com.offerlab.community.interaction.api.event.CommentUnavailableEvent;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentReportMapper;
@@ -24,8 +26,6 @@ import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -73,16 +73,19 @@ public class CommentReportService {
     private final AfterCommitExecutor afterCommit;
     private final ReviewQueuePublisher reviewQueuePublisher;
     private final DomainModeratorService domainModeratorService;
-
-    @Autowired(required = false)
-    private ApplicationEventPublisher applicationEventPublisher;
+    private final TrustedContentService trustedContentService;
+    private final EventPublisher events;
 
     @Transactional
     public Long reportComment(Long commentId, Long reporterUid, String reason, String detail) {
         if (reporterUid == null) {
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
-        CommentPO comment = requireVisibleComment(commentId);
+        CommentPO comment = requireVisibleCommentForUpdate(commentId);
+        if (reporterUid.equals(comment.getAuthorId())) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "comment authors cannot report their own comment");
+        }
         if (postFacade.getPost(comment.getPostId(), reporterUid) == null) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
@@ -176,6 +179,12 @@ public class CommentReportService {
         Post post = postRepo.findById(report.getPostId())
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        CommentPO targetComment = commentMapper.selectById(report.getCommentId());
+        if (reviewerUid.equals(report.getReporterUid())
+                || (targetComment != null && reviewerUid.equals(targetComment.getAuthorId()))) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "reporters and comment authors cannot review this report");
+        }
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -186,7 +195,8 @@ public class CommentReportService {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         if (approved) {
-            hideCommentBranch(report.getCommentId(), report.getPostId());
+            hideCommentBranch(
+                    report.getCommentId(), report.getPostId(), reviewerUid, post);
         }
         publishReportReviewedEvent(report, approved ? USER_STATUS_ACTION_TAKEN : USER_STATUS_NOT_ACCEPTED);
         CommentReportDTO dto = toDto(reportMapper.selectById(reportId));
@@ -214,6 +224,12 @@ public class CommentReportService {
         Post post = postRepo.findById(report.getPostId())
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        CommentPO targetComment = commentMapper.selectById(report.getCommentId());
+        if (reviewerUid.equals(report.getReporterUid())
+                || (targetComment != null && reviewerUid.equals(targetComment.getAuthorId()))) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "reporters and comment authors cannot close this report");
+        }
         if (report.getReportStatus() == null || report.getReportStatus() != STATUS_PENDING) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -250,10 +266,10 @@ public class CommentReportService {
     }
 
     private void publishReportReviewedEvent(CommentReportPO report, String userStatus) {
-        if (applicationEventPublisher == null || report == null || report.getReporterUid() == null || report.getId() == null) {
+        if (report == null || report.getReporterUid() == null || report.getId() == null) {
             return;
         }
-        applicationEventPublisher.publishEvent(CommentReportReviewedEvent.builder()
+        events.publish(CommentReportReviewedEvent.builder()
                 .reporterUid(report.getReporterUid())
                 .reportId(report.getId())
                 .postId(report.getPostId())
@@ -265,6 +281,15 @@ public class CommentReportService {
 
     private CommentPO requireVisibleComment(Long commentId) {
         CommentPO comment = commentMapper.selectById(commentId);
+        return requireVisibleComment(comment);
+    }
+
+    private CommentPO requireVisibleCommentForUpdate(Long commentId) {
+        CommentPO comment = commentMapper.selectByIdForUpdate(commentId);
+        return requireVisibleComment(comment);
+    }
+
+    private CommentPO requireVisibleComment(CommentPO comment) {
         if (comment == null
                 || comment.getCommentStatus() == null
                 || comment.getCommentStatus() != COMMENT_STATUS_NORMAL
@@ -274,7 +299,7 @@ public class CommentReportService {
         return comment;
     }
 
-    private void hideCommentBranch(Long commentId, Long postId) {
+    private void hideCommentBranch(Long commentId, Long postId, Long actorUid, Post post) {
         CommentPO comment = requireVisibleComment(commentId);
         LambdaQueryWrapper<CommentPO> visibleQuery = new LambdaQueryWrapper<CommentPO>()
                 .eq(CommentPO::getPostId, postId)
@@ -292,9 +317,32 @@ public class CommentReportService {
 
         CommentPO update = new CommentPO();
         update.setCommentStatus(COMMENT_STATUS_HIDDEN);
-        commentMapper.update(update, visibleQuery);
-        postCounterMapper.incrComment(postId, -visibleCount);
-        afterCommit.execute(() -> postCounterRedis.incrComment(postId, -visibleCount), "post comment hide counter:" + postId);
+        int hiddenCount = commentMapper.update(update, visibleQuery);
+        if (hiddenCount <= 0) {
+            return;
+        }
+        postCounterMapper.incrComment(postId, -hiddenCount);
+        afterCommit.execute(() -> postCounterRedis.incrComment(postId, -hiddenCount), "post comment hide counter:" + postId);
+        events.publish(CommentUnavailableEvent.builder()
+                .commentId(comment.getId())
+                .postId(postId)
+                .actorUid(actorUid)
+                .reason("Comment was hidden after a report")
+                .cascade(comment.getRootId() == null || comment.getRootId() == 0L)
+                .build());
+        if ((comment.getRootId() == null || comment.getRootId() == 0)
+                && (comment.getParentId() == null || comment.getParentId() == 0)) {
+            trustedContentService.onRootCommentUnavailable(
+                    PostDTO.builder()
+                            .id(post.getId())
+                            .authorId(post.getAuthorId())
+                            .postType(post.getPostType())
+                            .visibility(post.getVisibility())
+                            .postStatus(post.getPostStatus())
+                            .build(),
+                    comment.getId(),
+                    actorUid);
+        }
     }
 
     private int clampLimit(int limit) {

@@ -1,5 +1,6 @@
 package com.offerlab.community.post.api.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
@@ -18,4 +19,7 @@ public class ContentAssistTagTopicSuggestionsCmd {
     @NotBlank
     @Size(max = PostContentLimits.MAX_CONTENT_LEN)
     private String content;
+    private JsonNode assistContext;
+    @Size(max = 64)
+    private String assistTemplateCode;
 }

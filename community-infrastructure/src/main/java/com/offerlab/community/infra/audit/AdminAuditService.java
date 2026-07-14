@@ -83,9 +83,9 @@ public class AdminAuditService {
                     .nextCursor(null)
                     .build();
         }
-        int safePage = Math.max(1, page);
+        int safePage = Math.min(Math.max(1, page), 1000);
         int safePageSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
-        int offset = (safePage - 1) * safePageSize;
+        int offset = Math.multiplyExact(safePage - 1, safePageSize);
         String cleanAction = clean(action);
         String cleanResourceType = clean(resourceType);
         List<AdminAuditLog> items;

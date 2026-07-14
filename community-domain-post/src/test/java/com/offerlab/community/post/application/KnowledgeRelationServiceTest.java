@@ -49,6 +49,8 @@ class KnowledgeRelationServiceTest {
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("domain_post"));
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("post_tag"));
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("topic_tag"));
+        assertTrue(graph.getEdges().stream().noneMatch(edge ->
+                "domain_post".equals(edge.getRelation()) && "post:102".equals(edge.getTarget())));
         assertTrue(graph.getNodes().stream().noneMatch(node -> "series".equals(node.getType())));
         assertTrue(graph.getEdges().stream().noneMatch(edge -> "series_post".equals(edge.getRelation())));
     }
@@ -189,7 +191,7 @@ class KnowledgeRelationServiceTest {
         return PostBriefDTO.builder()
                 .id(102L)
                 .title("Spring Cloud guide")
-                .domain(1)
+                .domain(null)
                 .tags(List.of(TagDTO.builder().id(202L).name("Spring Cloud").build()))
                 .createTime(LocalDateTime.now())
                 .build();

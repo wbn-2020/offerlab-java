@@ -32,8 +32,29 @@ public interface FavoriteFolderMapper extends BaseMapper<FavoriteFolderPO> {
             WHERE user_id = #{userId}
               AND is_deleted = 0
             ORDER BY sort_order ASC, id ASC
+            LIMIT 100
             """)
     List<FavoriteFolderPO> selectActiveByUserId(@Param("userId") Long userId);
+
+    @Select("""
+            SELECT id
+            FROM t_int_favorite_folder
+            WHERE user_id = #{userId}
+              AND is_default = 1
+              AND is_deleted = 0
+            ORDER BY id ASC
+            LIMIT 1
+            FOR UPDATE
+            """)
+    Long lockDefaultByUserId(@Param("userId") Long userId);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_int_favorite_folder
+            WHERE user_id = #{userId}
+              AND is_deleted = 0
+            """)
+    long countActiveByUserId(@Param("userId") Long userId);
 
     @Select("""
             SELECT id, user_id, name, description, visibility, sort_order, post_count,

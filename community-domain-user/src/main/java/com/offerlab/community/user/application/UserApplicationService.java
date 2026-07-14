@@ -10,6 +10,7 @@ import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.NotificationPreferenceDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
@@ -70,6 +71,7 @@ public class UserApplicationService {
     private final UserProfileMapper profileMapper;
     private final UserCacheService userCacheService;
     private final ContentModerationService contentModerationService;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -163,7 +165,8 @@ public class UserApplicationService {
                 .followeeId(toUid)
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
-        userCacheService.evictBrief(fromUid, toUid);
+        afterCommit.execute(() -> userCacheService.evictBrief(fromUid, toUid),
+                "follow cache eviction:" + fromUid + ":" + toUid);
     }
 
     @Transactional
@@ -172,7 +175,8 @@ public class UserApplicationService {
         if (!ok) {
             throw new BizException(ErrorCode.FOLLOW_NOT_EXISTS);
         }
-        userCacheService.evictBrief(fromUid, toUid);
+        afterCommit.execute(() -> userCacheService.evictBrief(fromUid, toUid),
+                "unfollow cache eviction:" + fromUid + ":" + toUid);
     }
 
     public User getUser(Long uid) {
@@ -206,7 +210,7 @@ public class UserApplicationService {
         contentModerationService.requireContentAllowed(uid, ContentModerationService.SCOPE_PROFILE,
                 u.getNickname(), u.getBio());
         userRepo.updateProfile(u);
-        userCacheService.evictBrief(uid);
+        afterCommit.execute(() -> userCacheService.evictBrief(uid), "user profile cache eviction:" + uid);
     }
 
     private String normalizeEmail(String email) {
@@ -255,7 +259,7 @@ public class UserApplicationService {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         userRepo.updateProfile(u);
-        userCacheService.evictBrief(uid);
+        afterCommit.execute(() -> userCacheService.evictBrief(uid), "user intent cache eviction:" + uid);
     }
 
     @Transactional

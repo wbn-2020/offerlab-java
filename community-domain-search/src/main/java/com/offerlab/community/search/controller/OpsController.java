@@ -83,6 +83,20 @@ public class OpsController {
     private static final int MAX_RETRY_BATCH_SIZE = 50;
     private static final int PREVIEW_EXPIRES_IN_SECONDS = 300;
 
+    public record OutboxMessageView(
+            Long id,
+            String aggregateType,
+            Long aggregateId,
+            String topic,
+            Integer msgStatus,
+            Integer retryCount,
+            String lockOwner,
+            LocalDateTime lockUntil,
+            LocalDateTime nextRetryTime,
+            LocalDateTime createTime,
+            LocalDateTime updateTime) {
+    }
+
     private final PostSearchIndexer indexer;
     private final SearchIndexRetryService searchIndexRetryService;
     private final SearchAnalyticsService searchAnalyticsService;
@@ -213,25 +227,29 @@ public class OpsController {
     }
 
     @GetMapping("/outbox")
-    public Result<List<OutboxMessage>> listOutbox(@RequestParam(required = false) Integer status,
-                                                  @RequestParam(defaultValue = "20") int limit) {
+    public Result<List<OutboxMessageView>> listOutbox(@RequestParam(required = false) Integer status,
+                                                     @RequestParam(defaultValue = "20") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
-        return Result.ok(outboxMessageMapper.listRecent(status, clamp(limit)));
+        return Result.ok(outboxMessageMapper.listRecent(status, clamp(limit)).stream()
+                .map(OpsController::toOutboxView)
+                .toList());
     }
 
     @GetMapping("/outbox/page")
-    public Result<PageResult<OutboxMessage>> pageOutbox(@RequestParam(required = false) Integer status,
-                                                        @RequestParam(defaultValue = "1") int page,
-                                                        @RequestParam(defaultValue = "20") int pageSize) {
+    public Result<PageResult<OutboxMessageView>> pageOutbox(@RequestParam(required = false) Integer status,
+                                                           @RequestParam(defaultValue = "1") int page,
+                                                           @RequestParam(defaultValue = "20") int pageSize) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         int safePageSize = clamp(pageSize);
-        int safePage = Math.max(1, page);
-        int offset = (safePage - 1) * safePageSize;
+        int safePage = clampPage(page);
+        int offset = Math.multiplyExact(safePage - 1, safePageSize);
         long total = outboxMessageMapper.countPage(status);
-        List<OutboxMessage> items = total <= offset
+        List<OutboxMessageView> items = total <= offset
                 ? List.of()
-                : outboxMessageMapper.pageRecent(status, safePageSize, offset);
-        return Result.ok(PageResult.<OutboxMessage>builder()
+                : outboxMessageMapper.pageRecent(status, safePageSize, offset).stream()
+                .map(OpsController::toOutboxView)
+                .toList();
+        return Result.ok(PageResult.<OutboxMessageView>builder()
                 .items(items)
                 .hasMore(offset + items.size() < total)
                 .total(total)
@@ -239,13 +257,13 @@ public class OpsController {
     }
 
     @GetMapping("/outbox/{id}")
-    public Result<OutboxMessage> getOutbox(@PathVariable Long id) {
+    public Result<OutboxMessageView> getOutbox(@PathVariable Long id) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         OutboxMessage message = outboxMessageMapper.findById(id);
         if (message == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        return Result.ok(message);
+        return Result.ok(toOutboxView(message));
     }
 
     @PostMapping("/outbox/{id}/retry")
@@ -749,6 +767,21 @@ public class OpsController {
         return data;
     }
 
+    private static OutboxMessageView toOutboxView(OutboxMessage message) {
+        return new OutboxMessageView(
+                message.getId(),
+                message.getAggregateType(),
+                message.getAggregateId(),
+                message.getTopic(),
+                message.getMsgStatus(),
+                message.getRetryCount(),
+                message.getLockOwner(),
+                message.getLockUntil(),
+                message.getNextRetryTime(),
+                message.getCreateTime(),
+                message.getUpdateTime());
+    }
+
     private Map<String, Object> previewOutboxRetry(Long uid, List<Long> ids) {
         if (!outboxReplayCheckRequired()) {
             List<Map<String, Object>> items = ids.stream()
@@ -1091,6 +1124,10 @@ public class OpsController {
             return 20;
         }
         return Math.min(limit, 100);
+    }
+
+    private static int clampPage(int page) {
+        return Math.min(Math.max(1, page), 1000);
     }
 
     private static Long normalizeUid(Long uid) {

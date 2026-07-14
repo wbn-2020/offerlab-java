@@ -48,6 +48,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @RequiredArgsConstructor
 public class PostApplicationService {
 
+    private static final int MAX_PUBLIC_UPDATE_SUMMARY_LEN = 500;
+    private static final int MAX_IMPACT_SCOPE_LEN = 255;
+    private static final int MAX_RESPONDED_SUGGESTION_IDS = 100;
+
     private final PostRepository postRepo;
     private final PostCounterMapper counterMapper;
     private final PostTagRefMapper postTagRefMapper;
@@ -67,7 +71,7 @@ public class PostApplicationService {
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
-        Integer domain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), Post.DOMAIN_TECH);
+        Integer domain = requirePublishDomain(cmd.getDomain());
         domainConfigService.requireDomainEnabled(domain);
         PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
                 cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
@@ -161,7 +165,22 @@ public class PostApplicationService {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         requireEditableStatus(post);
-        Integer nextDomain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), post.getDomain());
+        String publicUpdateSummary = normalizeOptionalUpdateText(
+                cmd.getPublicUpdateSummary(), MAX_PUBLIC_UPDATE_SUMMARY_LEN,
+                "publicUpdateSummary", "公开更新摘要不能超过 500 个字符");
+        String impactScope = normalizeOptionalUpdateText(
+                cmd.getImpactScope(), MAX_IMPACT_SCOPE_LEN,
+                "impactScope", "影响范围不能超过 255 个字符");
+        List<Long> respondedSuggestionIds = normalizeRespondedSuggestionIds(cmd.getRespondedSuggestionIds());
+        if (!respondedSuggestionIds.isEmpty() && publicUpdateSummary == null) {
+            throw PostPublishQualityValidator.fieldError(
+                    "publicUpdateSummary", "处理内容建议时必须提供公开更新摘要");
+        }
+        if (impactScope != null && publicUpdateSummary == null) {
+            throw PostPublishQualityValidator.fieldError(
+                    "publicUpdateSummary", "填写影响范围时必须提供公开更新摘要");
+        }
+        Integer nextDomain = cmd.getDomain() == null ? requireDomain(post.getDomain()) : requireDomain(cmd.getDomain());
         domainConfigService.requireDomainEnabled(nextDomain);
         boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
         List<Long> existingTagIds = currentTagIds(post.getId());
@@ -182,8 +201,12 @@ public class PostApplicationService {
                 mergeDomainToExtJson(input.extJson(), nextDomain), nextDomain, cmd.getAnonymous());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
+        boolean forceVersionSnapshot = !respondedSuggestionIds.isEmpty()
+                || publicUpdateSummary != null
+                || impactScope != null;
         versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
-                input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided);
+                input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided,
+                publicUpdateSummary, impactScope, forceVersionSnapshot);
 
         post.setVisibility(nextVisibility);
         post.setExtJson(enrichedExtJson);
@@ -201,13 +224,18 @@ public class PostApplicationService {
         if (tagsProvided) {
             syncTags(post.getId(), resolvedTagIds);
         }
+        boolean includeEventContent = post.getPostStatus() != null
+                && post.getPostStatus() == Post.STATUS_PUBLISHED
+                && (post.getVisibility() == null || post.getVisibility() == Post.VIS_PUBLIC);
         events.publish(PostUpdatedEvent.builder()
                 .postId(post.getId())
                 .authorId(post.getAuthorId())
-                .title(post.getTitle())
-                .content(post.getContent())
+                .title(includeEventContent ? post.getTitle() : null)
+                .content(includeEventContent ? post.getContent() : null)
                 .visibility(post.getVisibility())
                 .postStatus(post.getPostStatus())
+                .resultVersion(post.getVersion())
+                .respondedSuggestionIds(respondedSuggestionIds)
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
     }
@@ -225,6 +253,7 @@ public class PostApplicationService {
                 .authorId(post.getAuthorId())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post counter eviction:" + postId);
     }
 
     public Post getOrThrow(Long postId) {
@@ -293,29 +322,9 @@ public class PostApplicationService {
         return null;
     }
 
-    private Integer resolveRequestedDomain(Integer explicitDomain, String extJson, Integer fallbackDomain) {
-        if (explicitDomain != null) {
-            return requireDomain(explicitDomain);
-        }
-        Integer extDomain = readDomainFromExtJson(extJson);
-        if (PostDomain.isValid(extDomain)) {
-            return extDomain;
-        }
-        return defaultDomain(fallbackDomain);
-    }
-
-    private Integer readDomainFromExtJson(String extJson) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            return readDomain(readObjectExtJson(mapper, extJson));
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private Integer defaultDomain(Integer domain) {
+    private Integer requirePublishDomain(Integer domain) {
         if (domain == null) {
-            return Post.DOMAIN_TECH;
+            throw PostPublishQualityValidator.fieldError("domain", "请选择频道");
         }
         return requireDomain(domain);
     }
@@ -325,6 +334,34 @@ public class PostApplicationService {
             return domain;
         }
         throw PostPublishQualityValidator.fieldError("domain", "领域不存在或已下线");
+    }
+
+    private String normalizeOptionalUpdateText(String value, int maxLength, String field, String message) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.length() > maxLength) {
+            throw PostPublishQualityValidator.fieldError(field, message);
+        }
+        return normalized;
+    }
+
+    private List<Long> normalizeRespondedSuggestionIds(List<Long> suggestionIds) {
+        if (suggestionIds == null || suggestionIds.isEmpty()) {
+            return List.of();
+        }
+        if (suggestionIds.size() > MAX_RESPONDED_SUGGESTION_IDS) {
+            throw PostPublishQualityValidator.fieldError(
+                    "respondedSuggestionIds", "一次最多关联 100 条建议");
+        }
+        for (Long suggestionId : suggestionIds) {
+            if (suggestionId == null || suggestionId <= 0) {
+                throw PostPublishQualityValidator.fieldError(
+                        "respondedSuggestionIds", "建议 ID 必须为正整数");
+            }
+        }
+        return suggestionIds.stream().distinct().toList();
     }
 
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {
@@ -475,6 +512,6 @@ public class PostApplicationService {
                 || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)) {
             return List.of();
         }
-        return communityTopicNotificationTargetService.targetsForPost(tagIds, post.getAuthorId());
+        return communityTopicNotificationTargetService.targetsForPost(tagIds, post.getExtJson(), post.getAuthorId());
     }
 }

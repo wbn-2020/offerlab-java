@@ -100,7 +100,8 @@ class DeepseekContentAssistAiClientTest {
         DeepseekContentAssistAiClient client = new DeepseekContentAssistAiClient(
                 new ObjectMapper(),
                 new InterruptingHttpClient());
-        ContentAssistPrompt prompt = new ContentAssistPrompt(1, 10, "title", "content", List.of());
+        ContentAssistPrompt prompt = new ContentAssistPrompt(
+                1, 10, "title", "content", List.of(), "source=search_gap", "problem-solution");
 
         try {
             assertThrows(InterruptedException.class,

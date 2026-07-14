@@ -16,6 +16,7 @@ public class PostVersionHistoryPO {
     private Long authorId;
     private Long editorUid;
     private Integer baseVersion;
+    private Integer resultVersion;
     private Integer postType;
     private String title;
     private String content;
@@ -25,5 +26,7 @@ public class PostVersionHistoryPO {
     private String extJson;
     private String tagSnapshotJson;
     private String changeSummary;
+    private String publicUpdateSummary;
+    private String impactScope;
     private LocalDateTime createTime;
 }

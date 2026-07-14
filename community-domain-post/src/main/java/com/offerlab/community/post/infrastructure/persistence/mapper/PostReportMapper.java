@@ -33,7 +33,7 @@ public interface PostReportMapper extends BaseMapper<PostReportPO> {
               AND r.report_status = #{status}
             </if>
             <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
             </if>
             ORDER BY r.create_time DESC
             LIMIT #{limit}

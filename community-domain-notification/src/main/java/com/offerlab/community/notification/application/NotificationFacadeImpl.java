@@ -213,6 +213,18 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     @Override
     @Transactional
+    public void notifyAnswerAccepted(Long receiverUid, Long senderUid, Long postId, Long commentId,
+                                     Map<String, Object> content) {
+        create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
+                content == null ? Map.of(
+                        "action", "answerAccepted",
+                        "postId", postId,
+                        "commentId", commentId
+                ) : content);
+    }
+
+    @Override
+    @Transactional
     public void notifyDiscussionFollowComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
                 Map.of("action", "discussion_follow_comment",

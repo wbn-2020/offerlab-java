@@ -36,6 +36,11 @@ class CommentReportDomainModeratorGuardTest {
                 "comment report review must enforce the reported post domain");
         assertContains(mapper, "LEFT JOIN t_post_extension e ON e.post_id = r.post_id",
                 "comment report query must join post extension for domain");
-        assertContains(mapper, "COALESCE(e.domain, 1) = #{domain}", "comment report query must filter by indexed post domain");
+        assertContains(mapper, "e.domain = #{domain}",
+                "comment report query must exclude unclassified reports from concrete moderator domains");
+        assertContains(mapper, "r.id",
+                "joined comment report projections must qualify the report id");
+        assertContains(mapper, "r.post_id AS postId",
+                "joined comment report projections must qualify the ambiguous post id");
     }
 }

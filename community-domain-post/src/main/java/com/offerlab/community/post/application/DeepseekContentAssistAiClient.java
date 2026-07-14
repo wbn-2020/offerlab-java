@@ -185,7 +185,7 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
     private String systemPrompt(ContentAssistScene scene) {
         return switch (scene) {
             case WRITING -> """
-                    You are an editorial copilot for a Chinese developer community.
+                    You are an editorial copilot for a Chinese comprehensive content community.
                     Return strict JSON only with keys:
                     suggestedTitle, summary, outline, suggestions, riskHints.
                     outline/suggestions/riskHints must be string arrays.
@@ -209,27 +209,37 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
         String title = ContentAssistSafety.trimForPrompt(prompt.title(), 255);
         String content = ContentAssistSafety.trimForPrompt(prompt.content(), maxPromptChars);
         String tags = prompt.tagNames() == null ? "" : String.join(", ", prompt.tagNames());
+        String assistContext = ContentAssistSafety.trimForPrompt(prompt.assistContext(), 1200);
+        String assistTemplateCode = ContentAssistSafety.trimForPrompt(prompt.assistTemplateCode(), 64);
         return switch (scene) {
             case WRITING -> """
                     domain: %s
                     postType: %s
+                    assistTemplateCode: %s
+                    assistContext:
+                    %s
                     title:
                     %s
                     draft:
                     %s
                     tags:
                     %s
-                    """.formatted(prompt.domain(), prompt.postType(), title, content, tags);
+                    """.formatted(prompt.domain(), prompt.postType(), assistTemplateCode, assistContext,
+                    title, content, tags);
             case QUALITY_SCORE -> """
                     domain: %s
                     postType: %s
+                    assistTemplateCode: %s
+                    assistContext:
+                    %s
                     title:
                     %s
                     draft:
                     %s
                     tags:
                     %s
-                    """.formatted(prompt.domain(), prompt.postType(), title, content, tags);
+                    """.formatted(prompt.domain(), prompt.postType(), assistTemplateCode, assistContext,
+                    title, content, tags);
             case TAG_TOPIC_SUGGESTIONS -> content;
         };
     }

@@ -32,6 +32,7 @@ public class PostCreateCmd {
     /** 扩展字段 JSON：公司/岗位/年限/结果 等 */
     @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
     private String extJson;
+    @NotNull(message = "请选择频道")
     private Integer domain;
     private Boolean anonymous;
     private List<Long> tagIds;

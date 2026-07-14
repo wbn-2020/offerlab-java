@@ -72,11 +72,20 @@ class ContentAssistServiceTest {
                 .postType(10)
                 .title("Redis 热点 key 重建复盘")
                 .content("Redis 热点 key 失效后，先回源数据库，再补互斥锁与空值缓存。")
+                .assistContext(objectMapper.createObjectNode()
+                        .put("source", "search_gap")
+                        .put("keyword", "Redis cache rebuild")
+                        .put("returnHref", "/search?q=redis"))
+                .assistTemplateCode("problem-solution")
                 .build());
 
         assertEquals("rules", result.getProvider());
         assertTrue(result.getFallbackUsed());
         assertEquals("AI_INVALID_RESPONSE", result.getErrorCode());
+        assertEquals("problem-solution", aiClient.lastPrompt.assistTemplateCode());
+        assertTrue(aiClient.lastPrompt.assistContext().contains("source=search_gap"));
+        assertTrue(aiClient.lastPrompt.assistContext().contains("keyword=Redis cache rebuild"));
+        assertFalse(aiClient.lastPrompt.assistContext().contains("returnHref"));
         assertEquals("AI_FALLBACK", records.last().status());
         assertEquals("AI_INVALID_RESPONSE", records.last().errorCode());
     }
@@ -282,6 +291,14 @@ class ContentAssistServiceTest {
         assertNull(result.getDomain());
         assertNull(result.getDomainName());
         assertNull(records.last().domain());
+
+        service.assistWriting(18L, ContentAssistWritingCmd.builder()
+                .postType(15)
+                .title("cache fallback review")
+                .content("redis cache fallback summary")
+                .build());
+
+        assertNull(records.last().domain());
     }
 
     private static final class StubTaxonomyService implements ContentAssistTaxonomyService {
@@ -323,6 +340,7 @@ class ContentAssistServiceTest {
         private final String responseJson;
         private final Exception failure;
         private int calls;
+        private ContentAssistPrompt lastPrompt;
 
         private StubAiClient(boolean enabled, boolean configured, String responseJson, Exception failure) {
             this.enabled = enabled;
@@ -356,6 +374,7 @@ class ContentAssistServiceTest {
         @Override
         public ContentAssistAiClient.Completion complete(ContentAssistScene scene, ContentAssistPrompt prompt) throws Exception {
             calls++;
+            lastPrompt = prompt;
             if (failure != null) {
                 throw failure;
             }

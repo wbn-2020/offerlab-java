@@ -71,7 +71,10 @@ class PostDraftGuardTest {
         assertTrue(service.contains(".anonymous("), "draft DTO builder must return anonymous");
         assertTrue(service.contains("deleteIfOwned"), "publish/update flow must be able to clear owned drafts");
         assertTrue(service.contains("new LambdaUpdateWrapper<PostDraftPO>()"), "draft deletion must constrain by id and uid");
-        assertTrue(appService.contains("resolveRequestedDomain"), "publish/update must recover domain from legacy draft extJson when explicit domain is absent");
+        assertFalse(appService.contains("readDomainFromExtJson"),
+                "publishing must not recover a missing domain from legacy draft extJson");
+        assertTrue(appService.contains("requirePublishDomain(cmd.getDomain())"),
+                "new publishing must require an explicit valid domain");
 
         assertTrue(mapper.contains("WHERE uid = #{uid}"), "mapper queries must be scoped by uid");
         assertTrue(mapper.contains("AND is_deleted = 0"), "mapper queries must ignore deleted drafts");

@@ -24,7 +24,7 @@ class TopicNotificationGuardTest {
         assertContains(postService, ".topicNotificationTargets(topicNotificationTargets(post, resolvedTagIds))");
         assertContains(postService, "Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)");
         assertContains(postService, "Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)");
-        assertContains(postService, "communityTopicNotificationTargetService.targetsForPost(tagIds, post.getAuthorId())");
+        assertContains(postService, "communityTopicNotificationTargetService.targetsForPost(tagIds, post.getExtJson(), post.getAuthorId())");
 
         String targetService = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/application/CommunityTopicNotificationTargetService.java"));
         assertContains(targetService, "class CommunityTopicNotificationTargetService");

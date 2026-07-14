@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -29,6 +30,7 @@ public class FeedInboxRedis {
     private static final String TIMELINE = "feed:timeline:";
     private static final String GLOBAL_LATEST = "feed:latest:global";
     private static final int GLOBAL_LATEST_CAP = 10000;
+    private static final Duration GLOBAL_LATEST_TTL = Duration.ofDays(30);
 
     private final StringRedisTemplate redis;
     private final LuaScriptLoader lua;
@@ -74,6 +76,7 @@ public class FeedInboxRedis {
             redis.opsForZSet().add(GLOBAL_LATEST, String.valueOf(postId), ts);
             // 异步裁剪：保留最近 cap
             redis.opsForZSet().removeRange(GLOBAL_LATEST, 0, -GLOBAL_LATEST_CAP - 1);
+            redis.expire(GLOBAL_LATEST, GLOBAL_LATEST_TTL);
         } catch (Exception e) {
             log.warn("addToGlobalLatest failed", e);
             throw new IllegalStateException("add global latest failed", e);

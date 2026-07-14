@@ -124,7 +124,7 @@ public class NotificationController {
     }
 
     private static final Set<String> SAFE_CONTENT_FIELDS = Set.of(
-            "action", "targetType", "targetId", "postId", "postTitle", "commentId", "userId",
+            "action", "targetType", "targetId", "postId", "postTitle", "commentId", "suggestionId", "decision", "userId",
             "requestId", "sourceType", "reportId", "userStatus", "reportStatus", "status",
             "resultText", "userResultText", "targetPath", "jumpPath", "href", "topicId",
             "topicSlug", "topicName", "topics", "placementType", "placementKey", "source",

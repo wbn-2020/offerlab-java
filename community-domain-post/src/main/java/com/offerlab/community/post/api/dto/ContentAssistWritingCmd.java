@@ -1,5 +1,6 @@
 package com.offerlab.community.post.api.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
@@ -23,4 +24,7 @@ public class ContentAssistWritingCmd {
     private String content;
     @Size(max = 8)
     private List<@Size(max = 64) String> tagNames;
+    private JsonNode assistContext;
+    @Size(max = 64)
+    private String assistTemplateCode;
 }

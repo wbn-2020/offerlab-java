@@ -65,6 +65,14 @@ public class PostRepositoryImpl implements PostRepository {
     }
 
     @Override
+    public Optional<Post> findByIdForUpdate(Long id) {
+        PostPO po = postMapper.selectByIdForUpdate(id);
+        if (po == null) return Optional.empty();
+        PostExtensionPO ext = extMapper.selectById(id);
+        return Optional.of(toDomain(po, ext));
+    }
+
+    @Override
     public Map<Long, Post> batchFindByIds(Collection<Long> ids) {
         List<Long> normalizedIds = normalizeBatchIds(ids);
         if (normalizedIds.isEmpty()) return Map.of();
@@ -264,7 +272,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .updateTime(po.getUpdateTime())
                 .extJson(ext == null ? null : ext.getExtJson())
                 .version(po.getVersion())
-                .domain(PostDomain.fromCode(domain).getCode())
+                .domain(PostDomain.isValid(domain) ? domain : null)
                 .build();
     }
 }

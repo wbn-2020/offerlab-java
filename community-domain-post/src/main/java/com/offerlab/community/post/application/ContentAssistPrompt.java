@@ -6,5 +6,7 @@ record ContentAssistPrompt(Integer domain,
                            Integer postType,
                            String title,
                            String content,
-                           List<String> tagNames) {
+                           List<String> tagNames,
+                           String assistContext,
+                           String assistTemplateCode) {
 }

@@ -22,8 +22,10 @@ import com.offerlab.community.interaction.api.dto.FavoriteFolderSortCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderUpdateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
+import com.offerlab.community.interaction.api.event.CommentHelpfulThresholdReachedEvent;
 import com.offerlab.community.interaction.api.event.CommentLikedEvent;
 import com.offerlab.community.interaction.api.event.CommentQualitySignalChangedEvent;
+import com.offerlab.community.interaction.api.event.CommentUnavailableEvent;
 import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentHelpfulMapper;
@@ -46,6 +48,7 @@ import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -71,6 +74,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     private static final int COMMENT_STATUS_NORMAL = 1;
     private static final int COMMENT_STATUS_REVIEWING = 2;
     private static final int COMMENT_REPLY_PREVIEW_LIMIT = 5;
+    private static final int COMMENT_HELPFUL_REWARD_THRESHOLD = 3;
     private static final String SORT_QUALITY = "quality";
     private static final String SIGNAL_AUTHOR_PINNED = "AUTHOR_PINNED";
     private static final String SIGNAL_FEATURED = "FEATURED";
@@ -84,6 +88,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     private static final int FAVORITE_FOLDER_PUBLIC = 1;
     private static final int FAVORITE_FOLDER_PRIVATE = 2;
     private static final int DEFAULT_SORT_ORDER = 0;
+    private static final int MAX_ACTIVE_FAVORITE_FOLDERS = 100;
 
     private final LikeMapper likeMapper;
     private final FavoriteMapper favoriteMapper;
@@ -99,6 +104,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
     private final SnowflakeIdGenerator idGen;
     private final EventPublisher events;
     private final AfterCommitExecutor afterCommit;
+
+    @Autowired(required = false)
+    private TrustedContentService trustedContentService;
 
     @Override
     @Transactional
@@ -388,7 +396,10 @@ public class InteractionFacadeImpl implements InteractionFacade {
         Long beforeId = parsedCursor.id();
         List<CommentPO> roots;
         if (qualitySort) {
-            roots = commentMapper.selectQualityRoots(postId, beforeCreateTime, beforeId, limit + 1);
+            if (beforeCreateTime != null && beforeId == null) {
+                throw new BizException(ErrorCode.PARAM_ERROR);
+            }
+            roots = commentMapper.selectQualityRoots(postId, beforeId, limit + 1);
         } else {
             LambdaQueryWrapper<CommentPO> q = new LambdaQueryWrapper<CommentPO>()
                     .eq(CommentPO::getPostId, postId)
@@ -448,6 +459,54 @@ public class InteractionFacadeImpl implements InteractionFacade {
     }
 
     @Override
+    public CommentDTO getCommentContext(Long postId, Long commentId, Long viewerUid) {
+        requirePostVisible(postId, viewerUid);
+        if (commentId == null || commentId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        CommentPO target = requireNormalComment(commentId);
+        requireCommentInPost(target, postId);
+        Long rootId = target.getRootId() != null && target.getRootId() > 0
+                ? target.getRootId()
+                : target.getId();
+        CommentPO root = Objects.equals(rootId, target.getId())
+                ? target
+                : requireNormalComment(rootId);
+        requireCommentInPost(root, postId);
+        if (root.getRootId() != null && root.getRootId() > 0) {
+            throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        }
+
+        List<CommentPO> contextComments = Objects.equals(root.getId(), target.getId())
+                ? List.of(root)
+                : List.of(root, target);
+        Map<Long, UserBriefDTO> users = usersFor(contextComments);
+        Set<Long> likedCommentIds = likedCommentIds(viewerUid, contextComments);
+        Set<Long> helpfulCommentIds = helpfulCommentIds(viewerUid, contextComments);
+        Map<Long, List<CommentQualitySignalPO>> signalsByComment = activeSignalsByComment(contextComments);
+        Map<Long, Long> replyCountByRoot = commentMapper.countRepliesByRootIds(postId, List.of(rootId)).stream()
+                .collect(Collectors.toMap(
+                        row -> mapLong(row, "rootId"),
+                        row -> mapLong(row, "replyCount"),
+                        Long::sum));
+
+        CommentDTO rootDto = toDto(
+                root, viewerUid, users, likedCommentIds, helpfulCommentIds, signalsByComment, replyCountByRoot);
+        List<CommentDTO> contextReplies;
+        if (Objects.equals(root.getId(), target.getId())) {
+            contextReplies = List.of();
+        } else {
+            contextReplies = List.of(toDto(
+                    target, viewerUid, users, likedCommentIds, helpfulCommentIds, signalsByComment, Map.of()));
+        }
+        rootDto.setReplies(contextReplies);
+        rootDto.setReplyCount(Math.max(rootDto.getReplyCount(), contextReplies.size()));
+        rootDto.setHasMoreReplies(rootDto.getReplyCount() > contextReplies.size());
+        rootDto.setRepliesNextCursor(null);
+        return rootDto;
+    }
+
+    @Override
     public PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size) {
         requirePostVisible(postId, viewerUid);
         if (rootId == null || rootId <= 0) {
@@ -485,7 +544,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     public void deleteComment(Long commentId, Long operatorUid) {
         CommentPO po = commentMapper.selectById(commentId);
         if (po == null) throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
-        requirePostVisible(po.getPostId(), operatorUid);
+        PostDTO post = requirePostVisible(po.getPostId(), operatorUid);
         if (!Objects.equals(po.getAuthorId(), operatorUid) && !Objects.equals(po.getPostAuthorId(), operatorUid)) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
@@ -505,6 +564,19 @@ public class InteractionFacadeImpl implements InteractionFacade {
         // MySQL 计数为权威，Redis 提交后增量刷新
         postCounterMapper.incrComment(po.getPostId(), -deleted);
         afterCommit.execute(() -> postCounterRedis.incrComment(po.getPostId(), -deleted), "post comment delete counter:" + po.getPostId());
+        events.publish(CommentUnavailableEvent.builder()
+                .commentId(po.getId())
+                .postId(po.getPostId())
+                .actorUid(operatorUid)
+                .reason("Comment was deleted")
+                .cascade(po.getRootId() == null || po.getRootId() == 0L)
+                .build());
+        if (trustedContentService != null
+                && (po.getRootId() == null || po.getRootId() == 0)
+                && (po.getParentId() == null || po.getParentId() == 0)) {
+            trustedContentService.onRootCommentUnavailable(
+                    post, po.getId(), operatorUid);
+        }
     }
 
     @Override
@@ -512,6 +584,10 @@ public class InteractionFacadeImpl implements InteractionFacade {
     public void markCommentHelpful(Long uid, Long commentId) {
         CommentPO comment = requireNormalComment(commentId);
         requirePostVisible(comment.getPostId(), uid);
+        if (Objects.equals(uid, comment.getAuthorId())) {
+            throw new BizException(ErrorCode.INVALID_REQUEST.getCode(),
+                    "comment authors cannot mark their own comment helpful");
+        }
         try {
             CommentHelpfulPO existing = commentHelpfulMapper.selectByUidAndComment(uid, commentId);
             if (existing != null) {
@@ -536,6 +612,16 @@ public class InteractionFacadeImpl implements InteractionFacade {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
         updateCommentHelpfulCount(commentId, 1);
+        CommentPO updated = commentMapper.selectById(commentId);
+        if (updated != null && Objects.equals(updated.getHelpfulCount(), COMMENT_HELPFUL_REWARD_THRESHOLD)) {
+            events.publish(CommentHelpfulThresholdReachedEvent.builder()
+                    .commentId(updated.getId())
+                    .commentAuthorId(updated.getAuthorId())
+                    .postId(updated.getPostId())
+                    .helpfulCount(updated.getHelpfulCount())
+                    .timestamp(Instant.now().toEpochMilli())
+                    .build());
+        }
     }
 
     @Override
@@ -596,7 +682,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     @Override
     @Transactional
     public void foldComment(Long operatorUid, Long commentId, String reason) {
-        CommentPO comment = requireNormalComment(commentId);
+        CommentPO comment = requireNormalCommentForUpdate(commentId);
         requirePostVisible(comment.getPostId(), operatorUid);
         requireModerator(operatorUid);
         String foldReason = normalizeReason(reason);
@@ -606,7 +692,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     @Override
     @Transactional
     public void unfoldComment(Long operatorUid, Long commentId) {
-        CommentPO comment = requireNormalComment(commentId);
+        CommentPO comment = requireNormalCommentForUpdate(commentId);
         requirePostVisible(comment.getPostId(), operatorUid);
         requireModerator(operatorUid);
         setQualitySignal(comment, operatorUid, SIGNAL_LOW_QUALITY_FOLDED, false, null, OPERATOR_ROLE_ADMIN, SOURCE_MODERATION);
@@ -663,6 +749,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
     @Override
     @Transactional
     public FavoriteFolderDTO createFavoriteFolder(Long uid, FavoriteFolderCreateCmd cmd) {
+        ensureDefaultFolder(uid);
+        if (favoriteFolderMapper.lockDefaultByUserId(uid) == null) {
+            throw new BizException(ErrorCode.DATABASE_ERROR);
+        }
+        if (favoriteFolderMapper.countActiveByUserId(uid) >= MAX_ACTIVE_FAVORITE_FOLDERS) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "A user can keep at most " + MAX_ACTIVE_FAVORITE_FOLDERS + " active favorite folders");
+        }
         String name = normalizeFolderName(cmd.getName());
         requireUniqueFavoriteFolderName(uid, name, null);
         FavoriteFolderPO po = new FavoriteFolderPO();
@@ -1080,6 +1174,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
     private CommentPO requireNormalComment(Long commentId) {
         CommentPO comment = commentMapper.selectById(commentId);
+        if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != COMMENT_STATUS_NORMAL) {
+            throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
+        }
+        return comment;
+    }
+
+    private CommentPO requireNormalCommentForUpdate(Long commentId) {
+        CommentPO comment = commentMapper.selectByIdForUpdate(commentId);
         if (comment == null || comment.getCommentStatus() == null || comment.getCommentStatus() != COMMENT_STATUS_NORMAL) {
             throw new BizException(ErrorCode.COMMENT_NOT_FOUND);
         }

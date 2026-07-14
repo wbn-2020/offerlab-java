@@ -1,11 +1,15 @@
 package com.offerlab.community.notification.application;
 
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.interaction.api.DiscussionFollowFacade;
+import com.offerlab.community.interaction.api.event.AnswerAcceptedEvent;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
 import com.offerlab.community.interaction.api.event.CommentLikedEvent;
 import com.offerlab.community.interaction.api.event.CommentReportReviewedEvent;
 import com.offerlab.community.interaction.api.event.CommentQualitySignalChangedEvent;
+import com.offerlab.community.interaction.api.event.ContentSuggestionDecidedEvent;
+import com.offerlab.community.interaction.api.event.ContentSuggestionSubmittedEvent;
 import com.offerlab.community.interaction.api.event.ContactRequestCreatedEvent;
 import com.offerlab.community.interaction.api.event.ContactRequestHandledEvent;
 import com.offerlab.community.interaction.api.event.ContactRequestReportReviewedEvent;
@@ -54,6 +58,9 @@ public class NotificationEventListener {
     private static final String ACTION_DISCUSSION_FOLLOW_FEATURED_REPLY = "discussion_follow_featured_reply";
     private static final String ACTION_DISCUSSION_FOLLOW_AUTHOR_PINNED = "discussion_follow_author_pinned";
     private static final String ACTION_DISCUSSION_FOLLOW_AUTHOR_REPLY = "discussion_follow_author_reply";
+    private static final String ACTION_ANSWER_ACCEPTED = "answerAccepted";
+    private static final String ACTION_CONTENT_SUGGESTION_SUBMITTED = "contentSuggestionSubmitted";
+    private static final String ACTION_CONTENT_SUGGESTION_DECIDED = "contentSuggestionDecided";
     private static final String ACTION_REPORT_RECEIPT = "report_receipt";
     private static final String ACTION_CONTACT_REQUEST_RECEIVED = "contact_request_received";
     private static final String ACTION_CONTACT_REQUEST_ACCEPTED = "contact_request_accepted";
@@ -147,6 +154,84 @@ public class NotificationEventListener {
         addExcludedUid(excluded, event.getCommentAuthorUid());
         addExcludedUid(excluded, event.getPostAuthorUid());
         notifyDiscussionFollowers(event, action, excluded);
+    }
+
+    @Async("notificationAsyncExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onAnswerAccepted(AnswerAcceptedEvent event) {
+        if (!isValidAnswerAccepted(event)) {
+            return;
+        }
+        Map<String, Object> content = answerAcceptedContent(event);
+        runQuietly(() -> handleAnswerAcceptedSynchronously(event, content),
+                "answer accepted", event.getCommentAuthorUid(), event.getPostAuthorUid(),
+                TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
+    }
+
+    public void handleAnswerAcceptedSynchronously(AnswerAcceptedEvent event) {
+        if (!isValidAnswerAccepted(event)) {
+            return;
+        }
+        handleAnswerAcceptedSynchronously(event, answerAcceptedContent(event));
+    }
+
+    private void handleAnswerAcceptedSynchronously(
+            AnswerAcceptedEvent event, Map<String, Object> content) {
+        notificationFacade.notifyAnswerAccepted(
+                event.getCommentAuthorUid(), event.getPostAuthorUid(),
+                event.getPostId(), event.getCommentId(), content);
+    }
+
+    @Async("notificationAsyncExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onContentSuggestionSubmitted(ContentSuggestionSubmittedEvent event) {
+        if (!isValidContentSuggestionSubmitted(event)) {
+            return;
+        }
+        Map<String, Object> content = contentSuggestionSubmittedContent(event);
+        runQuietly(() -> handleContentSuggestionSubmittedSynchronously(event, content),
+                "content suggestion submitted", event.getPostAuthorUid(), 0L,
+                TYPE_SYSTEM, TARGET_POST, event.getPostId(), content);
+    }
+
+    public void handleContentSuggestionSubmittedSynchronously(ContentSuggestionSubmittedEvent event) {
+        if (!isValidContentSuggestionSubmitted(event)) {
+            return;
+        }
+        handleContentSuggestionSubmittedSynchronously(
+                event, contentSuggestionSubmittedContent(event));
+    }
+
+    private void handleContentSuggestionSubmittedSynchronously(
+            ContentSuggestionSubmittedEvent event, Map<String, Object> content) {
+        notificationFacade.notifySystem(
+                event.getPostAuthorUid(), (long) TARGET_POST, event.getPostId(), content);
+    }
+
+    @Async("notificationAsyncExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onContentSuggestionDecided(ContentSuggestionDecidedEvent event) {
+        if (!isValidContentSuggestionDecided(event)) {
+            return;
+        }
+        Map<String, Object> content = contentSuggestionDecidedContent(event);
+        runQuietly(() -> handleContentSuggestionDecidedSynchronously(event, content),
+                "content suggestion decided", event.getSubmitterUid(), 0L,
+                TYPE_SYSTEM, TARGET_POST, event.getPostId(), content);
+    }
+
+    public void handleContentSuggestionDecidedSynchronously(ContentSuggestionDecidedEvent event) {
+        if (!isValidContentSuggestionDecided(event)) {
+            return;
+        }
+        handleContentSuggestionDecidedSynchronously(
+                event, contentSuggestionDecidedContent(event));
+    }
+
+    private void handleContentSuggestionDecidedSynchronously(
+            ContentSuggestionDecidedEvent event, Map<String, Object> content) {
+        notificationFacade.notifySystem(
+                event.getSubmitterUid(), (long) TARGET_POST, event.getPostId(), content);
     }
 
     @Async("notificationAsyncExecutor")
@@ -274,10 +359,85 @@ public class NotificationEventListener {
             runnable.run();
             return true;
         } catch (Exception e) {
-            log.warn("create notification failed, scene={}: {}", scene, e.getMessage());
+            String dedupKey = NotificationDedupKey.of(
+                    receiverUid, senderUid, notifType, targetType, targetId, content);
+            log.warn("create notification failed, scene={} dedupKey={}: {}",
+                    scene, LogMask.key(dedupKey), e.getMessage());
             retryService.enqueue(scene, receiverUid, senderUid, notifType, targetType, targetId, content, e);
             return false;
         }
+    }
+
+    private Map<String, Object> answerAcceptedContent(AnswerAcceptedEvent event) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", ACTION_ANSWER_ACCEPTED);
+        content.put("postId", event.getPostId());
+        content.put("commentId", event.getCommentId());
+        content.put("acceptanceId", event.getAcceptanceId());
+        content.put("targetPath", trustedContentTargetPath(
+                event.getPostId(), ACTION_ANSWER_ACCEPTED, "#comment-" + event.getCommentId()));
+        content.put("dedupKey", ACTION_ANSWER_ACCEPTED + ":" + event.getPostId() + ":"
+                + event.getCommentId() + ":" + event.getAcceptanceId());
+        return content;
+    }
+
+    private Map<String, Object> contentSuggestionSubmittedContent(ContentSuggestionSubmittedEvent event) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", ACTION_CONTENT_SUGGESTION_SUBMITTED);
+        content.put("postId", event.getPostId());
+        content.put("suggestionId", event.getSuggestionId());
+        content.put("targetPath", trustedContentTargetPath(
+                event.getPostId(), ACTION_CONTENT_SUGGESTION_SUBMITTED,
+                "#content-suggestion-" + event.getSuggestionId()));
+        content.put("dedupKey", ACTION_CONTENT_SUGGESTION_SUBMITTED + ":" + event.getSuggestionId());
+        return content;
+    }
+
+    private Map<String, Object> contentSuggestionDecidedContent(ContentSuggestionDecidedEvent event) {
+        String decision = String.valueOf(event.getDecision());
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", ACTION_CONTENT_SUGGESTION_DECIDED);
+        content.put("postId", event.getPostId());
+        content.put("suggestionId", event.getSuggestionId());
+        content.put("decision", decision);
+        content.put("targetPath", trustedContentTargetPath(
+                event.getPostId(), ACTION_CONTENT_SUGGESTION_DECIDED,
+                "#content-suggestion-" + event.getSuggestionId()));
+        content.put("dedupKey", ACTION_CONTENT_SUGGESTION_DECIDED + ":" + event.getSuggestionId() + ":" + decision);
+        return content;
+    }
+
+    private String trustedContentTargetPath(Long postId, String action, String fragment) {
+        return "/post/" + postId + "?notification=" + action + fragment;
+    }
+
+    private boolean isPositive(Long value) {
+        return value != null && value > 0;
+    }
+
+    private boolean isValidAnswerAccepted(AnswerAcceptedEvent event) {
+        return event != null
+                && isPositive(event.getPostId())
+                && isPositive(event.getCommentId())
+                && isPositive(event.getPostAuthorUid())
+                && isPositive(event.getCommentAuthorUid())
+                && isPositive(event.getAcceptanceId());
+    }
+
+    private boolean isValidContentSuggestionSubmitted(ContentSuggestionSubmittedEvent event) {
+        return event != null
+                && isPositive(event.getPostId())
+                && isPositive(event.getSuggestionId())
+                && isPositive(event.getPostAuthorUid());
+    }
+
+    private boolean isValidContentSuggestionDecided(ContentSuggestionDecidedEvent event) {
+        return event != null
+                && isPositive(event.getPostId())
+                && isPositive(event.getSuggestionId())
+                && isPositive(event.getSubmitterUid())
+                && event.getDecision() != null
+                && !String.valueOf(event.getDecision()).isBlank();
     }
 
     private Set<Long> notifyMentions(Long senderUid, Long postId, Long commentId, String text, Set<Long> excludedUids) {

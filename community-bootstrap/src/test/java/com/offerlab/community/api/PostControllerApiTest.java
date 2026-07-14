@@ -39,6 +39,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -147,7 +148,7 @@ class PostControllerApiTest {
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data[0].value").value(10))
                 .andExpect(jsonPath("$.data[0].code").value("TECH_ARTICLE"))
-                .andExpect(jsonPath("$.data[0].label").value("技术文章"))
+                .andExpect(jsonPath("$.data[0].label").value("攻略清单"))
                 .andExpect(jsonPath("$.data[0].minContentLength").value(40))
                 .andExpect(jsonPath("$.data[8].value").value(1))
                 .andExpect(jsonPath("$.data[8].legacy").value(true));
@@ -221,6 +222,65 @@ class PostControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"postType\":10,\"domain\":999,\"title\":\"bad domain\",\"content\":\"content\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()))
+                .andExpect(jsonPath("$.data.fieldErrors.domain").value("频道不存在或已下线"));
+
+        verifyNoInteractions(postFacade, postService, draftService);
+    }
+
+    @Test
+    void missingPublishDomainReturnsFieldErrorEvenWhenLegacyExtJsonContainsDomain() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        mvc.perform(post("/api/v1/posts")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "postType": 10,
+                                  "title": "missing explicit domain",
+                                  "content": "content",
+                                  "extJson": "{\\"domain\\":2}"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()))
+                .andExpect(jsonPath("$.message").value("请选择频道"))
+                .andExpect(jsonPath("$.data.fieldErrors.domain").value("请选择频道"));
+
+        verifyNoInteractions(postFacade, postService, draftService);
+    }
+
+    @Test
+    void updateWithoutDomainKeepsDomainOptionalAtApiBoundary() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(contentModerationService.checkContent(
+                7L, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, 81L,
+                "updated title", "updated content"))
+                .thenReturn(new ContentModerationService.ModerationDecision(false, "ALLOW", null, null));
+
+        mvc.perform(put("/api/v1/posts/81")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"updated title\",\"content\":\"updated content\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        ArgumentCaptor<com.offerlab.community.post.api.dto.PostUpdateCmd> captor =
+                ArgumentCaptor.forClass(com.offerlab.community.post.api.dto.PostUpdateCmd.class);
+        verify(postFacade).updatePost(captor.capture());
+        assertEquals(null, captor.getValue().getDomain());
+    }
+
+    @Test
+    void invalidExplicitUpdateDomainReturnsParamErrorBeforePublishing() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+
+        mvc.perform(put("/api/v1/posts/81")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"domain\":999,\"title\":\"updated title\",\"content\":\"updated content\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
 

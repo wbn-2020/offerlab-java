@@ -8,6 +8,7 @@ import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.interaction.api.DiscussionFollowFacade;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
+import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.application.CommentReportService;
 import com.offerlab.community.interaction.controller.InteractionController;
 import com.offerlab.community.post.api.PostFacade;
@@ -64,12 +65,19 @@ class InteractionControllerApiTest {
     @Test
     void commentsArePublicAndUseAnonymousViewerWhenNoToken() throws Exception {
         when(facade.listComments(10L, null, "0", 20, "latest")).thenReturn(PageResult.empty());
+        when(facade.getCommentContext(10L, 99L, null))
+                .thenReturn(CommentDTO.builder().id(99L).postId(10L).build());
 
         mvc.perform(get("/api/v1/posts/10/comments"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
+        mvc.perform(get("/api/v1/posts/10/comments/99/context"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.id").value(99));
 
         verify(facade).listComments(10L, null, "0", 20, "latest");
+        verify(facade).getCommentContext(10L, 99L, null);
     }
 
     @Test

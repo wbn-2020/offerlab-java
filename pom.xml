@@ -10,7 +10,7 @@
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>OfferLab Parent</name>
-    <description>Interview Community Platform - Parent POM</description>
+    <description>Comprehensive Content Community Platform - Parent POM</description>
 
     <modules>
         <module>community-common</module>
@@ -23,6 +23,7 @@
         <module>community-domain-question</module>
         <module>community-domain-notification</module>
         <module>community-domain-analytics</module>
+        <module>community-domain-incentive</module>
         <module>community-archtest</module>
         <module>community-bootstrap</module>
     </modules>
@@ -208,6 +209,11 @@
             <dependency>
                 <groupId>com.offerlab</groupId>
                 <artifactId>community-domain-analytics</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.offerlab</groupId>
+                <artifactId>community-domain-incentive</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

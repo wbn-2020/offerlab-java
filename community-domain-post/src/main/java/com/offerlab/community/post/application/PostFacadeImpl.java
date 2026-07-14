@@ -17,6 +17,7 @@ import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
@@ -109,9 +110,16 @@ public class PostFacadeImpl implements PostFacade {
         if (normalizedIds.isEmpty()) return Map.of();
         Map<Long, Post> posts = postRepo.batchFindByIds(normalizedIds);
         Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.keySet());
+        Map<Long, Boolean> followingByAuthor = viewerUid == null
+                ? Map.of()
+                : userFacade.batchIsFollowing(viewerUid, posts.values().stream()
+                        .map(Post::getAuthorId)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .toList());
         Map<Long, PostBriefDTO> result = new HashMap<>(posts.size());
         for (Post p : posts.values()) {
-            boolean following = viewerUid != null && p.getAuthorId() != null && userFacade.isFollowing(viewerUid, p.getAuthorId());
+            boolean following = Boolean.TRUE.equals(followingByAuthor.get(p.getAuthorId()));
             if (p.isVisibleTo(viewerUid, following)) {
                 result.put(p.getId(), toBrief(p, tags.getOrDefault(p.getId(), List.of())));
             }
@@ -211,6 +219,18 @@ public class PostFacadeImpl implements PostFacade {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         return versionHistoryService.listRecent(postId, limit);
+    }
+
+    @Override
+    public List<PublicPostUpdateDTO> listPublicUpdates(Long postId, int limit) {
+        if (postId == null || postId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        Post post = postRepo.findById(postId).orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        if (!isPubliclyVisible(post)) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        return versionHistoryService.listPublicUpdates(postId, limit);
     }
 
 
@@ -541,6 +561,12 @@ public class PostFacadeImpl implements PostFacade {
         return visibility == Post.VIS_FOLLOWER && userFacade.isFollowing(viewerUid, dto.getAuthorId());
     }
 
+    private boolean isPubliclyVisible(Post post) {
+        return post != null
+                && Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
+                && (post.getVisibility() == null || Objects.equals(post.getVisibility(), Post.VIS_PUBLIC));
+    }
+
     private void evictPostDetail(Long postId) {
         multiLevelCache.evict(CacheKeyBuilder.postDetail(postId));
         multiLevelCache.evict(CacheKeyBuilder.postDetailRaw(postId));
@@ -595,7 +621,7 @@ public class PostFacadeImpl implements PostFacade {
                     : null;
             return effectiveDomain(domain);
         } catch (Exception ignored) {
-            return Post.DOMAIN_TECH;
+            return null;
         }
     }
 
@@ -610,7 +636,7 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     private Integer effectiveDomain(Integer domain) {
-        return PostDomain.fromCode(domain).getCode();
+        return PostDomain.isValid(domain) ? domain : null;
     }
 
     private boolean canViewRealAuthor(Long viewerUid, Long authorId) {

@@ -16,7 +16,7 @@ spring:
   flyway:
     enabled: ${OFFERLAB_FLYWAY_ENABLED:true}
     locations: ${OFFERLAB_FLYWAY_LOCATIONS:classpath:db/flyway/core}
-    table: flyway_schema_history
+    table: ${OFFERLAB_FLYWAY_TABLE:flyway_schema_history}
     baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}
     baseline-version: "0"
     baseline-description: legacy schema baseline
@@ -82,6 +82,10 @@ springdoc:
     enabled: false
 
 offerlab:
+  id:
+    snowflake:
+      worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID:1}
+      datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID:1}
   redis:
     pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}
   jwt:

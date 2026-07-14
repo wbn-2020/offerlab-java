@@ -60,6 +60,90 @@ public class EventTopicResolver {
             return new TopicMapping("interaction.comment.like", readLong(event, "getCommentId"), "COMMENT_LIKED");
         }
 
+        if ("CommentHelpfulThresholdReachedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.comment.helpful-threshold",
+                    readLong(event, "getCommentId"),
+                    "COMMENT_HELPFUL_THRESHOLD_REACHED");
+        }
+
+        if ("CommentUnavailableEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.comment.unavailable",
+                    readLong(event, "getCommentId"),
+                    "COMMENT_UNAVAILABLE");
+        }
+
+        if ("PostUsefulFeedbackChangedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.post.useful-feedback",
+                    readLong(event, "getPostId"),
+                    "POST_USEFUL_FEEDBACK_CHANGED");
+        }
+
+        if ("ContentSuggestionSubmittedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.content-suggestion.submitted",
+                    readLong(event, "getPostId"),
+                    "CONTENT_SUGGESTION_SUBMITTED");
+        }
+
+        if ("ContentSuggestionDecidedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.content-suggestion.decided",
+                    readLong(event, "getPostId"),
+                    "CONTENT_SUGGESTION_DECIDED");
+        }
+
+        if ("QuestionStateChangedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.question.state-changed",
+                    readLong(event, "getPostId"),
+                    "QUESTION_STATE_CHANGED");
+        }
+
+        if ("PostFreshnessChangedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.post.freshness-changed",
+                    readLong(event, "getPostId"),
+                    "POST_FRESHNESS_CHANGED");
+        }
+
+        if ("AnswerAcceptedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.answer.accepted",
+                    readLong(event, "getPostId"),
+                    "ANSWER_ACCEPTED");
+        }
+
+        if ("AnswerAcceptanceInvalidatedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.answer.acceptance-invalidated",
+                    readLong(event, "getPostId"),
+                    "ANSWER_ACCEPTANCE_INVALIDATED");
+        }
+
+        if ("PostReportReviewedEvent".equals(className)) {
+            return new TopicMapping(
+                    "post.report.reviewed",
+                    readLong(event, "getPostId"),
+                    "POST_REPORT_REVIEWED");
+        }
+
+        if ("CommentReportReviewedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.comment.report.reviewed",
+                    readLong(event, "getCommentId"),
+                    "COMMENT_REPORT_REVIEWED");
+        }
+
+        if ("CollaborationContributionAcceptedEvent".equals(className)) {
+            return new TopicMapping(
+                    "collaboration.contribution.accepted",
+                    readLong(event, "getSourceId"),
+                    "COLLABORATION_CONTRIBUTION_ACCEPTED");
+        }
+
         if ("UserFollowedEvent".equals(className)) {
             return new TopicMapping("user.followed", readLong(event, "getFollowerId"), "USER_FOLLOWED");
         }

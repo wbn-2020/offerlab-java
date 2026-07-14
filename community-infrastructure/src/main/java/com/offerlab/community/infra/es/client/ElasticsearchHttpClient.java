@@ -178,6 +178,26 @@ public class ElasticsearchHttpClient {
         return new EsResponse(response.statusCode(), readBounded(response));
     }
 
+    public boolean deleteIndex(String index) {
+        try {
+            EsResponse response = send("DELETE", "/" + index, null);
+            return response.success() || response.statusCode() == 404;
+        } catch (Exception e) {
+            log.warn("elasticsearch delete index failed: index={} error={}", index, e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean refreshIndex(String index) {
+        try {
+            EsResponse response = send("POST", "/" + index + "/_refresh", null);
+            return response.success();
+        } catch (Exception e) {
+            log.warn("elasticsearch refresh index failed: index={} error={}", index, e.getMessage());
+            return false;
+        }
+    }
+
     private String readBounded(HttpResponse<InputStream> response) throws IOException {
         int maxResponseBytes = Math.max(MIN_RESPONSE_BYTES,
                 Math.min(properties.getMaxResponseBytes(), MAX_RESPONSE_BYTES));

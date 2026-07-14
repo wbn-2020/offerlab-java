@@ -7,6 +7,7 @@ import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 
 import java.util.Collection;
@@ -51,6 +52,11 @@ public interface PostFacade {
 
 
     List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit);
+
+    default List<PublicPostUpdateDTO> listPublicUpdates(Long postId, int limit) {
+        return List.of();
+    }
+
     PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size);
 
     PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,

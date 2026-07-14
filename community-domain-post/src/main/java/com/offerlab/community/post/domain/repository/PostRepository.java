@@ -13,6 +13,10 @@ public interface PostRepository {
 
     Optional<Post> findById(Long id);
 
+    default Optional<Post> findByIdForUpdate(Long id) {
+        return findById(id);
+    }
+
     Map<Long, Post> batchFindByIds(Collection<Long> ids);
 
     boolean update(Post post);

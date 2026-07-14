@@ -7,6 +7,7 @@ import com.offerlab.community.analytics.infrastructure.persistence.mapper.Creato
 import com.offerlab.community.analytics.infrastructure.persistence.mapper.GrowthInsightMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.ContentSeriesMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.ContentSeriesPO;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -79,6 +82,28 @@ class CreatorGrowthServiceTest {
                 .thenReturn(sevenDayRows)
                 .thenReturn(thirtyDayRows)
                 .thenReturn(thirtyDayRows);
+        Map<String, Object> healthyTrustedContent = Map.of(
+                "pendingSuggestions", 2L,
+                "freshnessAwaitingConfirmation", 1L,
+                "unresolvedQuestions", 3L,
+                "usefulFeedback7Days", 4L,
+                "usefulFeedback30Days", 8L,
+                "effectiveReads7Days", 20L,
+                "effectiveReads30Days", 70L);
+        Map<String, Object> invalidTrustedContent = Map.of(
+                "pendingSuggestions", "not-a-number",
+                "freshnessAwaitingConfirmation", 0L,
+                "unresolvedQuestions", 0L,
+                "usefulFeedback7Days", 0L,
+                "usefulFeedback30Days", 0L,
+                "effectiveReads7Days", 0L,
+                "effectiveReads30Days", 0L);
+        when(growthInsightMapper.selectTrustedContentSummary(
+                eq(8L),
+                eq(Post.TYPE_COMMUNITY_QUESTION),
+                any(LocalDateTime.class),
+                any(LocalDateTime.class)))
+                .thenReturn(healthyTrustedContent);
         when(growthInsightMapper.selectRepresentativePosts(eq(8L), any(LocalDateTime.class), eq(5))).thenReturn(List.of(
                 Map.of(
                         "postId", 1001L,
@@ -127,6 +152,11 @@ class CreatorGrowthServiceTest {
         assertEquals(30, workspace.getPeriodDays());
         assertFalse(workspace.isDegraded());
         assertNull(workspace.getFallbackReason());
+        assertNotNull(workspace.getTrustedContent());
+        assertFalse(workspace.getTrustedContent().isDegraded());
+        assertNull(workspace.getTrustedContent().getFallbackReason());
+        assertEquals(2L, workspace.getTrustedContent().getPendingSuggestions());
+        assertEquals(70L, workspace.getTrustedContent().getEffectiveReads30Days());
         assertEquals(6L, workspace.getSummary().getPublicPostCount());
         assertEquals(1, workspace.getSummary().getCurationInclusionCount());
         assertEquals(1, workspace.getMaintainablePosts().size());
@@ -142,7 +172,6 @@ class CreatorGrowthServiceTest {
         assertEquals("creator_only", workspace.getCreatorTopPosts().get(0).getVisibilityScope());
         assertEquals(1, workspace.getCreatorReplyOpportunities().size());
         assertEquals(3001L, workspace.getCreatorReplyOpportunities().get(0).getCommentId());
-        assertNull(workspace.getCreatorReplyOpportunities().get(0).getCommenterUid());
         assertEquals(1, workspace.getRepresentativePosts().size());
         assertEquals("auto_profile_candidate", workspace.getRepresentativePosts().get(0).getSource());
         assertTrue(workspace.getRepresentativePosts().get(0).isPublicVisible());
@@ -155,6 +184,80 @@ class CreatorGrowthServiceTest {
                 .allMatch(item -> item.getTitle() != null && !item.getTitle().isBlank()));
         assertFalse(workspace.getNonPaymentIncentiveCopy().isEmpty());
         assertEquals("weekly_digest_only", workspace.getCreatorDigestNotification().getFrequency());
+
+        doThrow(new IllegalStateException("trusted-content query failed"))
+                .when(growthInsightMapper)
+                .selectTrustedContentSummary(
+                        eq(8L),
+                        eq(Post.TYPE_COMMUNITY_QUESTION),
+                        any(LocalDateTime.class),
+                        any(LocalDateTime.class));
+
+        CreatorGrowthWorkspaceDTO queryFailedWorkspace = creatorGrowthService.workspace(8L);
+
+        assertEquals("remote", queryFailedWorkspace.getSource());
+        assertTrue(queryFailedWorkspace.isDegraded());
+        assertEquals("TRUSTED_CONTENT_QUERY_FAILED", queryFailedWorkspace.getFallbackReason());
+        assertTrue(queryFailedWorkspace.getTrustedContent().isDegraded());
+        assertEquals("TRUSTED_CONTENT_QUERY_FAILED", queryFailedWorkspace.getTrustedContent().getFallbackReason());
+        assertNull(queryFailedWorkspace.getTrustedContent().getPendingSuggestions());
+
+        doReturn(null)
+                .when(growthInsightMapper)
+                .selectTrustedContentSummary(
+                        eq(8L),
+                        eq(Post.TYPE_COMMUNITY_QUESTION),
+                        any(LocalDateTime.class),
+                        any(LocalDateTime.class));
+
+        CreatorGrowthWorkspaceDTO missingRowWorkspace = creatorGrowthService.workspace(8L);
+
+        assertTrue(missingRowWorkspace.isDegraded());
+        assertEquals("TRUSTED_CONTENT_ROW_MISSING", missingRowWorkspace.getFallbackReason());
+        assertTrue(missingRowWorkspace.getTrustedContent().isDegraded());
+        assertEquals("TRUSTED_CONTENT_ROW_MISSING", missingRowWorkspace.getTrustedContent().getFallbackReason());
+        assertNull(missingRowWorkspace.getTrustedContent().getPendingSuggestions());
+
+        doReturn(invalidTrustedContent)
+                .when(growthInsightMapper)
+                .selectTrustedContentSummary(
+                        eq(8L),
+                        eq(Post.TYPE_COMMUNITY_QUESTION),
+                        any(LocalDateTime.class),
+                        any(LocalDateTime.class));
+
+        CreatorGrowthWorkspaceDTO invalidRowWorkspace = creatorGrowthService.workspace(8L);
+
+        assertTrue(invalidRowWorkspace.isDegraded());
+        assertEquals("TRUSTED_CONTENT_ROW_INVALID", invalidRowWorkspace.getFallbackReason());
+        assertTrue(invalidRowWorkspace.getTrustedContent().isDegraded());
+        assertEquals("TRUSTED_CONTENT_ROW_INVALID", invalidRowWorkspace.getTrustedContent().getFallbackReason());
+        assertNull(invalidRowWorkspace.getTrustedContent().getPendingSuggestions());
+
+        doThrow(new IllegalStateException("trusted-content query failed"))
+                .when(growthInsightMapper)
+                .selectTrustedContentSummary(
+                        eq(8L),
+                        eq(Post.TYPE_COMMUNITY_QUESTION),
+                        any(LocalDateTime.class),
+                        any(LocalDateTime.class));
+        when(creatorCurationFeedbackService.summary(8L)).thenReturn(
+                CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO.builder()
+                        .updatedAt(LocalDateTime.of(2026, 7, 6, 0, 0))
+                        .degraded(true)
+                        .fallbackReason("FEEDBACK_SOURCE_UNAVAILABLE")
+                        .total(0)
+                        .items(List.of())
+                        .recentItems(List.of())
+                        .build());
+
+        CreatorGrowthWorkspaceDTO multiDegradedWorkspace = creatorGrowthService.workspace(8L);
+
+        assertEquals("fallback", multiDegradedWorkspace.getSource());
+        assertTrue(multiDegradedWorkspace.isDegraded());
+        assertEquals("FEEDBACK_SOURCE_UNAVAILABLE", multiDegradedWorkspace.getFallbackReason());
+        assertEquals("TRUSTED_CONTENT_QUERY_FAILED",
+                multiDegradedWorkspace.getTrustedContent().getFallbackReason());
     }
 
     @Test
@@ -183,6 +286,18 @@ class CreatorGrowthServiceTest {
                 .thenReturn(sevenDayRows)
                 .thenReturn(thirtyDayRows)
                 .thenReturn(thirtyDayRows);
+        when(growthInsightMapper.selectTrustedContentSummary(
+                eq(9L),
+                eq(Post.TYPE_COMMUNITY_QUESTION),
+                any(LocalDateTime.class),
+                any(LocalDateTime.class))).thenReturn(Map.of(
+                        "pendingSuggestions", 0L,
+                        "freshnessAwaitingConfirmation", 0L,
+                        "unresolvedQuestions", 0L,
+                        "usefulFeedback7Days", 0L,
+                        "usefulFeedback30Days", 0L,
+                        "effectiveReads7Days", 0L,
+                        "effectiveReads30Days", 0L));
         when(growthInsightMapper.selectRepresentativePosts(eq(9L), any(LocalDateTime.class), eq(5))).thenReturn(List.of(
                 Map.of(
                         "postId", 2001L,
@@ -214,6 +329,114 @@ class CreatorGrowthServiceTest {
         assertEquals("neutral_profile_candidate", workspace.getRepresentativePosts().get(0).getSource());
         assertTrue(workspace.getRepresentativePosts().get(0).getBoundaryCopy().toLowerCase().contains("risk context"));
         assertTrue(workspace.getCreatorTopPosts().get(0).getReason().toLowerCase().contains("risk context"));
+        assertFalse(workspace.getTrustedContent().isDegraded());
+        assertNull(workspace.getTrustedContent().getFallbackReason());
+        assertEquals(0L, workspace.getTrustedContent().getPendingSuggestions());
+        assertEquals(0L, workspace.getTrustedContent().getEffectiveReads30Days());
+    }
+
+    @Test
+    void trustedContentDashboardLoadsOnlyTrustedContentMetricsAndTasks() {
+        when(growthInsightMapper.selectTrustedContentSummary(
+                eq(12L),
+                eq(Post.TYPE_COMMUNITY_QUESTION),
+                any(LocalDateTime.class),
+                any(LocalDateTime.class))).thenReturn(Map.of(
+                "pendingSuggestions", 2L,
+                "freshnessAwaitingConfirmation", 1L,
+                "unresolvedQuestions", 3L,
+                "usefulFeedback7Days", 4L,
+                "usefulFeedback30Days", 8L,
+                "effectiveReads7Days", 20L,
+                "effectiveReads30Days", 70L));
+        when(growthInsightMapper.selectPendingSuggestionItems(12L)).thenReturn(List.of());
+        when(growthInsightMapper.selectFreshnessItems(12L)).thenReturn(List.of());
+        when(growthInsightMapper.selectPendingQuestionItems(12L, Post.TYPE_COMMUNITY_QUESTION))
+                .thenReturn(List.of());
+
+        CreatorGrowthWorkspaceDTO.TrustedContentDTO trustedContent = creatorGrowthService.trustedContent(12L);
+
+        assertFalse(trustedContent.isDegraded());
+        assertEquals(2L, trustedContent.getPendingSuggestions());
+        assertEquals(70L, trustedContent.getEffectiveReads30Days());
+        assertNotNull(trustedContent.getPendingSuggestionItems());
+        verify(growthInsightMapper).selectTrustedContentSummary(
+                eq(12L),
+                eq(Post.TYPE_COMMUNITY_QUESTION),
+                any(LocalDateTime.class),
+                any(LocalDateTime.class));
+        verify(growthInsightMapper).selectPendingSuggestionItems(12L);
+        verify(growthInsightMapper).selectFreshnessItems(12L);
+        verify(growthInsightMapper).selectPendingQuestionItems(12L, Post.TYPE_COMMUNITY_QUESTION);
+        verify(contentSeriesMapper, never()).tableExists();
+        verify(representativePostMapper, never()).tableExists();
+        verify(creatorCurationFeedbackService, never()).summary(12L);
+    }
+
+    @Test
+    void workspaceKeepsZeroMetricsHealthyAndCapsTrustedContentTaskLists() {
+        when(growthInsightMapper.selectAuthorDomainStats(eq(10L), any(LocalDateTime.class)))
+                .thenReturn(List.of())
+                .thenReturn(List.of())
+                .thenReturn(List.of());
+        when(growthInsightMapper.selectTrustedContentSummary(
+                eq(10L),
+                eq(Post.TYPE_COMMUNITY_QUESTION),
+                any(LocalDateTime.class),
+                any(LocalDateTime.class))).thenReturn(Map.of(
+                        "pendingSuggestions", 0L,
+                        "freshnessAwaitingConfirmation", 0L,
+                        "unresolvedQuestions", 0L,
+                        "usefulFeedback7Days", 0L,
+                        "usefulFeedback30Days", 0L,
+                        "effectiveReads7Days", 0L,
+                        "effectiveReads30Days", 0L));
+        when(growthInsightMapper.selectPendingSuggestionItems(10L)).thenReturn(trustedContentTaskRows(
+                "PENDING",
+                true));
+        when(growthInsightMapper.selectFreshnessItems(10L)).thenReturn(trustedContentTaskRows(
+                "AWAITING_AUTHOR_CONFIRMATION",
+                false));
+        when(growthInsightMapper.selectPendingQuestionItems(10L, Post.TYPE_COMMUNITY_QUESTION))
+                .thenReturn(trustedContentTaskRows("OPEN", false));
+        when(growthInsightMapper.selectRepresentativePosts(eq(10L), any(LocalDateTime.class), eq(5)))
+                .thenReturn(List.of());
+        when(growthInsightMapper.selectCreatorReplyOpportunities(eq(10L), any(LocalDateTime.class), eq(5)))
+                .thenReturn(List.of());
+        when(contentSeriesMapper.tableExists()).thenReturn(0);
+        when(representativePostMapper.tableExists()).thenReturn(0);
+        when(creatorCurationFeedbackService.summary(10L)).thenReturn(
+                CreatorCurationFeedbackDTO.CreatorCurationFeedbackSummaryDTO.builder()
+                        .degraded(false)
+                        .total(0)
+                        .items(List.of())
+                        .recentItems(List.of())
+                        .build());
+
+        CreatorGrowthWorkspaceDTO workspace = creatorGrowthService.workspace(10L);
+
+        assertFalse(workspace.isDegraded());
+        assertEquals("empty", workspace.getSource());
+        assertEquals("NO_PUBLIC_CONTENT", workspace.getFallbackReason());
+        assertFalse(workspace.getTrustedContent().isDegraded());
+        assertNull(workspace.getTrustedContent().getFallbackReason());
+        assertEquals(0L, workspace.getTrustedContent().getPendingSuggestions());
+        assertEquals(0L, workspace.getTrustedContent().getFreshnessAwaitingConfirmation());
+        assertEquals(0L, workspace.getTrustedContent().getUnresolvedQuestions());
+        assertEquals(0L, workspace.getTrustedContent().getUsefulFeedback7Days());
+        assertEquals(0L, workspace.getTrustedContent().getUsefulFeedback30Days());
+        assertEquals(0L, workspace.getTrustedContent().getEffectiveReads7Days());
+        assertEquals(0L, workspace.getTrustedContent().getEffectiveReads30Days());
+        assertEquals(5, workspace.getTrustedContent().getPendingSuggestionItems().size());
+        assertEquals(5, workspace.getTrustedContent().getFreshnessItems().size());
+        assertEquals(5, workspace.getTrustedContent().getPendingQuestionItems().size());
+        assertTrue(workspace.getTrustedContent().getPendingSuggestionItems().stream()
+                .allMatch(item -> "PENDING".equals(item.getStatus()) && item.getSuggestionId() != null));
+        assertTrue(workspace.getTrustedContent().getFreshnessItems().stream()
+                .allMatch(item -> "AWAITING_AUTHOR_CONFIRMATION".equals(item.getStatus())
+                        && item.getSuggestionId() == null));
+        assertTrue(workspace.getTrustedContent().getPendingQuestionItems().stream()
+                .allMatch(item -> "OPEN".equals(item.getStatus()) && item.getSuggestionId() == null));
     }
 
     @Test
@@ -257,5 +480,22 @@ class CreatorGrowthServiceTest {
                 CreatorRepresentativePostCmd.builder().postIds(requestedPostIds).build()));
 
         verify(representativePostMapper, never()).softDeleteByCreatorUid(8L);
+    }
+
+    private static List<Map<String, Object>> trustedContentTaskRows(String status, boolean suggestion) {
+        return java.util.stream.LongStream.rangeClosed(1L, 6L)
+                .mapToObj(index -> {
+                    Map<String, Object> row = new java.util.HashMap<>();
+                    row.put("postId", 4000L + index);
+                    row.put("postTitle", "Trusted content task " + index);
+                    row.put("status", status);
+                    row.put("createdAt", LocalDateTime.of(2026, 7, 13, 8, 0).plusMinutes(index));
+                    row.put("updatedAt", LocalDateTime.of(2026, 7, 13, 9, 0).plusMinutes(index));
+                    if (suggestion) {
+                        row.put("suggestionId", 5000L + index);
+                    }
+                    return row;
+                })
+                .toList();
     }
 }

@@ -22,6 +22,7 @@ public class CreatorGrowthWorkspaceDTO {
     private boolean degraded;
     private String fallbackReason;
     private CreatorWorkspaceSummaryDTO summary;
+    private TrustedContentDTO trustedContent;
     private List<MaintainablePostDTO> maintainablePosts;
     private List<CreatorCurationFeedbackDTO> curationFeedback;
     private List<WorkspaceActionDTO> actions;
@@ -48,6 +49,41 @@ public class CreatorGrowthWorkspaceDTO {
         private Integer representativePostCount;
         private Integer replyOpportunityCount;
         private LocalDateTime updatedAt;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class TrustedContentDTO {
+        private boolean degraded;
+        private String fallbackReason;
+        private Long pendingSuggestions;
+        private Long freshnessAwaitingConfirmation;
+        private Long unresolvedQuestions;
+        private Long usefulFeedback7Days;
+        private Long usefulFeedback30Days;
+        private Long effectiveReads7Days;
+        private Long effectiveReads30Days;
+        private List<TrustedContentTaskItemDTO> pendingSuggestionItems;
+        private List<TrustedContentTaskItemDTO> freshnessItems;
+        private List<TrustedContentTaskItemDTO> pendingQuestionItems;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class TrustedContentTaskItemDTO {
+        private Long postId;
+        private Long suggestionId;
+        private String postTitle;
+        private String status;
+        private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
+        private String href;
     }
 
     @Data
@@ -140,7 +176,6 @@ public class CreatorGrowthWorkspaceDTO {
         private String commentExcerpt;
         private Long likeCount;
         private String reason;
-        private Long commenterUid;
     }
 
     @Data

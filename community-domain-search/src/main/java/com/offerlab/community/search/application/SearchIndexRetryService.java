@@ -53,8 +53,8 @@ public class SearchIndexRetryService {
             return PageResult.empty();
         }
         int safePageSize = clampLimit(pageSize);
-        int safePage = Math.max(1, page);
-        int offset = (safePage - 1) * safePageSize;
+        int safePage = Math.min(Math.max(1, page), 1000);
+        int offset = Math.multiplyExact(safePage - 1, safePageSize);
         long total = taskMapper.countPage(status);
         List<SearchIndexRetryTaskPO> items = total <= offset
                 ? List.of()

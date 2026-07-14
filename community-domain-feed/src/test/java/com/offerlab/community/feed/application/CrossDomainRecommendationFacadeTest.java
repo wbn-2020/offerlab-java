@@ -107,7 +107,7 @@ class CrossDomainRecommendationFacadeTest {
                         PageResult.of(List.of(hotPost), null, false),
                         Map.of()),
                 new FakeUserFacade(
-                        UserIntentDTO.builder().techStack(List.of("Java")).build(),
+                        null,
                         Map.of(91L, UserBriefDTO.builder().uid(91L).nickname("hot-author").build())),
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
@@ -120,6 +120,7 @@ class CrossDomainRecommendationFacadeTest {
         assertEquals(1, page.getItems().size());
         assertTrue(page.getItems().get(0).getDegraded());
         assertEquals("跨领域候选不足，已回退到热门内容", page.getItems().get(0).getRecommendationReason());
+        assertEquals(null, page.getItems().get(0).getSourceDomain());
         assertEquals(Post.DOMAIN_TECH, page.getItems().get(0).getTargetDomain());
     }
 
@@ -300,6 +301,7 @@ class CrossDomainRecommendationFacadeTest {
         @Override public Long addComment(CommentCreateCmd cmd) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, String cursor, int size, String sort) { throw unsupported(); }
+        @Override public CommentDTO getCommentContext(Long postId, Long commentId, Long viewerUid) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size) { throw unsupported(); }
         @Override public void deleteComment(Long commentId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) { throw unsupported(); }

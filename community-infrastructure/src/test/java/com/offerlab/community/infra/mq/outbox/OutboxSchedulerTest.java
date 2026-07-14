@@ -59,6 +59,17 @@ class OutboxSchedulerTest {
         ), operations);
     }
 
+    @Test
+    void cleansTerminalRowsInBoundedRetentionBatches() throws Exception {
+        List<String> operations = new ArrayList<>();
+        RecordingMapper mapper = new RecordingMapper(List.of(), null, operations);
+        OutboxScheduler scheduler = new OutboxScheduler(mapper.proxy(), new RecordingKafkaTemplate(operations), objectMapper);
+
+        OutboxScheduler.class.getMethod("cleanupTerminalMessages").invoke(scheduler);
+
+        assertEquals(List.of("cleanup:1:1000", "cleanup:2:1000"), operations);
+    }
+
     private OutboxMessage message(Long id) throws Exception {
         EventEnvelope<Long> envelope = EventEnvelope.<Long>builder()
                 .messageId(String.valueOf(id))
@@ -115,6 +126,10 @@ class OutboxSchedulerTest {
                 case "markSent" -> {
                     operations.add("sent:" + args[0]);
                     yield 1;
+                }
+                case "deleteTerminalBefore" -> {
+                    operations.add("cleanup:" + args[0] + ":" + args[2]);
+                    yield 0;
                 }
                 default -> defaultValue(method.getReturnType());
             };

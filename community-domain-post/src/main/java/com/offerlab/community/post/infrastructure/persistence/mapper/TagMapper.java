@@ -23,6 +23,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
             WHERE is_deleted = 0
               AND tag_status = 1
             ORDER BY is_official DESC, use_count DESC, id ASC
+            LIMIT 500
             </script>
             """)
     List<TagPO> selectActiveTags();
@@ -33,9 +34,29 @@ public interface TagMapper extends BaseMapper<TagPO> {
             FROM t_tag
             WHERE is_deleted = 0
             ORDER BY is_official DESC, use_count DESC, id ASC
+            LIMIT 500
             </script>
             """)
     List<TagPO> selectActiveTagsCompat();
+
+    @Select("""
+            SELECT id, tag_name, tag_type, use_count, is_official, tag_status, recommended, synonyms, merge_target_id, create_time, update_time, is_deleted
+            FROM t_tag
+            WHERE is_deleted = 0
+              AND tag_status = 1
+            ORDER BY use_count DESC, is_official DESC, id ASC
+            LIMIT #{limit}
+            """)
+    List<TagPO> selectHotTags(@Param("limit") int limit);
+
+    @Select("""
+            SELECT id, tag_name, tag_type, use_count, is_official, create_time, update_time, is_deleted
+            FROM t_tag
+            WHERE is_deleted = 0
+            ORDER BY use_count DESC, is_official DESC, id ASC
+            LIMIT #{limit}
+            """)
+    List<TagPO> selectHotTagsCompat(@Param("limit") int limit);
 
     @Select("""
             <script>
@@ -269,7 +290,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
               AND p.visibility = 1
               AND p.create_time >= #{since}
               <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
               </if>
             GROUP BY t.id, t.tag_name
             ORDER BY COUNT(*) DESC, t.use_count DESC, t.id ASC
@@ -286,7 +307,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
               SELECT grouped.*,
                      ROW_NUMBER() OVER (PARTITION BY grouped.domain ORDER BY grouped.count DESC, grouped.useCount DESC, grouped.tagId ASC) AS rn
               FROM (
-                SELECT COALESCE(e.domain, 1) AS domain,
+                SELECT e.domain AS domain,
                        t.id AS tagId,
                        t.tag_name AS name,
                        t.use_count AS useCount,
@@ -299,7 +320,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
                   AND p.post_status = 1
                   AND p.visibility = 1
                   AND p.create_time >= #{since}
-                GROUP BY COALESCE(e.domain, 1), t.id, t.tag_name, t.use_count
+                GROUP BY e.domain, t.id, t.tag_name, t.use_count
               ) grouped
             ) ranked
             WHERE ranked.rn <= #{limitPerDomain}

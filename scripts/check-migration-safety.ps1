@@ -10,8 +10,8 @@ if (-not (Test-Path $migrationDir)) {
 $files = Get-ChildItem -Path $migrationDir -Filter "*.sql" -File
 $violations = New-Object System.Collections.Generic.List[string]
 
-if ($files.Count -ne 53) {
-  $violations.Add("expected 53 canonical migration files, found $($files.Count)")
+if ($files.Count -ne 56) {
+  $violations.Add("expected 56 canonical migration files, found $($files.Count)")
 }
 
 function Remove-SqlComments {

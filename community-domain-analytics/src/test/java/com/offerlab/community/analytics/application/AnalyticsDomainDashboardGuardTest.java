@@ -41,6 +41,7 @@ public class AnalyticsDomainDashboardGuardTest {
         assertContains(facadeSource, "tagMapper.countTopTags(since, 10, activeDomain)");
         assertContains(facadeSource, "labelDomains(postMapper.countDomainDistribution(since))");
         assertContains(facadeSource, "PostDomain.fromCode(code).getDisplayName()");
+        assertContains(facadeSource, "PostDomain.isValid(asInteger(row.get(\"name\")))");
         assertContains(facadeSource, "postMapper.listDomainComparisonStats(since)");
         assertContains(facadeSource, "tagMapper.countTopTagsByDomain(since, 5)");
         assertContains(facadeSource, "postMapper.listDomainHotContentByDomain(since, 5)");
@@ -60,7 +61,9 @@ public class AnalyticsDomainDashboardGuardTest {
         assertContains(postMapperSource, "listDomainHotContent(@Param(\"since\") LocalDateTime since, @Param(\"limit\") int limit, @Param(\"domain\") Integer domain)");
         assertContains(postMapperSource, "listDomainComparisonStats(@Param(\"since\") LocalDateTime since)");
         assertContains(postMapperSource, "listDomainHotContentByDomain(@Param(\"since\") LocalDateTime since, @Param(\"limitPerDomain\") int limitPerDomain)");
-        assertContains(postMapperSource, "COALESCE(e.domain, 1)");
+        assertContains(postMapperSource, "SELECT e.domain AS name");
+        assertFalse(postMapperSource.contains("COALESCE(e.domain, 1)"),
+                "unclassified posts must not be reassigned to the technology domain");
         assertFalse(postMapperSource.contains("JSON_EXTRACT(e.ext_json, '$.domain')"),
                 "domain predicates and grouped analytics must use t_post_extension.domain instead of JSON extraction");
         assertFalse(postMapperSource.contains("JSON_EXTRACT(e_domain.ext_json, '$.domain')"),
@@ -70,7 +73,9 @@ public class AnalyticsDomainDashboardGuardTest {
         assertContains(tagMapperSource, "countTopTags(@Param(\"since\") java.time.LocalDateTime since,");
         assertContains(tagMapperSource, "countTopTagsByDomain(@Param(\"since\") java.time.LocalDateTime since,");
         assertContains(tagMapperSource, "@Param(\"domain\") Integer domain");
-        assertContains(tagMapperSource, "COALESCE(e.domain, 1)");
+        assertContains(tagMapperSource, "SELECT e.domain AS domain");
+        assertFalse(tagMapperSource.contains("COALESCE(e.domain, 1)"),
+                "unclassified tag rows must not be reassigned to the technology domain");
         assertFalse(tagMapperSource.contains("JSON_EXTRACT(e.ext_json, '$.domain')"),
                 "tag analytics domain filters must use t_post_extension.domain instead of JSON extraction");
 

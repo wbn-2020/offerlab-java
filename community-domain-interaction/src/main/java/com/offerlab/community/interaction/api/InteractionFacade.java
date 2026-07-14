@@ -51,6 +51,8 @@ public interface InteractionFacade {
 
     PageResult<CommentDTO> listComments(Long postId, Long viewerUid, String cursor, int size, String sort);
 
+    CommentDTO getCommentContext(Long postId, Long commentId, Long viewerUid);
+
     PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size);
 
     void deleteComment(Long commentId, Long operatorUid);

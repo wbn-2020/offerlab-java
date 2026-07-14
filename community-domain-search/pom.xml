@@ -23,6 +23,10 @@
             <artifactId>community-infrastructure</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.offerlab</groupId>
             <artifactId>community-domain-post</artifactId>
         </dependency>

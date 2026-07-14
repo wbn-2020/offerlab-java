@@ -29,6 +29,7 @@ import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -148,5 +149,39 @@ class SearchControllerApiTest {
                 .andExpect(jsonPath("$.data.fallbackSchemaReady").value(true))
                 .andExpect(jsonPath("$.data.diagnosticMessage").value("public_search_using_database_fallback"))
                 .andExpect(jsonPath("$.data.action").value("Restore Elasticsearch"));
+    }
+
+    @Test
+    void postSearchPassesDomainFilterToFacade() throws Exception {
+        when(searchFacade.searchPosts(
+                eq("租房"),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq(4),
+                eq("latest"),
+                isNull(),
+                eq(20),
+                eq(false)))
+                .thenReturn(PageResult.empty());
+
+        mvc.perform(get("/api/v1/search/posts")
+                        .param("q", "租房")
+                        .param("domain", "4")
+                        .param("sort", "latest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verify(searchFacade).searchPosts(
+                "租房", null, null, null, 4, "latest", null, 20, false);
+    }
+
+    @Test
+    void postSearchRejectsUnknownDomainBeforeFacade() throws Exception {
+        mvc.perform(get("/api/v1/search/posts")
+                        .param("domain", "999"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(searchFacade);
     }
 }

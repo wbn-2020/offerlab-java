@@ -279,6 +279,16 @@ public class InteractionController {
     }
 
     @PublicApi
+    @GetMapping("/posts/{postId}/comments/{commentId}/context")
+    @RateLimit(key = "'public:comments:context:' + #postId + ':' + #commentId + ':' + #request.remoteAddr",
+            rate = 240, per = 60, failOpen = false)
+    public Result<CommentDTO> commentContext(@PathVariable @Positive Long postId,
+                                             @PathVariable @Positive Long commentId,
+                                             HttpServletRequest request) {
+        return Result.ok(facade.getCommentContext(postId, commentId, UserContext.get()));
+    }
+
+    @PublicApi
     @GetMapping("/posts/{postId}/comments/{rootId}/replies")
     @RateLimit(key = "'public:comments:replies:' + #postId + ':' + #rootId + ':' + #request.remoteAddr", rate = 240, per = 60, failOpen = false)
     public Result<PageResult<CommentDTO>> commentReplies(@PathVariable @Positive Long postId,

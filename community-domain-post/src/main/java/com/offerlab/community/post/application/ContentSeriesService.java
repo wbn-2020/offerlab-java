@@ -43,6 +43,7 @@ public class ContentSeriesService {
     private static final int VISIBILITY_PUBLIC = 1;
     private static final int VISIBILITY_PRIVATE = 2;
     private static final int MAX_PAGE_SIZE = 30;
+    private static final int MAX_CONTENT_SERIES_PER_USER = 100;
 
     private final ContentSeriesMapper contentSeriesMapper;
     private final ContentSeriesPostMapper contentSeriesPostMapper;
@@ -82,6 +83,13 @@ public class ContentSeriesService {
                 ContentModerationService.SOURCE_CONTENT_SERIES,
                 seriesId,
                 title, description);
+        if (contentSeriesMapper.lockCreator(creatorUid) == null) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND);
+        }
+        if (contentSeriesMapper.countActiveByCreator(creatorUid) >= MAX_CONTENT_SERIES_PER_USER) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "A user can keep at most " + MAX_CONTENT_SERIES_PER_USER + " active content series");
+        }
         ContentSeriesPO series = new ContentSeriesPO();
         series.setId(seriesId);
         series.setCreatorUid(creatorUid);

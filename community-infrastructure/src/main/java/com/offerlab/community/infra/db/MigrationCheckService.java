@@ -1,21 +1,40 @@
 package com.offerlab.community.infra.db;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.CRC32;
 
 @Service
 @RequiredArgsConstructor
 public class MigrationCheckService {
-    private static final int EXPECTED_CORE_MIGRATIONS = 50;
-    private static final String LATEST_CORE_MIGRATION = "20260709.01";
+    private static final int EXPECTED_CORE_MIGRATIONS = 52;
+    private static final String LATEST_CORE_MIGRATION = "20260713.01";
+    private static final String CORE_MIGRATION_PATTERN = "classpath*:db/flyway/core/V*.sql";
+    private static final Pattern FLYWAY_RESOURCE_NAME =
+            Pattern.compile("^V(?<version>[0-9.]+)__(?<description>[a-z0-9_]+)\\.sql$");
 
     private final JdbcTemplate jdbcTemplate;
+
+    @Value("${spring.flyway.table:flyway_schema_history}")
+    private String flywayHistoryTable = "flyway_schema_history";
 
     public Map<String, Object> governanceStatus() {
         Map<String, Boolean> tables = new LinkedHashMap<>();
@@ -38,6 +57,7 @@ public class MigrationCheckService {
                 "t_domain_moderator",
                 "t_domain_config",
                 "t_growth_event",
+                "t_post_version_history",
                 "t_post_extension",
                 "t_user_task_state",
                 "t_content_assist_record",
@@ -56,7 +76,10 @@ public class MigrationCheckService {
                 "t_int_favorite",
                 "t_int_favorite_folder",
                 "t_int_comment_quality_signal",
-                "t_int_comment_helpful"
+                "t_int_comment_helpful",
+                "t_int_post_trust_state",
+                "t_int_post_useful_feedback",
+                "t_int_content_suggestion"
         )) {
             tables.put(table, tableExists(table));
         }
@@ -123,6 +146,7 @@ public class MigrationCheckService {
         }
         for (String column : List.of(
                 "id",
+                "event_key",
                 "event_type",
                 "uid",
                 "domain",
@@ -135,6 +159,11 @@ public class MigrationCheckService {
         )) {
             columns.put("t_growth_event." + column, columnExists("t_growth_event", column));
         }
+        putColumns(columns, "t_post_version_history", List.of(
+                "result_version",
+                "public_update_summary",
+                "impact_scope"
+        ));
         columns.put("t_post_extension.domain", columnExists("t_post_extension", "domain"));
         for (String column : List.of(
                 "id",
@@ -396,6 +425,47 @@ public class MigrationCheckService {
                 "update_time",
                 "is_deleted"
         ));
+        putColumns(columns, "t_int_post_trust_state", List.of(
+                "post_id",
+                "question_status",
+                "accepted_comment_id",
+                "duplicate_post_id",
+                "freshness_status",
+                "successor_post_id",
+                "last_confirmed_at",
+                "suggestions_open",
+                "create_time",
+                "update_time"
+        ));
+        putColumns(columns, "t_int_post_useful_feedback", List.of(
+                "id",
+                "user_id",
+                "post_id",
+                "post_author_id",
+                "reason",
+                "create_time",
+                "update_time"
+        ));
+        putColumns(columns, "t_int_content_suggestion", List.of(
+                "id",
+                "post_id",
+                "post_author_id",
+                "submitter_uid",
+                "suggestion_type",
+                "detail",
+                "normalized_content_hash",
+                "source_url",
+                "allow_public_attribution",
+                "decision",
+                "author_reply",
+                "public_note",
+                "result_version",
+                "pending_dedup_key",
+                "pending_guard",
+                "decided_at",
+                "create_time",
+                "update_time"
+        ));
         Map<String, Boolean> indexes = new LinkedHashMap<>();
         indexes.put("t_post_report.idx_post_reporter_status", indexExists("t_post_report", "idx_post_reporter_status"));
         indexes.put("t_comment_report.idx_comment_reporter_status", indexExists("t_comment_report", "idx_comment_reporter_status"));
@@ -426,6 +496,11 @@ public class MigrationCheckService {
         indexes.put("t_growth_event.idx_growth_event_domain_time", indexExists("t_growth_event", "idx_growth_event_domain_time"));
         indexes.put("t_growth_event.idx_growth_event_uid_time", indexExists("t_growth_event", "idx_growth_event_uid_time"));
         indexes.put("t_growth_event.idx_growth_event_content_time", indexExists("t_growth_event", "idx_growth_event_content_time"));
+        indexes.put("t_growth_event.uk_growth_event_key", indexExists("t_growth_event", "uk_growth_event_key"));
+        putIndexes(indexes, "t_post_version_history", List.of(
+                "uk_post_result_version",
+                "idx_post_public_update"
+        ));
         indexes.put("t_post_extension.idx_post_extension_domain_post", indexExists("t_post_extension", "idx_post_extension_domain_post"));
         indexes.put("t_user_task_state.uk_user_task_scope_code_day", indexExists("t_user_task_state", "uk_user_task_scope_code_day"));
         indexes.put("t_user_task_state.idx_user_task_scope_date", indexExists("t_user_task_state", "idx_user_task_scope_date"));
@@ -519,10 +594,32 @@ public class MigrationCheckService {
                 "idx_comment_helpful_user_status",
                 "idx_comment_helpful_post_comment"
         ));
+        putIndexes(indexes, "t_int_post_trust_state", List.of(
+                "idx_trust_state_question_status",
+                "idx_trust_state_freshness_status",
+                "idx_trust_state_accepted_comment",
+                "idx_trust_state_duplicate_post",
+                "idx_trust_state_successor_post"
+        ));
+        putIndexes(indexes, "t_int_post_useful_feedback", List.of(
+                "uk_user_post",
+                "idx_useful_feedback_post_reason",
+                "idx_useful_feedback_author_time"
+        ));
+        putIndexes(indexes, "t_int_content_suggestion", List.of(
+                "uk_pending_suggestion",
+                "idx_content_suggestion_mine_time",
+                "idx_content_suggestion_mine_decided",
+                "idx_content_suggestion_author_pending",
+                "idx_content_suggestion_author_time",
+                "idx_content_suggestion_public",
+                "idx_content_suggestion_type_status"
+        ));
         Map<String, Boolean> constraints = new LinkedHashMap<>();
         constraints.put("t_domain_moderator.PRIMARY(id)", primaryKeyExists("t_domain_moderator", "id"));
         constraints.put("t_domain_config.PRIMARY(domain)", primaryKeyExists("t_domain_config", "domain"));
         constraints.put("t_growth_event.PRIMARY(id)", primaryKeyExists("t_growth_event", "id"));
+        constraints.put("t_post_version_history.PRIMARY(id)", primaryKeyExists("t_post_version_history", "id"));
         constraints.put("t_user_task_state.PRIMARY(id)", primaryKeyExists("t_user_task_state", "id"));
         constraints.put("t_content_assist_record.PRIMARY(id)", primaryKeyExists("t_content_assist_record", "id"));
         constraints.put("t_content_series.PRIMARY(id)", primaryKeyExists("t_content_series", "id"));
@@ -541,14 +638,47 @@ public class MigrationCheckService {
         constraints.put("t_int_favorite_folder.PRIMARY(id)", primaryKeyExists("t_int_favorite_folder", "id"));
         constraints.put("t_int_comment_quality_signal.PRIMARY(id)", primaryKeyExists("t_int_comment_quality_signal", "id"));
         constraints.put("t_int_comment_helpful.PRIMARY(id)", primaryKeyExists("t_int_comment_helpful", "id"));
+        constraints.put("t_int_post_trust_state.PRIMARY(post_id)", primaryKeyExists("t_int_post_trust_state", "post_id"));
+        constraints.put("t_int_post_useful_feedback.PRIMARY(id)", primaryKeyExists("t_int_post_useful_feedback", "id"));
+        constraints.put("t_int_content_suggestion.PRIMARY(id)", primaryKeyExists("t_int_content_suggestion", "id"));
+        for (String foreignKey : List.of(
+                "fk_trust_state_post",
+                "fk_trust_state_accepted_comment",
+                "fk_trust_state_duplicate_post",
+                "fk_trust_state_successor_post"
+        )) {
+            constraints.put("t_int_post_trust_state." + foreignKey,
+                    foreignKeyExists("t_int_post_trust_state", foreignKey));
+        }
+        for (String foreignKey : List.of(
+                "fk_useful_feedback_post",
+                "fk_useful_feedback_user"
+        )) {
+            constraints.put("t_int_post_useful_feedback." + foreignKey,
+                    foreignKeyExists("t_int_post_useful_feedback", foreignKey));
+        }
+        for (String foreignKey : List.of(
+                "fk_content_suggestion_post",
+                "fk_content_suggestion_submitter",
+                "fk_content_suggestion_decider",
+                "fk_content_suggestion_result_version"
+        )) {
+            constraints.put("t_int_content_suggestion." + foreignKey,
+                    foreignKeyExists("t_int_content_suggestion", foreignKey));
+        }
         Map<String, Object> migrationLifecycle = flywayLifecycleStatus();
         boolean migrationLifecycleReady = Boolean.TRUE.equals(migrationLifecycle.get("ready"));
+        boolean trustedContentDefinitionsReady = trustedContentReady();
         boolean ready = tables.values().stream().allMatch(Boolean::booleanValue)
                 && columns.values().stream().allMatch(Boolean::booleanValue)
                 && indexes.values().stream().allMatch(Boolean::booleanValue)
                 && constraints.values().stream().allMatch(Boolean::booleanValue)
+                && trustedContentDefinitionsReady
                 && migrationLifecycleReady;
         List<String> missing = missingItems(tables, columns, indexes, constraints);
+        if (!trustedContentDefinitionsReady) {
+            missing.add("schema:trusted-content-definitions");
+        }
         if (!migrationLifecycleReady) {
             missing.add("flyway:migration-lifecycle");
         }
@@ -559,6 +689,7 @@ public class MigrationCheckService {
         status.put("columns", columns);
         status.put("indexes", indexes);
         status.put("constraints", constraints);
+        status.put("trustedContentDefinitionsReady", trustedContentDefinitionsReady);
         status.put("migrationLifecycle", migrationLifecycle);
         status.put("missing", missing);
         status.put("migration", "Flyway manages the ordered files listed in status.migrations.");
@@ -586,7 +717,9 @@ public class MigrationCheckService {
                 "db/migration/20260707_comment_quality_schema.sql",
                 "db/migration/20260708_operation_soft_delete_unique_guard.sql",
                 "db/migration/20260708_public_read_indexes.sql",
-                "db/migration/20260709_retry_task_claim_indexes.sql"
+                "db/migration/20260709_retry_task_claim_indexes.sql",
+                "db/migration/20260712_unclassified_domain.sql",
+                "db/migration/20260713_trusted_content_stage1.sql"
         ));
         if (!ready) {
             status.put("message", "数据库结构或 Flyway 执行历史未补齐，相关功能会降级或被阻断。");
@@ -690,6 +823,7 @@ public class MigrationCheckService {
     public boolean growthEventReady() {
         return tableExists("t_growth_event")
                 && columnExists("t_growth_event", "id")
+                && columnExists("t_growth_event", "event_key")
                 && columnExists("t_growth_event", "event_type")
                 && columnExists("t_growth_event", "uid")
                 && columnExists("t_growth_event", "domain")
@@ -703,7 +837,164 @@ public class MigrationCheckService {
                 && indexExists("t_growth_event", "idx_growth_event_type_time")
                 && indexExists("t_growth_event", "idx_growth_event_domain_time")
                 && indexExists("t_growth_event", "idx_growth_event_uid_time")
-                && indexExists("t_growth_event", "idx_growth_event_content_time");
+                && indexExists("t_growth_event", "idx_growth_event_content_time")
+                && indexExists("t_growth_event", "uk_growth_event_key");
+    }
+
+    public boolean trustedContentReady() {
+        return tableExists("t_int_post_trust_state")
+                && tableExists("t_int_post_useful_feedback")
+                && tableExists("t_int_content_suggestion")
+                && tableExists("t_post_version_history")
+                && tableExists("t_growth_event")
+                && columnDefinitionMatches("t_int_post_trust_state", "post_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "question_status",
+                "varchar(32)", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "accepted_comment_id",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "duplicate_post_id",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "freshness_status",
+                "varchar(32)", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "successor_post_id",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "last_confirmed_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_trust_state", "suggestions_open",
+                "tinyint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_useful_feedback", "id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_useful_feedback", "user_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_useful_feedback", "post_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_useful_feedback", "post_author_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_post_useful_feedback", "reason",
+                "varchar(32)", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "post_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "post_author_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "submitter_uid",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "suggestion_type",
+                "varchar(32)", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "detail",
+                "varchar(2000)", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "normalized_content_hash",
+                "char(64)", false, "ascii", "ascii_bin", null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "source_url",
+                "varchar(1000)", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "allow_public_attribution",
+                "tinyint", false, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "decision",
+                "varchar(32)", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "author_reply",
+                "varchar(1000)", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "public_note",
+                "varchar(500)", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "result_version",
+                "int", true, null, null, null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "pending_dedup_key",
+                "char(64)", true, "ascii", "ascii_bin", null, null)
+                && columnDefinitionMatches("t_int_content_suggestion", "pending_guard",
+                "tinyint", true, null, null, "STORED GENERATED", "decisionisnull")
+                && columnDefinitionMatches("t_int_content_suggestion", "decided_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_post_version_history", "result_version",
+                "int", true, null, null, null, null)
+                && columnDefinitionMatches("t_post_version_history", "public_update_summary",
+                "varchar(500)", true, null, null, null, null)
+                && columnDefinitionMatches("t_post_version_history", "impact_scope",
+                "varchar(255)", true, null, null, null, null)
+                && columnDefinitionMatches("t_growth_event", "event_key",
+                "varchar(128)", true, "ascii", "ascii_bin", null, null)
+                && primaryKeyExists("t_int_post_trust_state", "post_id")
+                && primaryKeyExists("t_int_post_useful_feedback", "id")
+                && primaryKeyExists("t_int_content_suggestion", "id")
+                && indexDefinitionMatches("t_int_post_trust_state",
+                "idx_trust_state_question_status", false,
+                "question_status", "update_time", "post_id")
+                && indexDefinitionMatches("t_int_post_trust_state",
+                "idx_trust_state_freshness_status", false,
+                "freshness_status", "update_time", "post_id")
+                && indexDefinitionMatches("t_int_post_trust_state",
+                "idx_trust_state_accepted_comment", false, "accepted_comment_id")
+                && indexDefinitionMatches("t_int_post_trust_state",
+                "idx_trust_state_duplicate_post", false, "duplicate_post_id")
+                && indexDefinitionMatches("t_int_post_trust_state",
+                "idx_trust_state_successor_post", false, "successor_post_id")
+                && indexDefinitionMatches("t_int_post_useful_feedback",
+                "uk_user_post", true, "user_id", "post_id")
+                && indexDefinitionMatches("t_int_post_useful_feedback",
+                "idx_useful_feedback_post_reason", false, "post_id", "reason")
+                && indexDefinitionMatches("t_int_post_useful_feedback",
+                "idx_useful_feedback_author_time", false,
+                "post_author_id", "create_time", "post_id")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "uk_pending_suggestion", true,
+                "post_id", "submitter_uid", "suggestion_type",
+                "normalized_content_hash", "pending_guard")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "idx_content_suggestion_mine_time", false,
+                "post_id", "submitter_uid", "update_time", "id")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "idx_content_suggestion_mine_decided", false,
+                "post_id", "submitter_uid", "decided_at", "id")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "idx_content_suggestion_author_pending", false,
+                "post_author_id", "decision", "update_time", "id")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "idx_content_suggestion_author_time", false,
+                "post_id", "update_time", "id")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "idx_content_suggestion_public", false,
+                "post_id", "decided_at", "id")
+                && indexDefinitionMatches("t_int_content_suggestion",
+                "idx_content_suggestion_type_status", false,
+                "post_id", "suggestion_type", "decision")
+                && indexDefinitionMatches("t_post_version_history",
+                "uk_post_result_version", true, "post_id", "result_version")
+                && indexDefinitionMatches("t_post_version_history",
+                "idx_post_public_update", false,
+                "post_id", "result_version", "create_time", "id")
+                && indexDefinitionMatches("t_growth_event",
+                "uk_growth_event_key", true, "event_key")
+                && foreignKeyDefinitionMatches("t_int_post_trust_state",
+                "fk_trust_state_post", "post_id",
+                "t_post_main", "id", "CASCADE", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_post_trust_state",
+                "fk_trust_state_accepted_comment", "accepted_comment_id",
+                "t_int_comment", "id", "SET NULL", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_post_trust_state",
+                "fk_trust_state_duplicate_post", "duplicate_post_id",
+                "t_post_main", "id", "SET NULL", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_post_trust_state",
+                "fk_trust_state_successor_post", "successor_post_id",
+                "t_post_main", "id", "SET NULL", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_post_useful_feedback",
+                "fk_useful_feedback_post", "post_id",
+                "t_post_main", "id", "CASCADE", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_post_useful_feedback",
+                "fk_useful_feedback_user", "user_id",
+                "t_user_account", "id", "CASCADE", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_content_suggestion",
+                "fk_content_suggestion_post", "post_id",
+                "t_post_main", "id", "CASCADE", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_content_suggestion",
+                "fk_content_suggestion_submitter", "submitter_uid",
+                "t_user_account", "id", "RESTRICT", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_content_suggestion",
+                "fk_content_suggestion_decider", "post_author_id",
+                "t_user_account", "id", "RESTRICT", "RESTRICT")
+                && foreignKeyDefinitionMatches("t_int_content_suggestion",
+                "fk_content_suggestion_result_version", "post_id,result_version",
+                "t_post_version_history", "post_id,result_version",
+                "RESTRICT", "RESTRICT");
     }
 
     public boolean contentAssistReady() {
@@ -892,65 +1183,135 @@ public class MigrationCheckService {
 
     private Map<String, Object> flywayLifecycleStatus() {
         Map<String, Object> status = new LinkedHashMap<>();
-        boolean historyTableExists = tableExists("flyway_schema_history");
+        String historyTable = flywayHistoryTableName();
+        String historyTableSql = "`" + historyTable + "`";
+        boolean historyTableExists = tableExists(historyTable);
+        Map<String, FlywayMigrationExpectation> expectedMigrations;
+        String migrationAssetError = null;
+        try {
+            expectedMigrations = loadCoreMigrationExpectations();
+        } catch (Exception e) {
+            expectedMigrations = Map.of();
+            migrationAssetError = e.getMessage();
+        }
+        boolean assetsReady = expectedMigrations.size() == EXPECTED_CORE_MIGRATIONS
+                && expectedMigrations.containsKey(LATEST_CORE_MIGRATION);
+        status.put("historyTable", historyTable);
         status.put("historyTableExists", historyTableExists);
         status.put("expectedCoreMigrations", EXPECTED_CORE_MIGRATIONS);
         status.put("latestExpectedVersion", LATEST_CORE_MIGRATION);
         status.put("baselineVersion", "0");
+        status.put("assetsReady", assetsReady);
+        if (migrationAssetError != null) {
+            status.put("assetError", migrationAssetError);
+        }
         if (!historyTableExists) {
             status.put("ready", false);
             status.put("appliedCoreMigrations", 0);
             status.put("failedMigrations", 0);
             status.put("missingChecksums", EXPECTED_CORE_MIGRATIONS);
             status.put("duplicateVersions", 0);
+            status.put("missingVersions", List.copyOf(expectedMigrations.keySet()));
+            status.put("checksumMismatches", List.of());
+            status.put("scriptMismatches", List.of());
+            status.put("unexpectedVersions", List.of());
             status.put("latestAppliedVersion", null);
             return status;
         }
 
-        int appliedCoreMigrations = queryCount("""
-                SELECT COUNT(*)
-                FROM flyway_schema_history
-                WHERE type = 'SQL'
-                  AND success = 1
-                """);
-        int failedMigrations = queryCount("""
-                SELECT COUNT(*)
-                FROM flyway_schema_history
-                WHERE success = 0
-                """);
-        int missingChecksums = queryCount("""
-                SELECT COUNT(*)
-                FROM flyway_schema_history
-                WHERE type = 'SQL'
-                  AND checksum IS NULL
-                """);
-        int duplicateVersions = queryCount("""
-                SELECT COUNT(*)
-                FROM (
-                    SELECT version
-                    FROM flyway_schema_history
-                    WHERE version IS NOT NULL
-                    GROUP BY version
-                    HAVING COUNT(*) > 1
-                ) duplicate_versions
-                """);
-        List<String> latestVersions = jdbcTemplate.query(
+        List<FlywayHistoryRow> historyRows = jdbcTemplate.query(
                 """
-                SELECT version
-                FROM flyway_schema_history
-                WHERE type = 'SQL'
-                  AND success = 1
-                  AND version IS NOT NULL
-                ORDER BY installed_rank DESC
-                LIMIT 1
-                """,
-                (resultSet, rowNumber) -> resultSet.getString(1)
+                SELECT version, script, type, checksum, success
+                FROM %s
+                ORDER BY installed_rank
+                """.formatted(historyTableSql),
+                (resultSet, rowNumber) -> {
+                    int checksum = resultSet.getInt("checksum");
+                    boolean checksumMissing = resultSet.wasNull();
+                    return new FlywayHistoryRow(
+                            resultSet.getString("version"),
+                            resultSet.getString("script"),
+                            resultSet.getString("type"),
+                            checksumMissing ? null : checksum,
+                            resultSet.getBoolean("success"));
+                }
         );
-        String latestAppliedVersion = latestVersions.isEmpty() ? null : latestVersions.get(0);
-        boolean ready = appliedCoreMigrations == EXPECTED_CORE_MIGRATIONS
+
+        Map<String, List<FlywayHistoryRow>> rowsByVersion = new HashMap<>();
+        int failedMigrations = 0;
+        int missingChecksums = 0;
+        String latestAppliedVersion = null;
+        for (FlywayHistoryRow row : historyRows) {
+            if (!row.success()) {
+                failedMigrations++;
+            }
+            if ("SQL".equals(row.type()) && row.checksum() == null) {
+                missingChecksums++;
+            }
+            if (row.version() != null && !row.version().isBlank()) {
+                rowsByVersion.computeIfAbsent(row.version(), ignored -> new ArrayList<>()).add(row);
+                if ("SQL".equals(row.type()) && row.success()) {
+                    latestAppliedVersion = row.version();
+                }
+            }
+        }
+
+        int duplicateVersions = (int) rowsByVersion.values().stream()
+                .filter(rows -> rows.size() > 1)
+                .count();
+        List<String> missingVersions = new ArrayList<>();
+        List<String> checksumMismatches = new ArrayList<>();
+        List<String> scriptMismatches = new ArrayList<>();
+        int appliedCoreMigrations = 0;
+        for (FlywayMigrationExpectation expected : expectedMigrations.values()) {
+            List<FlywayHistoryRow> matchingRows = rowsByVersion.getOrDefault(
+                    expected.version(), List.of());
+            if (matchingRows.isEmpty()) {
+                missingVersions.add(expected.version());
+                continue;
+            }
+            if (matchingRows.size() != 1) {
+                continue;
+            }
+            FlywayHistoryRow actual = matchingRows.get(0);
+            boolean checksumMatches = actual.checksum() != null
+                    && actual.checksum() == expected.checksum();
+            boolean scriptMatches = expected.script().equals(actual.script());
+            if (!checksumMatches) {
+                checksumMismatches.add(expected.version());
+            }
+            if (!scriptMatches) {
+                scriptMismatches.add(expected.version());
+            }
+            if (actual.success()
+                    && "SQL".equals(actual.type())
+                    && checksumMatches
+                    && scriptMatches) {
+                appliedCoreMigrations++;
+            }
+        }
+
+        Set<String> expectedVersions = expectedMigrations.keySet();
+        Set<String> unexpectedVersionSet = new HashSet<>();
+        for (FlywayHistoryRow row : historyRows) {
+            if (row.version() != null
+                    && !row.version().isBlank()
+                    && "SQL".equals(row.type())
+                    && !expectedVersions.contains(row.version())) {
+                unexpectedVersionSet.add(row.version());
+            }
+        }
+        List<String> unexpectedVersions = unexpectedVersionSet.stream().sorted().toList();
+
+        boolean ready = assetsReady
+                && appliedCoreMigrations == EXPECTED_CORE_MIGRATIONS
                 && failedMigrations == 0
                 && missingChecksums == 0
                 && duplicateVersions == 0
+                && missingVersions.isEmpty()
+                && checksumMismatches.isEmpty()
+                && scriptMismatches.isEmpty()
+                && unexpectedVersions.isEmpty()
                 && LATEST_CORE_MIGRATION.equals(latestAppliedVersion);
 
         status.put("ready", ready);
@@ -958,8 +1319,204 @@ public class MigrationCheckService {
         status.put("failedMigrations", failedMigrations);
         status.put("missingChecksums", missingChecksums);
         status.put("duplicateVersions", duplicateVersions);
+        status.put("missingVersions", missingVersions);
+        status.put("checksumMismatches", checksumMismatches);
+        status.put("scriptMismatches", scriptMismatches);
+        status.put("unexpectedVersions", unexpectedVersions);
         status.put("latestAppliedVersion", latestAppliedVersion);
         return status;
+    }
+
+    private Map<String, FlywayMigrationExpectation> loadCoreMigrationExpectations() throws Exception {
+        Resource[] resources = new PathMatchingResourcePatternResolver()
+                .getResources(CORE_MIGRATION_PATTERN);
+        Map<String, FlywayMigrationExpectation> sorted = new TreeMap<>();
+        for (Resource resource : resources) {
+            String script = resource.getFilename();
+            if (script == null) {
+                continue;
+            }
+            Matcher matcher = FLYWAY_RESOURCE_NAME.matcher(script);
+            if (!matcher.matches()) {
+                continue;
+            }
+            String version = matcher.group("version");
+            FlywayMigrationExpectation expectation = new FlywayMigrationExpectation(
+                    version,
+                    script,
+                    calculateFlywayChecksum(resource));
+            FlywayMigrationExpectation previous = sorted.putIfAbsent(version, expectation);
+            if (previous != null
+                    && (!previous.script().equals(expectation.script())
+                    || previous.checksum() != expectation.checksum())) {
+                throw new IllegalStateException("conflicting Flyway migration resource for " + version);
+            }
+        }
+        return new LinkedHashMap<>(sorted);
+    }
+
+    private int calculateFlywayChecksum(Resource resource) throws Exception {
+        CRC32 crc = new CRC32();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.isEmpty() && line.charAt(0) == '\uFEFF') {
+                    line = line.substring(1);
+                }
+                crc.update(line.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        return (int) crc.getValue();
+    }
+
+    private boolean columnDefinitionMatches(
+            String tableName,
+            String columnName,
+            String expectedColumnType,
+            boolean expectedNullable,
+            String expectedCharacterSet,
+            String expectedCollation,
+            String expectedExtra,
+            String generationExpressionMarker) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT column_type,
+                       is_nullable,
+                       character_set_name,
+                       collation_name,
+                       extra,
+                       generation_expression
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = ?
+                  AND column_name = ?
+                """, tableName, columnName);
+        if (rows.size() != 1) {
+            return false;
+        }
+        Map<String, Object> row = rows.get(0);
+        if (!expectedColumnType.equalsIgnoreCase(value(row, "column_type"))
+                || expectedNullable != "YES".equalsIgnoreCase(value(row, "is_nullable"))) {
+            return false;
+        }
+        if (expectedCharacterSet != null
+                && !expectedCharacterSet.equalsIgnoreCase(value(row, "character_set_name"))) {
+            return false;
+        }
+        if (expectedCollation != null
+                && !expectedCollation.equalsIgnoreCase(value(row, "collation_name"))) {
+            return false;
+        }
+        if (expectedExtra != null
+                && !expectedExtra.equalsIgnoreCase(value(row, "extra").trim())) {
+            return false;
+        }
+        if (generationExpressionMarker != null) {
+            String normalized = normalizeSqlExpression(value(row, "generation_expression"));
+            String marker = normalizeSqlExpression(generationExpressionMarker);
+            if (!normalized.contains(marker)
+                    || !normalized.contains("1")
+                    || !normalized.contains("null")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean indexDefinitionMatches(
+            String tableName,
+            String indexName,
+            boolean expectedUnique,
+            String... expectedColumns) {
+        List<IndexColumnDefinition> rows = jdbcTemplate.query("""
+                SELECT column_name, non_unique
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = ?
+                  AND index_name = ?
+                ORDER BY seq_in_index
+                """, (resultSet, rowNumber) -> new IndexColumnDefinition(
+                resultSet.getString("column_name"),
+                resultSet.getInt("non_unique")), tableName, indexName);
+        if (rows.size() != expectedColumns.length) {
+            return false;
+        }
+        int expectedNonUnique = expectedUnique ? 0 : 1;
+        for (int index = 0; index < expectedColumns.length; index++) {
+            IndexColumnDefinition row = rows.get(index);
+            if (!expectedColumns[index].equals(row.columnName())
+                    || row.nonUnique() != expectedNonUnique) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean foreignKeyDefinitionMatches(
+            String tableName,
+            String constraintName,
+            String expectedColumns,
+            String expectedReferencedTable,
+            String expectedReferencedColumns,
+            String expectedDeleteRule,
+            String expectedUpdateRule) {
+        List<ForeignKeyColumnDefinition> rows = jdbcTemplate.query("""
+                SELECT kcu.column_name,
+                       kcu.referenced_table_name,
+                       kcu.referenced_column_name,
+                       rc.delete_rule,
+                       rc.update_rule
+                FROM information_schema.key_column_usage kcu
+                JOIN information_schema.referential_constraints rc
+                  ON rc.constraint_schema = kcu.constraint_schema
+                 AND rc.table_name = kcu.table_name
+                 AND rc.constraint_name = kcu.constraint_name
+                WHERE kcu.constraint_schema = DATABASE()
+                  AND kcu.table_name = ?
+                  AND kcu.constraint_name = ?
+                  AND kcu.referenced_table_name IS NOT NULL
+                ORDER BY kcu.ordinal_position
+                """, (resultSet, rowNumber) -> new ForeignKeyColumnDefinition(
+                resultSet.getString("column_name"),
+                resultSet.getString("referenced_table_name"),
+                resultSet.getString("referenced_column_name"),
+                resultSet.getString("delete_rule"),
+                resultSet.getString("update_rule")), tableName, constraintName);
+        String[] columns = expectedColumns.split(",");
+        String[] referencedColumns = expectedReferencedColumns.split(",");
+        if (rows.size() != columns.length || columns.length != referencedColumns.length) {
+            return false;
+        }
+        for (int index = 0; index < columns.length; index++) {
+            ForeignKeyColumnDefinition row = rows.get(index);
+            if (!columns[index].equals(row.columnName())
+                    || !expectedReferencedTable.equals(row.referencedTableName())
+                    || !referencedColumns[index].equals(row.referencedColumnName())
+                    || !expectedDeleteRule.equalsIgnoreCase(row.deleteRule())
+                    || !expectedUpdateRule.equalsIgnoreCase(row.updateRule())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String value(Map<String, Object> row, String key) {
+        Object value = row.get(key);
+        if (value == null) {
+            value = row.get(key.toUpperCase());
+        }
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static String normalizeSqlExpression(String value) {
+        return value == null ? "" : value
+                .replaceAll("[\\s`(),']", "")
+                .toLowerCase();
+    }
+
+    private String flywayHistoryTableName() {
+        String configured = flywayHistoryTable == null ? "" : flywayHistoryTable.trim();
+        return configured.matches("[A-Za-z0-9_]+") ? configured : "flyway_schema_history";
     }
 
     private int queryCount(String sql) {
@@ -1020,5 +1577,38 @@ public class MigrationCheckService {
                   AND column_key = 'PRI'
                 """, Integer.class, tableName, columnName);
         return count != null && count > 0;
+    }
+
+    private boolean foreignKeyExists(String tableName, String constraintName) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.referential_constraints
+                WHERE constraint_schema = DATABASE()
+                  AND table_name = ?
+                  AND constraint_name = ?
+                """, Integer.class, tableName, constraintName);
+        return count != null && count > 0;
+    }
+
+    private record FlywayMigrationExpectation(String version, String script, int checksum) {
+    }
+
+    private record FlywayHistoryRow(
+            String version,
+            String script,
+            String type,
+            Integer checksum,
+            boolean success) {
+    }
+
+    private record IndexColumnDefinition(String columnName, int nonUnique) {
+    }
+
+    private record ForeignKeyColumnDefinition(
+            String columnName,
+            String referencedTableName,
+            String referencedColumnName,
+            String deleteRule,
+            String updateRule) {
     }
 }

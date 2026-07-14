@@ -30,6 +30,9 @@ public interface NotificationFacade {
 
     void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId);
 
+    void notifyAnswerAccepted(Long receiverUid, Long senderUid, Long postId, Long commentId,
+                              Map<String, Object> content);
+
     void notifyDiscussionFollowComment(Long receiverUid, Long senderUid, Long postId, Long commentId);
 
     void notifyDiscussionFollowQualityComment(Long receiverUid, Long senderUid, Long postId, Long commentId, String action);

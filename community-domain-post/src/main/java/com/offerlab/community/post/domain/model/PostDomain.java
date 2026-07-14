@@ -19,11 +19,13 @@ public enum PostDomain {
     public String getDisplayName() { return displayName; }
 
     public static PostDomain fromCode(Integer code) {
-        if (code == null) return TECH;
+        if (code == null) {
+            throw new IllegalArgumentException("Post domain is required");
+        }
         for (PostDomain d : values()) {
             if (d.code == code) return d;
         }
-        return TECH;
+        throw new IllegalArgumentException("Unknown post domain: " + code);
     }
 
     public static boolean isValid(Integer code) {

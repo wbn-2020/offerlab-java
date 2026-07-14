@@ -60,6 +60,22 @@ class FollowConsistencyGuardTest {
         assertTrue(cacheService.contains("CacheKeyBuilder.userProfile(uid)"), "user cache service must centralize user profile key eviction");
         assertTrue(service.contains("userCacheService.evictBrief(fromUid, toUid)"), "follow/unfollow must evict both users' brief caches");
         assertTrue(service.contains("userCacheService.evictBrief(uid)"), "profile and intent updates must evict the current user's brief cache");
+        assertTrue(service.contains("private final AfterCommitExecutor afterCommit;"),
+                "user mutations must reuse the shared after-commit executor");
+        assertTrue(service.contains(
+                        "afterCommit.execute(() -> userCacheService.evictBrief(uid), \"user profile cache eviction:\" + uid);"),
+                "profile cache eviction must be deferred until the profile transaction commits");
+        assertTrue(service.contains(
+                        "afterCommit.execute(() -> userCacheService.evictBrief(uid), \"user intent cache eviction:\" + uid);"),
+                "intent cache eviction must be deferred until the intent transaction commits");
+        assertTrue(service.matches(
+                        "(?s).*afterCommit\\.execute\\(\\(\\) -> userCacheService\\.evictBrief\\(fromUid, toUid\\),\\s*"
+                                + "\"follow cache eviction:\" \\+ fromUid \\+ \":\" \\+ toUid\\);.*"),
+                "follow cache eviction must be deferred until the follow transaction commits");
+        assertTrue(service.matches(
+                        "(?s).*afterCommit\\.execute\\(\\(\\) -> userCacheService\\.evictBrief\\(fromUid, toUid\\),\\s*"
+                                + "\"unfollow cache eviction:\" \\+ fromUid \\+ \":\" \\+ toUid\\);.*"),
+                "unfollow cache eviction must be deferred until the unfollow transaction commits");
     }
 
     private static String read(String path) throws Exception {

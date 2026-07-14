@@ -6,6 +6,7 @@ import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.user.api.event.UserRegisteredEvent;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
@@ -53,6 +54,8 @@ class UserApplicationServiceGrowthEventTest {
     private UserCacheService userCacheService;
     @Mock
     private ContentModerationService contentModerationService;
+    @Mock
+    private AfterCommitExecutor afterCommit;
 
     private UserApplicationService service;
 
@@ -70,7 +73,8 @@ class UserApplicationServiceGrowthEventTest {
                 privacySettingMapper,
                 profileMapper,
                 userCacheService,
-                contentModerationService);
+                contentModerationService,
+                afterCommit);
     }
 
     @Test

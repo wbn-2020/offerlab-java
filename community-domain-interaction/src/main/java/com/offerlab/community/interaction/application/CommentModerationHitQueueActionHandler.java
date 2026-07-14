@@ -5,10 +5,12 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.moderation.ModerationKeywordHit;
+import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
+import com.offerlab.community.interaction.api.event.CommentUnavailableEvent;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.CommentMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.po.CommentPO;
 import com.offerlab.community.post.application.DomainModeratorService;
@@ -37,6 +39,7 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
     private final ApplicationEventPublisher events;
     private final PostRepository postRepo;
     private final DomainModeratorService domainModeratorService;
+    private final EventPublisher eventPublisher;
 
     public CommentModerationHitQueueActionHandler(ContentModerationService moderationService,
                                                   CommentMapper commentMapper,
@@ -45,7 +48,8 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
                                                    AfterCommitExecutor afterCommit,
                                                    ApplicationEventPublisher events,
                                                    PostRepository postRepo,
-                                                   DomainModeratorService domainModeratorService) {
+                                                   DomainModeratorService domainModeratorService,
+                                                   EventPublisher eventPublisher) {
         this.moderationService = moderationService;
         this.commentMapper = commentMapper;
         this.postCounterMapper = postCounterMapper;
@@ -54,6 +58,7 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
         this.events = events;
         this.postRepo = postRepo;
         this.domainModeratorService = domainModeratorService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -101,7 +106,15 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
                     .parentId(comment.getParentId())
                     .replyToUid(comment.getReplyToUid())
                     .content(comment.getContent())
-                    .timestamp(Instant.now().toEpochMilli())
+                     .timestamp(Instant.now().toEpochMilli())
+                     .build());
+        } else {
+            eventPublisher.publish(CommentUnavailableEvent.builder()
+                    .commentId(comment.getId())
+                    .postId(comment.getPostId())
+                    .actorUid(operatorUid)
+                    .reason("Comment was hidden by moderation")
+                    .cascade(false)
                     .build());
         }
         moderationService.reviewKeywordHit(sourceId, approved ? "APPROVED" : "REJECTED", operatorUid, note);

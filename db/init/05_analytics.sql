@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS t_search_analytics_event (
 
 CREATE TABLE IF NOT EXISTS t_growth_event (
     id              BIGINT        NOT NULL PRIMARY KEY,
+    event_key       VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL,
     event_type      VARCHAR(32)   NOT NULL,
     uid             BIGINT        NULL,
     domain          TINYINT       NULL,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS t_growth_event (
     source_page     VARCHAR(128)  NULL,
     ext_json        JSON          NULL,
     create_time     DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uk_growth_event_key (event_key),
     KEY idx_growth_event_type_time (event_type, create_time),
     KEY idx_growth_event_domain_time (domain, create_time),
     KEY idx_growth_event_uid_time (uid, create_time),

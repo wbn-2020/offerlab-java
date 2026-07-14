@@ -148,7 +148,8 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
     }
 
     private static List<Map<String, Object>> labelDomains(List<Map<String, Object>> rows) {
-        return rows.stream()
+        return (rows == null ? List.<Map<String, Object>>of() : rows).stream()
+                .filter(row -> row != null && PostDomain.isValid(asInteger(row.get("name"))))
                 .map(row -> {
                     Map<String, Object> copy = new LinkedHashMap<>(row);
                     copy.put("name", domainName(row.get("name")));
@@ -187,7 +188,7 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
         Map<Integer, Map<String, Object>> result = new LinkedHashMap<>();
         for (Map<String, Object> row : rows == null ? List.<Map<String, Object>>of() : rows) {
             Integer domain = asInteger(row.get("domain"));
-            if (domain != null) {
+            if (PostDomain.isValid(domain)) {
                 result.put(domain, row);
             }
         }
@@ -198,7 +199,7 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
         Map<Integer, List<Map<String, Object>>> result = new LinkedHashMap<>();
         for (Map<String, Object> row : rows == null ? List.<Map<String, Object>>of() : rows) {
             Integer domain = asInteger(row.get("domain"));
-            if (domain == null) {
+            if (!PostDomain.isValid(domain)) {
                 continue;
             }
             Map<String, Object> copy = new LinkedHashMap<>(row);
@@ -230,12 +231,13 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
     private static String postTypeName(Object value) {
         int type = value instanceof Number number ? number.intValue() : 0;
         return switch (type) {
-            case 10 -> "技术文章";
-            case 11 -> "项目复盘";
-            case 12 -> "踩坑记录";
-            case 13 -> "问答求助";
-            case 14 -> "资源分享";
-            case 15 -> "经验笔记";
+            case 10 -> "攻略清单";
+            case 11 -> "复盘记录";
+            case 12 -> "图文笔记";
+            case 13 -> "问题求助";
+            case 14 -> "资源推荐";
+            case 15 -> "经验分享";
+            case 16 -> "观点讨论";
             case 1 -> "历史经验";
             case 2 -> "历史博客";
             case 3 -> "历史题解";

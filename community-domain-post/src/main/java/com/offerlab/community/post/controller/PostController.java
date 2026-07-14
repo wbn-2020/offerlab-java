@@ -22,12 +22,14 @@ import com.offerlab.community.post.api.dto.PostReportDTO;
 import com.offerlab.community.post.api.dto.PostReportReceiptDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostFeaturedService;
 import com.offerlab.community.post.application.PostKnowledgeReviewService;
+import com.offerlab.community.post.application.PostPublishQualityValidator;
 import com.offerlab.community.post.application.PostReportService;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
@@ -75,8 +77,8 @@ public class PostController {
     private final ApplicationEventPublisher applicationEventPublisher;
 
     private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
-            new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "技术文章", "文章",
-                    "沉淀架构设计、技术方案、源码阅读和工程实践。", "例如：Spring Cloud Gateway 鉴权链路实践", 40, false),
+            new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "攻略清单", "攻略",
+                    "整理步骤、方法、清单、避坑指南和可照着执行的经验。", "例如：新手准备第一次独自旅行的行前清单", 40, false),
             new PostContentTypeDTO(Post.TYPE_NOTE, "NOTE", "经验分享", "经验",
                     "分享亲身经历、过程、踩坑、结果和可复用的做法。", "例如：我如何用两周时间调整作息并稳定完成学习计划", 30, false),
             new PostContentTypeDTO(Post.TYPE_COMMUNITY_QUESTION, "QUESTION", "问题求助", "求助",
@@ -105,7 +107,7 @@ public class PostController {
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
     public Result<Map<String, Object>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
-        Integer domain = requireOptionalDomain(req.getDomain());
+        Integer domain = requirePublishDomain(req.getDomain());
         requireSafeExternalImageUrl(req.getCoverUrl());
         contentModerationService.requireUserCanPublish(uid);
         Long id = idGenerator.nextId();
@@ -157,6 +159,9 @@ public class PostController {
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
                 .anonymous(req.getAnonymous())
+                .publicUpdateSummary(req.getPublicUpdateSummary())
+                .impactScope(req.getImpactScope())
+                .respondedSuggestionIds(req.getRespondedSuggestionIds())
                 .reviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
@@ -215,6 +220,16 @@ public class PostController {
     @RateLimit(key = "'public:posts:content-types:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
     public Result<List<PostContentTypeDTO>> contentTypes(HttpServletRequest request) {
         return Result.ok(CONTENT_TYPES);
+    }
+
+    @PublicApi
+    @GetMapping("/{postId}/updates")
+    @RateLimit(key = "'public:posts:updates:' + #postId + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<List<PublicPostUpdateDTO>> listPublicUpdates(
+            @PathVariable @Positive Long postId,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(30) int limit,
+            HttpServletRequest request) {
+        return Result.ok(postFacade.listPublicUpdates(postId, limit));
     }
 
     @GetMapping("/{postId}/versions")
@@ -311,7 +326,7 @@ public class PostController {
     public static class PublishReq {
         @NotNull
         private Integer postType;
-        /** 领域编码，1-技术 2-职场 3-阅读 4-生活 5-投资理财。为空时服务端默认 TECH */
+        /** 频道编码，1-科技数码 2-职场经验 3-学习成长 4-生活方式 5-投资理财。发布时必须显式选择有效频道。 */
         private Integer domain;
         @NotBlank
         @Size(max = 255)
@@ -359,6 +374,12 @@ public class PostController {
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
         @Size(max = 20)
         private List<@Size(max = 32) String> tagNames;
+        @Size(max = 500)
+        private String publicUpdateSummary;
+        @Size(max = 255)
+        private String impactScope;
+        @Size(max = 100)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> respondedSuggestionIds;
         private Long draftId;
 
         private List<Long> effectiveTagIds() {
@@ -462,6 +483,16 @@ public class PostController {
             return domain;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static Integer requirePublishDomain(Integer domain) {
+        if (domain == null) {
+            throw PostPublishQualityValidator.fieldError("domain", "请选择频道");
+        }
+        if (!PostDomain.isValid(domain)) {
+            throw PostPublishQualityValidator.fieldError("domain", "频道不存在或已下线");
+        }
+        return domain;
     }
 
     private static void requireSafeExternalImageUrl(String value) {

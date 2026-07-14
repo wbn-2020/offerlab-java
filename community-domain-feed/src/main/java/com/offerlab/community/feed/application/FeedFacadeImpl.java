@@ -102,7 +102,7 @@ public class FeedFacadeImpl implements FeedFacade {
     public PageResult<CrossDomainRecommendationVO> getCrossDomainRecommendations(Long uid, String cursor, int size) {
         int pageSize = Math.max(1, size);
         UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
-        int sourceDomain = inferCrossDomainSource(intent);
+        Integer sourceDomain = inferCrossDomainSource(intent);
         Set<Long> hiddenPostIds = uid == null ? Set.of() : feedbackStore.hiddenPostIds(uid);
         List<PostBriefDTO> candidates = new ArrayList<>();
         List<String> failedDomains = new ArrayList<>();
@@ -917,9 +917,15 @@ public class FeedFacadeImpl implements FeedFacade {
         String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
         String topic = firstNonBlank(ext.path("topic").asText(""), ext.path("category").asText(""));
         if (!matchedInterest.isBlank()) {
+            if (sourceDomain == null) {
+                return "来自" + domainName(targetDomain) + "频道，匹配你关注的" + matchedInterest;
+            }
             return "从" + domainName(sourceDomain) + "延伸到" + domainName(targetDomain) + "，匹配你关注的" + matchedInterest;
         }
         if (!topic.isBlank()) {
+            if (sourceDomain == null) {
+                return "来自" + domainName(targetDomain) + "频道，覆盖话题：" + topic;
+            }
             return "从" + domainName(sourceDomain) + "延伸到" + domainName(targetDomain) + "，覆盖话题：" + topic;
         }
         if (baseReasons != null && !baseReasons.isEmpty()) {
@@ -985,9 +991,9 @@ public class FeedFacadeImpl implements FeedFacade {
                 .toList();
     }
 
-    private int inferCrossDomainSource(UserIntentDTO intent) {
+    private Integer inferCrossDomainSource(UserIntentDTO intent) {
         if (intent == null) {
-            return Post.DOMAIN_TECH;
+            return null;
         }
         if (hasAnyValue(intent.getTechStack()) || hasAnyValue(intent.getTargetCompanies())) {
             return Post.DOMAIN_TECH;
@@ -1004,7 +1010,7 @@ public class FeedFacadeImpl implements FeedFacade {
         if (intentKeywords(intent, List.of("投资", "理财", "基金", "股票"))) {
             return Post.DOMAIN_INVESTMENT;
         }
-        return Post.DOMAIN_TECH;
+        return null;
     }
 
     private boolean intentKeywords(UserIntentDTO intent, List<String> keywords) {
@@ -1031,16 +1037,31 @@ public class FeedFacadeImpl implements FeedFacade {
     }
 
     private Integer effectiveDomain(Integer domain) {
-        return domain == null ? Post.DOMAIN_TECH : domain;
+        if (domain == null) {
+            return null;
+        }
+        return switch (domain) {
+            case Post.DOMAIN_TECH,
+                 Post.DOMAIN_CAREER,
+                 Post.DOMAIN_READING,
+                 Post.DOMAIN_LIFESTYLE,
+                 Post.DOMAIN_INVESTMENT -> domain;
+            default -> null;
+        };
     }
 
     private String domainName(Integer domain) {
-        return switch (effectiveDomain(domain)) {
+        Integer effectiveDomain = effectiveDomain(domain);
+        if (effectiveDomain == null) {
+            return "未分类";
+        }
+        return switch (effectiveDomain) {
+            case Post.DOMAIN_TECH -> "技术";
             case Post.DOMAIN_CAREER -> "职场";
             case Post.DOMAIN_READING -> "阅读";
             case Post.DOMAIN_LIFESTYLE -> "生活";
             case Post.DOMAIN_INVESTMENT -> "投资理财";
-            default -> "技术";
+            default -> "未分类";
         };
     }
 
@@ -1057,7 +1078,7 @@ public class FeedFacadeImpl implements FeedFacade {
         if (item == null || item.getPost() == null) {
             return false;
         }
-        return effectiveDomain(item.getPost().getDomain()) == domain;
+        return Objects.equals(effectiveDomain(item.getPost().getDomain()), domain);
     }
 
     /** 当 cursor 表示 score (timestamp ms) 时；空则视为 +∞（从最新开始） */

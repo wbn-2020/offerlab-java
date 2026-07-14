@@ -14,6 +14,7 @@ class PostVersionHistoryGuardTest {
     @Test
     void postVersionHistorySchemaMustBeNonDestructiveAndIndexed() throws Exception {
         String migration = read("../db/migration/20260530_post_version_history.sql").toLowerCase();
+        String trustedMigration = read("../db/migration/20260713_trusted_content_stage1.sql").toLowerCase();
         String init = read("../db/init/02_post.sql").toLowerCase();
 
         assertTrue(migration.contains("create table if not exists t_post_version_history"), "migration must create version history table safely");
@@ -36,6 +37,10 @@ class PostVersionHistoryGuardTest {
         String draftBlock = init.substring(draftStart, versionDrop).trim();
         assertTrue(draftBlock.endsWith(";"), "draft table definition must be closed before version history table starts");
         assertFalse(draftBlock.contains("create table t_post_version_history"), "version history table must not be nested inside draft SQL");
+        assertTrue(trustedMigration.contains("result_version"), "public update records must identify the resulting post version");
+        assertTrue(trustedMigration.contains("public_update_summary"), "public update records must store an author-approved summary");
+        assertTrue(trustedMigration.contains("impact_scope"), "public update records must explain the affected scope");
+        assertTrue(init.contains("public_update_summary"), "fresh schema must include public update summaries");
     }
 
     @Test
@@ -45,6 +50,8 @@ class PostVersionHistoryGuardTest {
         String repo = read("src/main/java/com/offerlab/community/post/infrastructure/persistence/PostRepositoryImpl.java");
         String domain = read("src/main/java/com/offerlab/community/post/domain/model/Post.java");
         String mybatisConfig = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/mybatis/config/MybatisPlusConfig.java");
+        String updateCmd = read("src/main/java/com/offerlab/community/post/api/dto/PostUpdateCmd.java");
+        String updatedEvent = read("src/main/java/com/offerlab/community/post/api/event/PostUpdatedEvent.java");
 
         assertTrue(appService.contains("private final PostVersionHistoryService versionHistoryService"), "post application service must own snapshot orchestration");
         int snapshotCall = appService.indexOf("versionHistoryService.snapshotBeforeUpdate");
@@ -52,6 +59,10 @@ class PostVersionHistoryGuardTest {
         assertTrue(snapshotCall > 0 && firstMutation > snapshotCall, "snapshot must be taken before the post object is mutated");
         assertTrue(appService.contains("tagsByIds(existingTagIds)"), "snapshot must store the existing tags before syncTags changes them");
         assertTrue(appService.contains("post.getVersion()"), "snapshot must record the base optimistic-lock version");
+        assertTrue(appService.contains("forceVersionSnapshot"),
+                "suggestion merges and public update metadata must force a version row even without content changes");
+        assertTrue(appService.contains("!respondedSuggestionIds.isEmpty()"),
+                "responded suggestions must never point at a missing version history row");
 
         assertTrue(versionService.contains("versionMapper.tableExists() <= 0"), "snapshot should fail open when old databases have not migrated yet");
         assertTrue(versionService.contains("catch (Exception e)"), "snapshot failure must not break the edit flow");
@@ -59,6 +70,10 @@ class PostVersionHistoryGuardTest {
         assertTrue(versionService.contains("po.setContent(current.getContent())"), "snapshot must store the previous content");
         assertTrue(versionService.contains("po.setTagSnapshotJson(writeTags(currentTags))"), "snapshot must store previous tags");
         assertTrue(versionService.contains("if (\"no-op\".equals(changeSummary))"), "no-op edits should not create noisy history rows");
+        assertTrue(versionService.contains("boolean forceSnapshot"),
+                "version snapshots must distinguish optional history from trusted-content referential integrity");
+        assertTrue(versionService.contains("if (forceSnapshot)"),
+                "forced version snapshots must fail closed instead of leaving suggestion result foreign keys dangling");
         assertTrue(versionService.contains("Math.max(1, Math.min"), "history list limit must be bounded");
 
         assertTrue(domain.contains("private Integer version"), "post domain must carry the DB version for snapshots");
@@ -70,6 +85,17 @@ class PostVersionHistoryGuardTest {
         assertFalse(repo.contains("po.setVersion(null)"), "post updates must not clear the version field before saving");
         assertTrue(mybatisConfig.contains("MybatisPlusInterceptor"), "MyBatis-Plus interceptor must be registered for @Version fields");
         assertTrue(mybatisConfig.contains("OptimisticLockerInnerInterceptor"), "post optimistic locking must install the version interceptor");
+        assertTrue(updateCmd.contains("private String publicUpdateSummary"), "post edits must accept an optional public update summary");
+        assertTrue(updateCmd.contains("private String impactScope"), "post edits must accept an optional update impact scope");
+        assertTrue(updateCmd.contains("private List<Long> respondedSuggestionIds"), "post edits must explicitly identify merged suggestions");
+        assertTrue(updatedEvent.contains("respondedSuggestionIds"), "post update events must carry merged suggestion ids");
+        assertTrue(updatedEvent.contains("resultVersion"), "post update events must carry the resulting version");
+        assertTrue(versionService.contains("setPublicUpdateSummary"), "version snapshots must persist public update summaries");
+        assertTrue(versionService.contains("setImpactScope"), "version snapshots must persist update impact scope");
+        assertTrue(appService.contains(".title(includeEventContent ? post.getTitle() : null)"),
+                "private or non-published post titles must not be serialized into the outbox");
+        assertTrue(appService.contains(".content(includeEventContent ? post.getContent() : null)"),
+                "private or non-published post bodies must not be serialized into the outbox");
     }
 
     @Test
@@ -80,6 +106,7 @@ class PostVersionHistoryGuardTest {
         String dto = read("src/main/java/com/offerlab/community/post/api/dto/PostVersionHistoryDTO.java");
         String mapper = read("src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/PostVersionHistoryMapper.java");
         String po = read("src/main/java/com/offerlab/community/post/infrastructure/persistence/po/PostVersionHistoryPO.java");
+        String publicDto = read("src/main/java/com/offerlab/community/post/api/dto/PublicPostUpdateDTO.java");
 
         assertTrue(api.contains("listPostVersions"), "facade API must expose a version history contract");
         assertTrue(controller.contains("@GetMapping(\"/{postId}/versions\")"), "post controller must expose the stable versions endpoint");
@@ -96,6 +123,16 @@ class PostVersionHistoryGuardTest {
         assertTrue(po.contains("@TableName(\"t_post_version_history\")"), "history PO must map to the history table");
         assertTrue(mapper.contains("ORDER BY create_time DESC, id DESC"), "history query must return newest snapshots first");
         assertTrue(mapper.contains("LIMIT #{limit}"), "history query must enforce the requested bounded limit");
+        assertTrue(controller.contains("@GetMapping(\"/{postId}/updates\")"), "public update summaries must have a stable endpoint");
+        assertTrue(facade.contains("listPublicUpdates"), "post facade must expose sanitized public updates");
+        assertTrue(mapper.contains("listPublicUpdates"), "public updates must use a dedicated projection query");
+        assertTrue(mapper.contains("FROM t_post_main p"), "public updates must validate visibility against the canonical post table");
+        assertFalse(mapper.contains("FROM t_post p"), "public updates must not reference the retired post table name");
+        for (String field : new String[] {"resultVersion", "publicUpdateSummary", "impactScope", "createTime"}) {
+            assertTrue(publicDto.contains(field), "public update DTO must expose " + field);
+        }
+        assertFalse(publicDto.contains("content"), "public update DTO must never expose old post content");
+        assertFalse(publicDto.contains("editorUid"), "public update DTO must not expose moderation identity");
     }
 
     private static String read(String path) throws Exception {

@@ -44,6 +44,19 @@ class PostSearchConsistencyGuardTest {
         assertTrue(postService.contains("PostDeletedEvent.builder()"), "post delete must publish a deletion event");
         assertTrue(postService.contains("events.publish(PostUpdatedEvent.builder()"), "post update must publish even when visibility/status changes");
         assertTrue(resolver.contains("PostDeletedEvent"), "outbox topic resolver must route post deleted events");
+        for (String trustedEvent : new String[] {
+                "PostUsefulFeedbackChangedEvent",
+                "ContentSuggestionSubmittedEvent",
+                "ContentSuggestionDecidedEvent",
+                "QuestionStateChangedEvent",
+                "PostFreshnessChangedEvent",
+                "AnswerAcceptedEvent"
+        }) {
+            assertTrue(resolver.contains(trustedEvent),
+                    "outbox topic resolver must route trusted-content event " + trustedEvent);
+        }
+        assertTrue(resolver.contains("readLong(event, \"getPostId\")"),
+                "trusted-content outbox records must aggregate by post instead of aggregateId=0");
 
         assertTrue(facade.contains("filterVisibleSearchResults"), "ES results must pass through a visibility filter");
         assertTrue(facade.contains("postFacade.batchGetPosts"), "search visibility fallback must use PostFacade current-state reads");

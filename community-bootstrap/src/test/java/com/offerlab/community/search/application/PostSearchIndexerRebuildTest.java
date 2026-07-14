@@ -1,6 +1,8 @@
 package com.offerlab.community.search.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.domain.model.Post;
@@ -22,6 +24,7 @@ import java.time.LocalDateTime;
 import java.util.stream.LongStream;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -59,6 +62,16 @@ class PostSearchIndexerRebuildTest {
         lenient().when(elasticsearch.postIndex()).thenReturn("post_idx");
         lenient().when(elasticsearch.indexExists("post_idx")).thenReturn(true);
         lenient().when(elasticsearch.updateMapping(eq("post_idx"), any())).thenReturn(true);
+        lenient().when(elasticsearch.deleteIndex("post_idx")).thenReturn(true);
+        lenient().when(elasticsearch.createIndex(eq("post_idx"), any())).thenReturn(true);
+        lenient().when(elasticsearch.refreshIndex("post_idx")).thenReturn(true);
+        lenient().when(elasticsearch.search(eq("post_idx"), any()))
+                .thenAnswer(invocation -> {
+                    Map<?, ?> body = invocation.getArgument(1);
+                    return Optional.of(body.toString().contains("must_not")
+                            ? emptySearchResult()
+                            : indexedSearchResult());
+                });
     }
 
     @Test
@@ -184,6 +197,18 @@ class PostSearchIndexerRebuildTest {
         po.setUpdateTime(LocalDateTime.now());
         po.setIsDeleted(0);
         return po;
+    }
+
+    private static JsonNode emptySearchResult() {
+        var root = JsonNodeFactory.instance.objectNode();
+        root.putObject("hits").putObject("total").put("value", 0);
+        return root;
+    }
+
+    private static JsonNode indexedSearchResult() {
+        var root = JsonNodeFactory.instance.objectNode();
+        root.putObject("hits").putObject("total").put("value", 1);
+        return root;
     }
 
     private static PostExtensionPO extension(Long postId) {

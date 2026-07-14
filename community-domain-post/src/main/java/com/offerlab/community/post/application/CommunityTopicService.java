@@ -73,10 +73,14 @@ public class CommunityTopicService {
     private final PostFacade postFacade;
 
     public List<CommunityTopicDTO> listPublic(Boolean featured, int limit, Long viewerUid) {
+        return listPublic(featured, null, limit, viewerUid);
+    }
+
+    public List<CommunityTopicDTO> listPublic(Boolean featured, String keyword, int limit, Long viewerUid) {
         if (!topicSchemaReady()) {
             return List.of();
         }
-        List<CommunityTopicPO> topics = topicMapper.selectTopics(true, featured, null, null, safeLimit(limit));
+        List<CommunityTopicPO> topics = topicMapper.selectTopics(true, featured, null, clean(keyword), safeLimit(limit));
         return toDtoList(topics, viewerUid);
     }
 

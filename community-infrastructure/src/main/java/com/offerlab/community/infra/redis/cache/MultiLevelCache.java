@@ -37,12 +37,11 @@ public interface MultiLevelCache<V> {
     void evict(String key);
 
     /**
-     * 直接写入缓存
-     * 只写 L2（Redis），L1 由各节点读时按需回填
+     * Write-through contract: refresh the current-node L1 immediately and write Redis L2 best-effort.
      *
-     * @param key   缓存 key
-     * @param value 缓存值
-     * @param ttl   TTL 时长
+     * @param key   cache key
+     * @param value cache value
+     * @param ttl   time-to-live
      */
     void put(String key, V value, Duration ttl);
 }

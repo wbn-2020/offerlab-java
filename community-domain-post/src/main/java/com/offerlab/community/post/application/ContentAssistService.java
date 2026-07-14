@@ -34,7 +34,13 @@ import java.util.Set;
 public class ContentAssistService {
 
     private static final int MAX_LIST_ITEMS = 6;
+    private static final int MAX_ASSIST_CONTEXT_CHARS = 1200;
+    private static final int MAX_ASSIST_CONTEXT_VALUE_CHARS = 160;
     private static final String PRIVATE_CAREER_BOUNDARY_ERROR = "PRIVATE_CAREER_TRAINING_BOUNDARY";
+    private static final List<String> ASSIST_CONTEXT_FIELDS = List.of(
+            "source", "action", "contextType", "title", "postType", "topic",
+            "reasonText", "contextSource", "keyword", "clusterId", "topicSlug",
+            "templateCode", "degraded", "degradedReason");
 
     private final ObjectMapper objectMapper;
     private final ContentAssistAiClient aiClient;
@@ -42,12 +48,15 @@ public class ContentAssistService {
     private final ContentAssistRecordGateway recordGateway;
 
     public ContentAssistWritingDTO assistWriting(Long uid, ContentAssistWritingCmd cmd) {
-        int domain = normalizeDomain(cmd == null ? null : cmd.getDomain());
+        Integer domain = normalizeOptionalDomain(cmd == null ? null : cmd.getDomain());
         validatePostType(cmd == null ? null : cmd.getPostType());
         String title = limit(clean(cmd == null ? null : cmd.getTitle()), 255);
         String content = requireContent(cmd == null ? null : cmd.getContent());
         List<String> tagNames = normalizeTagNames(cmd == null ? null : cmd.getTagNames());
-        if (isPrivateCareerTrainingContent(title, content, tagNames)) {
+        String assistContext = normalizeAssistContext(cmd == null ? null : cmd.getAssistContext());
+        String assistTemplateCode = limit(clean(cmd == null ? null : cmd.getAssistTemplateCode()), 64);
+        if (isPrivateCareerTrainingContent(title, content + "\n" + assistContext,
+                appendAssistTemplate(tagNames, assistTemplateCode))) {
             ContentAssistWritingDTO result = boundaryWriting();
             record(uid, ContentAssistScene.WRITING, "rules", "RULE_BOUNDARY", domain, content,
                     0, 0, 0L, PRIVATE_CAREER_BOUNDARY_ERROR);
@@ -55,19 +64,22 @@ public class ContentAssistService {
         }
         ContentAssistWritingDTO rule = ruleWriting(domain, cmd == null ? null : cmd.getPostType(), title, content, tagNames);
         AssistExecution<ContentAssistWritingDTO> execution = tryAiWriting(domain, cmd == null ? null : cmd.getPostType(),
-                title, content, tagNames, rule);
+                title, content, tagNames, assistContext, assistTemplateCode, rule);
         record(uid, ContentAssistScene.WRITING, execution.recordProvider(), execution.status(), domain, content,
                 execution.promptTokens(), execution.completionTokens(), execution.estimatedCostMicros(), execution.errorCode());
         return execution.result();
     }
 
     public ContentAssistQualityScoreDTO scoreQuality(Long uid, ContentAssistQualityScoreCmd cmd) {
-        int domain = normalizeDomain(cmd == null ? null : cmd.getDomain());
+        Integer domain = normalizeOptionalDomain(cmd == null ? null : cmd.getDomain());
         validatePostType(cmd == null ? null : cmd.getPostType());
         String title = limit(clean(cmd == null ? null : cmd.getTitle()), 255);
         String content = requireContent(cmd == null ? null : cmd.getContent());
         List<String> tagNames = normalizeTagNames(cmd == null ? null : cmd.getTagNames());
-        if (isPrivateCareerTrainingContent(title, content, tagNames)) {
+        String assistContext = normalizeAssistContext(cmd == null ? null : cmd.getAssistContext());
+        String assistTemplateCode = limit(clean(cmd == null ? null : cmd.getAssistTemplateCode()), 64);
+        if (isPrivateCareerTrainingContent(title, content + "\n" + assistContext,
+                appendAssistTemplate(tagNames, assistTemplateCode))) {
             ContentAssistQualityScoreDTO result = boundaryQuality();
             record(uid, ContentAssistScene.QUALITY_SCORE, "rules", "RULE_BOUNDARY", domain, content,
                     0, 0, 0L, PRIVATE_CAREER_BOUNDARY_ERROR);
@@ -75,7 +87,7 @@ public class ContentAssistService {
         }
         ContentAssistQualityScoreDTO rule = ruleQuality(domain, cmd == null ? null : cmd.getPostType(), title, content, tagNames);
         AssistExecution<ContentAssistQualityScoreDTO> execution = tryAiQuality(domain, cmd == null ? null : cmd.getPostType(),
-                title, content, tagNames, rule);
+                title, content, tagNames, assistContext, assistTemplateCode, rule);
         record(uid, ContentAssistScene.QUALITY_SCORE, execution.recordProvider(), execution.status(), domain, content,
                 execution.promptTokens(), execution.completionTokens(), execution.estimatedCostMicros(), execution.errorCode());
         return execution.result();
@@ -85,13 +97,17 @@ public class ContentAssistService {
         Integer domain = normalizeOptionalDomain(cmd == null ? null : cmd.getDomain());
         String title = limit(clean(cmd == null ? null : cmd.getTitle()), 255);
         String content = requireContent(cmd == null ? null : cmd.getContent());
-        if (isPrivateCareerTrainingContent(title, content, List.of())) {
+        String assistContext = normalizeAssistContext(cmd == null ? null : cmd.getAssistContext());
+        String assistTemplateCode = limit(clean(cmd == null ? null : cmd.getAssistTemplateCode()), 64);
+        if (isPrivateCareerTrainingContent(title, content + "\n" + assistContext,
+                appendAssistTemplate(List.of(), assistTemplateCode))) {
             ContentAssistTagTopicSuggestionsDTO result = boundaryTagTopicSuggestions(domain);
             record(uid, ContentAssistScene.TAG_TOPIC_SUGGESTIONS, "rules", "RULE_BOUNDARY", domain, content,
                     0, 0, 0L, PRIVATE_CAREER_BOUNDARY_ERROR);
             return result;
         }
-        ContentAssistTagTopicSuggestionsDTO result = ruleTagTopicSuggestions(domain, title, content);
+        ContentAssistTagTopicSuggestionsDTO result = ruleTagTopicSuggestions(
+                domain, title, content, assistContext, assistTemplateCode);
         record(uid, ContentAssistScene.TAG_TOPIC_SUGGESTIONS, "rules", "RULE_ONLY", domain, content, 0, 0, 0L, null);
         return result;
     }
@@ -101,11 +117,14 @@ public class ContentAssistService {
                                                                   String title,
                                                                   String content,
                                                                   List<String> tagNames,
+                                                                  String assistContext,
+                                                                  String assistTemplateCode,
                                                                   ContentAssistWritingDTO rule) {
         if (!aiClient.enabled() || !aiClient.configured()) {
             return AssistExecution.rule(rule);
         }
-        ContentAssistPrompt prompt = new ContentAssistPrompt(domain, postType, title, content, tagNames);
+        ContentAssistPrompt prompt = new ContentAssistPrompt(
+                domain, postType, title, content, tagNames, assistContext, assistTemplateCode);
         try {
             ContentAssistAiClient.Completion completion = aiClient.complete(ContentAssistScene.WRITING, prompt);
             try {
@@ -135,11 +154,14 @@ public class ContentAssistService {
                                                                        String title,
                                                                        String content,
                                                                        List<String> tagNames,
+                                                                       String assistContext,
+                                                                       String assistTemplateCode,
                                                                        ContentAssistQualityScoreDTO rule) {
         if (!aiClient.enabled() || !aiClient.configured()) {
             return AssistExecution.rule(rule);
         }
-        ContentAssistPrompt prompt = new ContentAssistPrompt(domain, postType, title, content, tagNames);
+        ContentAssistPrompt prompt = new ContentAssistPrompt(
+                domain, postType, title, content, tagNames, assistContext, assistTemplateCode);
         try {
             ContentAssistAiClient.Completion completion = aiClient.complete(ContentAssistScene.QUALITY_SCORE, prompt);
             try {
@@ -297,10 +319,15 @@ public class ContentAssistService {
                 .build();
     }
 
-    private ContentAssistTagTopicSuggestionsDTO ruleTagTopicSuggestions(Integer domain, String title, String content) {
+    private ContentAssistTagTopicSuggestionsDTO ruleTagTopicSuggestions(Integer domain,
+                                                                         String title,
+                                                                         String content,
+                                                                         String assistContext,
+                                                                         String assistTemplateCode) {
         List<TagDTO> tags = taxonomyService.listTags();
         List<CommunityTopicDTO> topics = taxonomyService.listTopics();
-        String text = (title + "\n" + content).toLowerCase(Locale.ROOT);
+        String text = (title + "\n" + content + "\n" + assistContext + "\n" + assistTemplateCode)
+                .toLowerCase(Locale.ROOT);
         List<MatchedTag> matchedTags = tags.stream()
                 .filter(this::isActiveTag)
                 .map(tag -> matchTag(tag, text))
@@ -682,16 +709,6 @@ public class ContentAssistService {
         };
     }
 
-    private int normalizeDomain(Integer domain) {
-        if (domain == null) {
-            return PostDomain.TECH.getCode();
-        }
-        if (!PostDomain.isValid(domain)) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
-        return domain;
-    }
-
     private Integer normalizeOptionalDomain(Integer domain) {
         if (domain == null) {
             return null;
@@ -732,6 +749,40 @@ public class ContentAssistService {
             }
         }
         return List.copyOf(dedup);
+    }
+
+    private List<String> appendAssistTemplate(List<String> tagNames, String assistTemplateCode) {
+        if (!StringUtils.hasText(assistTemplateCode)) {
+            return tagNames;
+        }
+        List<String> values = new ArrayList<>(tagNames == null ? List.of() : tagNames);
+        values.add(assistTemplateCode);
+        return values;
+    }
+
+    private String normalizeAssistContext(JsonNode assistContext) {
+        if (assistContext == null || !assistContext.isObject()) {
+            return "";
+        }
+        List<String> values = new ArrayList<>();
+        int totalLength = 0;
+        for (String field : ASSIST_CONTEXT_FIELDS) {
+            JsonNode node = assistContext.get(field);
+            if (node == null || node.isContainerNode() || node.isNull()) {
+                continue;
+            }
+            String value = limit(clean(node.asText()), MAX_ASSIST_CONTEXT_VALUE_CHARS);
+            if (!StringUtils.hasText(value)) {
+                continue;
+            }
+            String entry = field + "=" + value;
+            if (totalLength + entry.length() + 1 > MAX_ASSIST_CONTEXT_CHARS) {
+                break;
+            }
+            values.add(entry);
+            totalLength += entry.length() + 1;
+        }
+        return String.join("\n", values);
     }
 
     private int scoreTitle(String title) {
