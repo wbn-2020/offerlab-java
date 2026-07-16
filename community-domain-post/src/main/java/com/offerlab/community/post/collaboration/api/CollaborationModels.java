@@ -43,6 +43,27 @@ public final class CollaborationModels {
         private Boolean riskAcknowledged;
     }
 
+    /**
+     * Internal command used by governed search-gap conversion only.
+     * It deliberately has no source fields, so public need creation cannot forge SEARCH_GAP provenance.
+     */
+    @Data
+    public static class SearchGapNeedCreateCmd {
+        @NotNull
+        @Min(1)
+        @Max(5)
+        private Integer domain;
+        @Size(max = 32)
+        private String contentFormat;
+        @Size(max = 120)
+        private String title;
+        @Size(max = 2000)
+        private String description;
+        @Size(max = 1000)
+        private String acceptanceCriteria;
+        private Boolean riskAcknowledged;
+    }
+
     @Data
     public static class NeedMergeCmd {
         @NotNull

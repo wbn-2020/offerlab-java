@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $migrationDir = Join-Path $root "db\migration"
+$manifestPath = Join-Path $migrationDir "flyway-manifest.json"
 
 if (-not (Test-Path $migrationDir)) {
   Write-Error "Migration directory not found: $migrationDir"
@@ -10,8 +11,17 @@ if (-not (Test-Path $migrationDir)) {
 $files = Get-ChildItem -Path $migrationDir -Filter "*.sql" -File
 $violations = New-Object System.Collections.Generic.List[string]
 
-if ($files.Count -ne 56) {
-  $violations.Add("expected 56 canonical migration files, found $($files.Count)")
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+  $violations.Add("Flyway manifest is missing: $manifestPath")
+} else {
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  $expectedMigrationCount = @($manifest.migrations).Count
+  if ($files.Count -ne $expectedMigrationCount) {
+    $violations.Add(
+      "canonical migration count does not match the manifest: " +
+      "expected $expectedMigrationCount, found $($files.Count)"
+    )
+  }
 }
 
 function Remove-SqlComments {

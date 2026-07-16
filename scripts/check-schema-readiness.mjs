@@ -58,6 +58,10 @@ const migrationAssetChecks = migrationManifest.migrations.map((migration) => {
 })
 
 const columnDefinitions = [
+  columnDefinition('t_post_extension', 'domain', 'tinyint', true, {
+    extra: 'VIRTUAL GENERATED',
+    generationExpression: "casejson_unquotejson_extractext_json'$.domain'when'1'then1when'2'then2when'3'then3when'4'then4when'5'then5elsenullend",
+  }),
   columnDefinition('t_int_post_trust_state', 'post_id', 'bigint', false),
   columnDefinition('t_int_post_trust_state', 'question_status', 'varchar(32)', false),
   columnDefinition('t_int_post_trust_state', 'accepted_comment_id', 'bigint', true),
@@ -91,6 +95,26 @@ const columnDefinitions = [
   columnDefinition('t_growth_event', 'event_key', 'varchar(128)', true, {
     characterSet: 'ascii',
     collation: 'ascii_bin',
+  }),
+  columnDefinition('t_collab_curation_suggestion', 'pending_guard', 'tinyint', true, {
+    extra: 'STORED GENERATED',
+    generationExpression: "casewhenreview_status='pending'then1elsenullend",
+  }),
+  columnDefinition('t_collab_governance_case', 'pending_guard', 'tinyint', true, {
+    extra: 'STORED GENERATED',
+    generationExpression: "casewhencase_status='pending'then1elsenullend",
+  }),
+  columnDefinition('t_collab_governance_case', 'appeal_guard', 'bigint', true, {
+    extra: 'STORED GENERATED',
+    generationExpression: "casewhencase_type='appeal'thenparent_case_idelsenullend",
+  }),
+  columnDefinition('t_community_role_application', 'active_guard', 'tinyint', true, {
+    extra: 'STORED GENERATED',
+    generationExpression: "casewhenapplication_status='submitted'then1elsenullend",
+  }),
+  columnDefinition('t_community_role_grant', 'active_guard', 'tinyint', true, {
+    extra: 'STORED GENERATED',
+    generationExpression: "casewhengrant_statusin'active''suspended'then1elsenullend",
   }),
 ]
 
@@ -129,6 +153,60 @@ const indexDefinitions = [
   indexDefinition('t_post_version_history', 'idx_post_public_update', false,
     'post_id,result_version,create_time,id'),
   indexDefinition('t_growth_event', 'uk_growth_event_key', true, 'event_key'),
+  indexDefinition('t_collab_content_need_follow', 'uk_collab_need_follow', true,
+    'need_id,uid'),
+  indexDefinition('t_collab_series_member', 'uk_collab_series_member', true,
+    'series_id,uid'),
+  indexDefinition('t_collab_series_submission', 'uk_collab_series_submission', true,
+    'series_id,post_id'),
+  indexDefinition('t_collab_series_contribution', 'uk_collab_series_contribution_source', true,
+    'source_submission_id'),
+  indexDefinition('t_collab_activity_submission', 'uk_collab_activity_submission', true,
+    'activity_id,post_id'),
+  indexDefinition('t_collab_curation_suggestion', 'uk_collab_curation_pending', true,
+    'topic_id,post_id,submitter_uid,pending_guard'),
+  indexDefinition('t_collab_topic_post', 'uk_collab_topic_post', true,
+    'topic_id,post_id'),
+  indexDefinition('t_collab_topic_post', 'uk_collab_topic_post_source', true,
+    'source_type,source_id'),
+  indexDefinition('t_collab_office_hour_reservation', 'uk_collab_office_reservation_once', true,
+    'office_hour_id,attendee_uid'),
+  indexDefinition('t_collab_office_hour_feedback', 'uk_collab_office_feedback_author', true,
+    'reservation_id,author_uid'),
+  indexDefinition('t_collab_discussion_vote', 'uk_collab_discussion_vote', true,
+    'discussion_id,uid'),
+  indexDefinition('t_collab_governance_case', 'uk_collab_case_pending', true,
+    'case_type,target_type,target_id,submitter_uid,pending_guard'),
+  indexDefinition('t_collab_governance_case', 'uk_collab_case_single_appeal', true,
+    'appeal_guard'),
+  indexDefinition('t_incentive_account', 'uk_incentive_account_scope', true,
+    'user_id,account_type,domain_code'),
+  indexDefinition('t_incentive_account', 'idx_incentive_account_type_domain', false,
+    'account_type,domain_code,user_id'),
+  indexDefinition('t_incentive_ledger', 'uk_incentive_ledger_idempotency', true,
+    'idempotency_key'),
+  indexDefinition('t_incentive_ledger', 'uk_incentive_ledger_reversal', true,
+    'reversed_entry_id'),
+  indexDefinition('t_incentive_ledger', 'idx_incentive_ledger_user_time', false,
+    'user_id,create_time,id'),
+  indexDefinition('t_incentive_ledger', 'idx_incentive_ledger_account_time', false,
+    'account_id,create_time,id'),
+  indexDefinition('t_incentive_ledger', 'idx_incentive_ledger_reference', false,
+    'reference_type,reference_id'),
+  indexDefinition('t_incentive_freeze_record', 'idx_incentive_freeze_account_status', false,
+    'account_id,freeze_status,blocks_spending,freeze_amount'),
+  indexDefinition('t_incentive_invalidation_job', 'idx_incentive_invalidation_reference', false,
+    'reference_type,reference_id'),
+  indexDefinition('t_virtual_benefit_order', 'idx_virtual_benefit_order_benefit', false,
+    'benefit_id'),
+  indexDefinition('t_quota_bounty_submission', 'idx_quota_submission_applicant', false,
+    'applicant_uid,create_time,id'),
+  indexDefinition('t_quota_bounty_appeal', 'idx_quota_bounty_appeal_applicant', false,
+    'applicant_uid,create_time,id'),
+  indexDefinition('t_community_role_application', 'uk_community_role_active_application', true,
+    'applicant_uid,role_code,domain_code,active_guard'),
+  indexDefinition('t_community_role_grant', 'uk_community_role_active_grant', true,
+    'user_id,role_code,domain_code,active_guard'),
 ]
 
 const foreignKeyDefinitions = [
@@ -152,6 +230,36 @@ const foreignKeyDefinitions = [
     'post_author_id', 't_user_account', 'id', 'RESTRICT'),
   foreignKeyDefinition('t_int_content_suggestion', 'fk_content_suggestion_result_version',
     'post_id,result_version', 't_post_version_history', 'post_id,result_version', 'RESTRICT'),
+]
+
+const checkConstraintDefinitions = [
+  checkConstraintDefinition('t_incentive_account', 'chk_incentive_account_balances',
+    'total_balance>=0andavailable_balance>=0andfrozen_balance>=0andrecovery_debt>=0andtotal_balance=available_balance+frozen_balance'),
+  checkConstraintDefinition('t_virtual_benefit_catalog', 'chk_virtual_benefit_stock',
+    'total_stockisnullortotal_stock>=0andavailable_stock>=0andavailable_stock<=total_stock'),
+  checkConstraintDefinition('t_virtual_benefit_order', 'chk_virtual_benefit_order_status',
+    "order_statusin'created''reserved''delivered''cancelled''refunded'"),
+  checkConstraintDefinition('t_virtual_benefit_catalog', 'chk_virtual_benefit_stock_null_pair',
+    'total_stockisnullandavailable_stockisnullortotal_stockisnotnullandavailable_stockisnotnullandtotal_stock>=0andavailable_stock>=0andavailable_stock<=total_stock'),
+  checkConstraintDefinition('t_virtual_benefit_order', 'chk_virtual_benefit_order_cost',
+    'quantity>0andunit_point_cost>0andtotal_point_cost>0andcasttotal_point_costasdecimal650=castquantityasdecimal650*castunit_point_costasdecimal650'),
+]
+
+const triggerDefinitions = [
+  triggerDefinition(
+    't_incentive_ledger',
+    'trg_incentive_ledger_block_update',
+    'BEFORE',
+    'UPDATE',
+    "signalsqlstate'45000'setmessage_text='t_incentive_ledgerisappend-only'",
+  ),
+  triggerDefinition(
+    't_incentive_ledger',
+    'trg_incentive_ledger_block_delete',
+    'BEFORE',
+    'DELETE',
+    "signalsqlstate'45000'setmessage_text='t_incentive_ledgerisappend-only'",
+  ),
 ]
 
 const expectations = [
@@ -193,6 +301,61 @@ const expectations = [
     't_int_post_trust_state',
     't_int_post_useful_feedback',
     't_int_content_suggestion',
+    't_collab_content_need',
+    't_collab_content_need_follow',
+    't_collab_series',
+    't_collab_series_member',
+    't_collab_series_submission',
+    't_collab_series_contribution',
+    't_collab_activity',
+    't_collab_activity_submission',
+    't_collab_curation_suggestion',
+    't_collab_topic_post',
+    't_collab_office_hour',
+    't_collab_office_hour_reservation',
+    't_collab_office_hour_feedback',
+    't_collab_discussion',
+    't_collab_discussion_option',
+    't_collab_discussion_vote',
+    't_collab_governance_case',
+    't_incentive_account',
+    't_incentive_ledger',
+    't_incentive_recovery_debt',
+    't_incentive_reward_rule',
+    't_incentive_reward_batch',
+    't_incentive_reward_inbox',
+    't_incentive_invalidation_job',
+    't_incentive_reward_guard',
+    't_incentive_freeze_record',
+    't_incentive_reconciliation_run',
+    't_incentive_reconciliation_cursor',
+    't_incentive_reconciliation_item',
+    't_incentive_appeal',
+    't_incentive_risk_scan_cursor',
+    't_incentive_risk_scan_run',
+    't_incentive_risk_finding',
+    't_virtual_benefit_catalog',
+    't_virtual_benefit_order',
+    't_virtual_benefit_order_history',
+    't_virtual_benefit_entitlement',
+    't_virtual_benefit_entitlement_usage',
+    't_thank_ticket_daily',
+    't_thank_action',
+    't_incentive_domain_policy',
+    't_bounty_platform_budget_guard',
+    't_bounty_user_budget_guard',
+    't_quota_bounty',
+    't_quota_bounty_submission',
+    't_quota_bounty_appeal',
+    't_community_role_definition',
+    't_community_role_metric',
+    't_community_role_application',
+    't_community_role_grant',
+    't_community_role_grant_history',
+  ]),
+  ...columns('t_community_topic', [
+    'domain',
+    'allowed_domains',
   ]),
   ...columns('t_tag', [
     'tag_status',
@@ -464,6 +627,7 @@ const expectations = [
   ...indexes('t_interview_question', ['idx_status_time']),
   ...indexes('t_tag', ['idx_tag_status_recommend', 'idx_tag_merge_target']),
   ...indexes('t_community_topic', ['uk_topic_slug', 'idx_topic_status_sort', 'idx_topic_featured_sort']),
+  ...indexes('t_community_topic', ['idx_community_topic_domain']),
   ...indexes('t_community_topic_tag', ['uk_topic_tag', 'idx_topic_tag_topic', 'idx_topic_tag_tag']),
   ...indexes('t_community_topic_follow', ['uk_topic_follow_user', 'idx_topic_follow_uid', 'idx_topic_follow_topic']),
   ...indexes('t_review_queue', [
@@ -666,23 +830,7 @@ WHERE constraint_schema = DATABASE()
 GROUP BY table_name, constraint_name;
 `
 
-let output
-try {
-  output = execFileSync(mysqlBin, [
-    '--batch',
-    '--raw',
-    '--skip-column-names',
-    '-h', config.host,
-    '-P', config.port,
-    '-u', config.user,
-    config.database,
-    '-e',
-    sql,
-  ], { encoding: 'utf8', env: childEnv }).trim()
-} catch (error) {
-  console.error(`schema readiness check failed to query MySQL: ${error.message}`)
-  process.exit(2)
-}
+const output = runMysql(sql, 'schema readiness check failed to query MySQL')
 
 const found = new Map()
 if (output) {
@@ -824,36 +972,49 @@ function foreignKeyDefinition(
   }
 }
 
+function checkConstraintDefinition(table, name, checkClause) {
+  return {
+    type: 'checkConstraintDefinition',
+    table,
+    name,
+    checkClause,
+    migration: migrationForConstraint(table, name),
+  }
+}
+
+function triggerDefinition(table, name, timing, event, actionStatement) {
+  return {
+    type: 'triggerDefinition',
+    table,
+    name,
+    timing,
+    event,
+    actionStatement,
+    migration: migrationForConstraint(table, name),
+  }
+}
+
 function inspectSchemaDefinitions() {
   const definitionChecks = [
     ...columnDefinitions,
     ...indexDefinitions,
     ...foreignKeyDefinitions,
+    ...checkConstraintDefinitions,
+    ...triggerDefinitions,
   ]
   const statements = [
     ...columnDefinitions.map(columnDefinitionSql),
     ...indexDefinitions.map(indexDefinitionSql),
     ...foreignKeyDefinitions.map(foreignKeyDefinitionSql),
+    ...checkConstraintDefinitions.map(checkConstraintDefinitionSql),
+    ...triggerDefinitions.map(triggerDefinitionSql),
   ]
   if (statements.length === 0) return []
 
-  let definitionOutput
-  try {
-    definitionOutput = execFileSync(mysqlBin, [
-      '--batch',
-      '--raw',
-      '--skip-column-names',
-      '-h', config.host,
-      '-P', config.port,
-      '-u', config.user,
-      config.database,
-      '-e',
-      `${statements.join('\nUNION ALL\n')};`,
-    ], { encoding: 'utf8', env: childEnv }).trim()
-  } catch (error) {
-    console.error(`schema readiness failed to inspect definitions: ${error.message}`)
-    process.exit(2)
-  }
+  const definitionOutput = runMysql(
+    `${statements.join('\nUNION ALL\n')};`,
+    'schema readiness failed to inspect definitions',
+  )
 
   const readiness = new Map()
   if (definitionOutput) {
@@ -890,16 +1051,20 @@ function columnDefinitionSql(item) {
     clauses.push(`UPPER(TRIM(COALESCE(extra, ''))) = '${escapeSql(item.extra.toUpperCase())}'`)
   }
   if (item.generationExpression) {
-    const normalized = normalizedGenerationExpressionSql()
+    const normalized = normalizedExpressionSql('generation_expression')
     const expected = escapeSql(item.generationExpression.toLowerCase())
-    clauses.push(`(
-      ${normalized} = '${expected}'
-      OR (
-        ${normalized} LIKE '%decisionisnull%'
-        AND ${normalized} LIKE '%1%'
-        AND ${normalized} LIKE '%null%'
-      )
-    )`)
+    if (item.table === 't_int_content_suggestion' && item.name === 'pending_guard') {
+      clauses.push(`(
+        ${normalized} = '${expected}'
+        OR (
+          ${normalized} LIKE '%decisionisnull%'
+          AND ${normalized} LIKE '%1%'
+          AND ${normalized} LIKE '%null%'
+        )
+      )`)
+    } else {
+      clauses.push(`${normalized} = '${expected}'`)
+    }
   }
   return `
 SELECT '${escapeSql(itemKey(item))}' AS item,
@@ -952,25 +1117,82 @@ WHERE kcu.constraint_schema = DATABASE()
 `.trim()
 }
 
-function normalizedGenerationExpressionSql() {
-  return `LOWER(
+function checkConstraintDefinitionSql(item) {
+  const normalized = normalizedExpressionSql('cc.check_clause')
+  return `
+SELECT '${escapeSql(itemKey(item))}' AS item,
+       IF(COUNT(*) = 1, 1, 0) AS ready
+FROM information_schema.table_constraints tc
+JOIN information_schema.check_constraints cc
+  ON cc.constraint_schema = tc.constraint_schema
+ AND cc.constraint_name = tc.constraint_name
+WHERE tc.constraint_schema = DATABASE()
+  AND tc.table_name = '${escapeSql(item.table)}'
+  AND tc.constraint_type = 'CHECK'
+  AND tc.constraint_name = '${escapeSql(item.name)}'
+  AND ${normalized} = '${escapeSql(item.checkClause.toLowerCase())}'
+`.trim()
+}
+
+function triggerDefinitionSql(item) {
+  const normalized = normalizedExpressionSql('action_statement')
+  return `
+SELECT '${escapeSql(itemKey(item))}' AS item,
+       IF(COUNT(*) = 1, 1, 0) AS ready
+FROM information_schema.triggers
+WHERE trigger_schema = DATABASE()
+  AND event_object_table = '${escapeSql(item.table)}'
+  AND trigger_name = '${escapeSql(item.name)}'
+  AND action_timing = '${escapeSql(item.timing.toUpperCase())}'
+  AND event_manipulation = '${escapeSql(item.event.toUpperCase())}'
+  AND action_orientation = 'ROW'
+  AND ${normalized} LIKE '%${escapeSql(item.actionStatement.toLowerCase())}%'
+`.trim()
+}
+
+function normalizedExpressionSql(expression) {
+  return `REPLACE(
     REPLACE(
       REPLACE(
-        REPLACE(
+        LOWER(
           REPLACE(
-            REPLACE(COALESCE(generation_expression, ''), ' ', ''),
-            '\`',
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  REPLACE(
+                    REPLACE(
+                      REPLACE(
+                        REPLACE(COALESCE(${expression}, ''), ' ', ''),
+                        CHAR(9),
+                        ''
+                      ),
+                      CHAR(10),
+                      ''
+                    ),
+                    CHAR(13),
+                    ''
+                  ),
+                  '\`',
+                  ''
+                ),
+                '(',
+                ''
+              ),
+              ')',
+              ''
+            ),
+            ',',
             ''
-          ),
-          '(',
-          ''
+          )
         ),
-        ')',
+        '_utf8mb4',
         ''
       ),
-      ',',
+      '_utf8',
       ''
-    )
+    ),
+    '_ascii',
+    ''
   )`
 }
 
@@ -987,6 +1209,28 @@ function escapeSql(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll("'", "''")
 }
 
+function runMysql(sql, errorContext) {
+  try {
+    return execFileSync(mysqlBin, [
+      '--batch',
+      '--raw',
+      '--skip-column-names',
+      '-h', config.host,
+      '-P', config.port,
+      '-u', config.user,
+      config.database,
+    ], {
+      encoding: 'utf8',
+      env: childEnv,
+      input: sql,
+      maxBuffer: 4 * 1024 * 1024,
+    }).trim()
+  } catch (error) {
+    console.error(`${errorContext}: ${error.message}`)
+    process.exit(2)
+  }
+}
+
 function inspectFlywayHistory(historyTableExists) {
   const rows = []
   if (historyTableExists) {
@@ -995,29 +1239,37 @@ SELECT COALESCE(version, ''), script, type, COALESCE(CAST(checksum AS CHAR), '')
 FROM flyway_schema_history
 ORDER BY installed_rank;
 `
-    let historyOutput
-    try {
-      historyOutput = execFileSync(mysqlBin, [
-        '--batch',
-        '--raw',
-        '--skip-column-names',
-        '-h', config.host,
-        '-P', config.port,
-        '-u', config.user,
-        config.database,
-        '-e',
-        historySql,
-      ], { encoding: 'utf8', env: childEnv }).trim()
-    } catch (error) {
-      console.error(`schema readiness failed to query Flyway history: ${error.message}`)
-      process.exit(2)
-    }
+    const historyOutput = runMysql(
+      historySql,
+      'schema readiness failed to query Flyway history',
+    )
     if (historyOutput) {
       for (const line of historyOutput.split(/\r?\n/)) {
         const [version, script, type, checksum, success] = line.split(/\t/)
         rows.push({ version, script, type, checksum, success: success === '1' })
       }
     }
+  }
+
+  const demoHistoryTable = migrationManifest.streams.demo.historyTable
+  if (!/^[a-z0-9_]+$/i.test(demoHistoryTable)) {
+    throw new Error(`invalid demo Flyway history table: ${demoHistoryTable}`)
+  }
+  let demoHistoryTableExists = false
+  let appliedDemoMigrations = 0
+  const demoHistoryOutput = runMysql(`
+SELECT COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name = '${escapeSql(demoHistoryTable)}';
+`, 'schema readiness failed to query demo Flyway history')
+  demoHistoryTableExists = demoHistoryOutput === '1'
+  if (demoHistoryTableExists) {
+    const appliedDemoOutput = runMysql(
+      `SELECT COUNT(*) FROM \`${demoHistoryTable}\` WHERE type = 'SQL' AND success = 1;`,
+      'schema readiness failed to query applied demo migrations',
+    )
+    appliedDemoMigrations = Number.parseInt(appliedDemoOutput, 10) || 0
   }
 
   const rowsByVersion = new Map()
@@ -1078,6 +1330,14 @@ ORDER BY installed_rank;
     .map(({ version }) => version)
     .sort((left, right) => left.localeCompare(right, 'en', { numeric: true }))
     .at(-1) || null
+  const demoScripts = new Set(
+    migrationManifest.migrations
+      .filter(({ stream }) => stream === 'demo')
+      .map(({ resource }) => resource.split('/').at(-1)),
+  )
+  const demoMigrationsInCoreHistory = rows
+    .filter(({ type, script }) => type === 'SQL' && demoScripts.has(script))
+    .map(({ script }) => script)
 
   return {
     checks: [
@@ -1105,13 +1365,28 @@ ORDER BY installed_rank;
       scriptMismatches,
       unexpectedVersions,
       assetsReady: migrationAssetChecks.every(({ ready }) => ready),
-      demoMigrationsAutoApplied: false,
+      demoMigrationsAutoApplied: demoMigrationsInCoreHistory.length > 0,
+      demoMigrationsInCoreHistory,
+      demoHistoryTable,
+      demoHistoryTableExists,
+      appliedDemoMigrations,
     },
   }
 }
 
 function migrationForTable(table) {
   if (table === 'flyway_schema_history') return 'Flyway lifecycle metadata'
+  if (table.startsWith('t_collab_')) {
+    return 'db/migration/20260714_collaboration_stage2.sql'
+  }
+  if (table.startsWith('t_incentive_')
+    || table.startsWith('t_virtual_benefit_')
+    || table.startsWith('t_thank_')
+    || table.startsWith('t_bounty_')
+    || table.startsWith('t_quota_bounty')
+    || table.startsWith('t_community_role_')) {
+    return 'db/migration/20260714_incentive_stage3_stage5.sql'
+  }
   if (table === 't_int_post_trust_state'
     || table === 't_int_post_useful_feedback'
     || table === 't_int_content_suggestion') {
@@ -1141,6 +1416,23 @@ function migrationForTable(table) {
 }
 
 function migrationForColumn(table, name) {
+  if (table === 't_post_extension' && name === 'domain') {
+    return 'db/migration/20260712_unclassified_domain.sql'
+  }
+  if (table === 't_community_topic' && ['domain', 'allowed_domains'].includes(name)) {
+    return 'db/migration/20260714_collaboration_stage2.sql'
+  }
+  if (table.startsWith('t_collab_')) {
+    return 'db/migration/20260714_collaboration_stage2.sql'
+  }
+  if (table.startsWith('t_incentive_')
+    || table.startsWith('t_virtual_benefit_')
+    || table.startsWith('t_thank_')
+    || table.startsWith('t_bounty_')
+    || table.startsWith('t_quota_bounty')
+    || table.startsWith('t_community_role_')) {
+    return 'db/migration/20260714_incentive_stage3_stage5.sql'
+  }
   if (table === 't_int_post_trust_state'
     || table === 't_int_post_useful_feedback'
     || table === 't_int_content_suggestion'
@@ -1171,6 +1463,29 @@ function migrationForColumn(table, name) {
 }
 
 function migrationForIndex(table, name) {
+  if ([
+    'idx_incentive_freeze_account_status',
+    'idx_incentive_invalidation_reference',
+    'idx_virtual_benefit_order_benefit',
+    'idx_quota_submission_applicant',
+    'idx_quota_bounty_appeal_applicant',
+  ].includes(name)) {
+    return 'db/migration/20260714_database_integrity_hardening.sql'
+  }
+  if (table === 't_community_topic' && name === 'idx_community_topic_domain') {
+    return 'db/migration/20260714_collaboration_stage2.sql'
+  }
+  if (table.startsWith('t_collab_')) {
+    return 'db/migration/20260714_collaboration_stage2.sql'
+  }
+  if (table.startsWith('t_incentive_')
+    || table.startsWith('t_virtual_benefit_')
+    || table.startsWith('t_thank_')
+    || table.startsWith('t_bounty_')
+    || table.startsWith('t_quota_bounty')
+    || table.startsWith('t_community_role_')) {
+    return 'db/migration/20260714_incentive_stage3_stage5.sql'
+  }
   if (table === 't_int_post_trust_state'
     || table === 't_int_post_useful_feedback'
     || table === 't_int_content_suggestion'
@@ -1207,7 +1522,24 @@ function migrationForIndex(table, name) {
   return 'earlier governance/init migration'
 }
 
-function migrationForConstraint(table) {
+function migrationForConstraint(table, name) {
+  if ([
+    'chk_virtual_benefit_stock_null_pair',
+    'chk_virtual_benefit_order_cost',
+  ].includes(name)) {
+    return 'db/migration/20260714_database_integrity_hardening.sql'
+  }
+  if (table.startsWith('t_collab_')) {
+    return 'db/migration/20260714_collaboration_stage2.sql'
+  }
+  if (table.startsWith('t_incentive_')
+    || table.startsWith('t_virtual_benefit_')
+    || table.startsWith('t_thank_')
+    || table.startsWith('t_bounty_')
+    || table.startsWith('t_quota_bounty')
+    || table.startsWith('t_community_role_')) {
+    return 'db/migration/20260714_incentive_stage3_stage5.sql'
+  }
   if (table === 't_int_post_trust_state'
     || table === 't_int_post_useful_feedback'
     || table === 't_int_content_suggestion') {

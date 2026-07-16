@@ -25,8 +25,6 @@ import java.util.zip.CRC32;
 @Service
 @RequiredArgsConstructor
 public class MigrationCheckService {
-    private static final int EXPECTED_CORE_MIGRATIONS = 52;
-    private static final String LATEST_CORE_MIGRATION = "20260713.01";
     private static final String CORE_MIGRATION_PATTERN = "classpath*:db/flyway/core/V*.sql";
     private static final Pattern FLYWAY_RESOURCE_NAME =
             Pattern.compile("^V(?<version>[0-9.]+)__(?<description>[a-z0-9_]+)\\.sql$");
@@ -35,6 +33,9 @@ public class MigrationCheckService {
 
     @Value("${spring.flyway.table:flyway_schema_history}")
     private String flywayHistoryTable = "flyway_schema_history";
+
+    @Value("${spring.flyway.enabled:true}")
+    private boolean flywayEnabled = true;
 
     public Map<String, Object> governanceStatus() {
         Map<String, Boolean> tables = new LinkedHashMap<>();
@@ -79,7 +80,61 @@ public class MigrationCheckService {
                 "t_int_comment_helpful",
                 "t_int_post_trust_state",
                 "t_int_post_useful_feedback",
-                "t_int_content_suggestion"
+                "t_int_content_suggestion",
+                "t_int_content_trust_profile",
+                "t_int_user_revisit_item",
+                "t_search_content_gap",
+                "t_collab_content_need",
+                "t_collab_content_need_follow",
+                "t_collab_series",
+                "t_collab_series_member",
+                "t_collab_series_submission",
+                "t_collab_series_contribution",
+                "t_collab_activity",
+                "t_collab_activity_submission",
+                "t_collab_curation_suggestion",
+                "t_collab_topic_post",
+                "t_collab_office_hour",
+                "t_collab_office_hour_reservation",
+                "t_collab_office_hour_feedback",
+                "t_collab_discussion",
+                "t_collab_discussion_option",
+                "t_collab_discussion_vote",
+                "t_collab_governance_case",
+                "t_incentive_account",
+                "t_incentive_ledger",
+                "t_incentive_recovery_debt",
+                "t_incentive_reward_rule",
+                "t_incentive_reward_batch",
+                "t_incentive_reward_inbox",
+                "t_incentive_invalidation_job",
+                "t_incentive_reward_guard",
+                "t_incentive_freeze_record",
+                "t_incentive_reconciliation_run",
+                "t_incentive_reconciliation_cursor",
+                "t_incentive_reconciliation_item",
+                "t_incentive_appeal",
+                "t_incentive_risk_scan_cursor",
+                "t_incentive_risk_scan_run",
+                "t_incentive_risk_finding",
+                "t_virtual_benefit_catalog",
+                "t_virtual_benefit_order",
+                "t_virtual_benefit_order_history",
+                "t_virtual_benefit_entitlement",
+                "t_virtual_benefit_entitlement_usage",
+                "t_thank_ticket_daily",
+                "t_thank_action",
+                "t_incentive_domain_policy",
+                "t_bounty_platform_budget_guard",
+                "t_bounty_user_budget_guard",
+                "t_quota_bounty",
+                "t_quota_bounty_submission",
+                "t_quota_bounty_appeal",
+                "t_community_role_definition",
+                "t_community_role_metric",
+                "t_community_role_application",
+                "t_community_role_grant",
+                "t_community_role_grant_history"
         )) {
             tables.put(table, tableExists(table));
         }
@@ -93,6 +148,10 @@ public class MigrationCheckService {
         )) {
             columns.put("t_tag." + column, columnExists("t_tag", column));
         }
+        putColumns(columns, "t_community_topic", List.of(
+                "domain",
+                "allowed_domains"
+        ));
         for (String column : List.of(
                 "ai_review_task_id",
                 "ai_review_fallback_used",
@@ -475,6 +534,8 @@ public class MigrationCheckService {
         indexes.put("t_community_topic.uk_topic_slug", indexExists("t_community_topic", "uk_topic_slug"));
         indexes.put("t_community_topic.idx_topic_status_sort", indexExists("t_community_topic", "idx_topic_status_sort"));
         indexes.put("t_community_topic.idx_topic_featured_sort", indexExists("t_community_topic", "idx_topic_featured_sort"));
+        indexes.put("t_community_topic.idx_community_topic_domain",
+                indexExists("t_community_topic", "idx_community_topic_domain"));
         indexes.put("t_community_topic_tag.uk_topic_tag", indexExists("t_community_topic_tag", "uk_topic_tag"));
         indexes.put("t_community_topic_tag.idx_topic_tag_topic", indexExists("t_community_topic_tag", "idx_topic_tag_topic"));
         indexes.put("t_community_topic_tag.idx_topic_tag_tag", indexExists("t_community_topic_tag", "idx_topic_tag_tag"));
@@ -668,18 +729,29 @@ public class MigrationCheckService {
         }
         Map<String, Object> migrationLifecycle = flywayLifecycleStatus();
         boolean migrationLifecycleReady = Boolean.TRUE.equals(migrationLifecycle.get("ready"));
+        boolean migrationLifecycleRequired = flywayEnabled;
         boolean trustedContentDefinitionsReady = trustedContentReady();
+        boolean stageTwoToFiveDefinitionsReady = stageTwoToFiveReady();
+        boolean trustedDistributionDefinitionsReady = trustedDistributionReady();
         boolean ready = tables.values().stream().allMatch(Boolean::booleanValue)
                 && columns.values().stream().allMatch(Boolean::booleanValue)
                 && indexes.values().stream().allMatch(Boolean::booleanValue)
                 && constraints.values().stream().allMatch(Boolean::booleanValue)
                 && trustedContentDefinitionsReady
-                && migrationLifecycleReady;
+                && stageTwoToFiveDefinitionsReady
+                && trustedDistributionDefinitionsReady
+                && (!migrationLifecycleRequired || migrationLifecycleReady);
         List<String> missing = missingItems(tables, columns, indexes, constraints);
         if (!trustedContentDefinitionsReady) {
             missing.add("schema:trusted-content-definitions");
         }
-        if (!migrationLifecycleReady) {
+        if (!stageTwoToFiveDefinitionsReady) {
+            missing.add("schema:stage-2-5-definitions");
+        }
+        if (!trustedDistributionDefinitionsReady) {
+            missing.add("schema:trusted-distribution-definitions");
+        }
+        if (migrationLifecycleRequired && !migrationLifecycleReady) {
             missing.add("flyway:migration-lifecycle");
         }
         Map<String, Object> status = new LinkedHashMap<>();
@@ -690,6 +762,9 @@ public class MigrationCheckService {
         status.put("indexes", indexes);
         status.put("constraints", constraints);
         status.put("trustedContentDefinitionsReady", trustedContentDefinitionsReady);
+        status.put("stageTwoToFiveDefinitionsReady", stageTwoToFiveDefinitionsReady);
+        status.put("trustedDistributionDefinitionsReady", trustedDistributionDefinitionsReady);
+        status.put("migrationLifecycleRequired", migrationLifecycleRequired);
         status.put("migrationLifecycle", migrationLifecycle);
         status.put("missing", missing);
         status.put("migration", "Flyway manages the ordered files listed in status.migrations.");
@@ -719,7 +794,11 @@ public class MigrationCheckService {
                 "db/migration/20260708_public_read_indexes.sql",
                 "db/migration/20260709_retry_task_claim_indexes.sql",
                 "db/migration/20260712_unclassified_domain.sql",
-                "db/migration/20260713_trusted_content_stage1.sql"
+                "db/migration/20260713_trusted_content_stage1.sql",
+                "db/migration/20260714_collaboration_stage2.sql",
+                "db/migration/20260714_incentive_stage3_stage5.sql",
+                "db/migration/20260714_database_integrity_hardening.sql",
+                "db/migration/20260715_trusted_distribution_revisit.sql"
         ));
         if (!ready) {
             status.put("message", "数据库结构或 Flyway 执行历史未补齐，相关功能会降级或被阻断。");
@@ -766,6 +845,9 @@ public class MigrationCheckService {
                 && indexExists("t_community_topic", "uk_topic_slug")
                 && indexExists("t_community_topic", "idx_topic_status_sort")
                 && indexExists("t_community_topic", "idx_topic_featured_sort")
+                && columnExists("t_community_topic", "domain")
+                && columnExists("t_community_topic", "allowed_domains")
+                && indexExists("t_community_topic", "idx_community_topic_domain")
                 && indexExists("t_community_topic_tag", "uk_topic_tag")
                 && indexExists("t_community_topic_tag", "idx_topic_tag_topic")
                 && indexExists("t_community_topic_tag", "idx_topic_tag_tag")
@@ -997,6 +1079,78 @@ public class MigrationCheckService {
                 "RESTRICT", "RESTRICT");
     }
 
+    public boolean trustedDistributionReady() {
+        return tableExists("t_int_content_trust_profile")
+                && tableExists("t_int_user_revisit_item")
+                && tableExists("t_search_content_gap")
+                && columnExists("t_int_content_trust_profile", "post_id")
+                && columnExists("t_int_content_trust_profile", "author_uid")
+                && columnExists("t_int_content_trust_profile", "completeness_score")
+                && columnExists("t_int_content_trust_profile", "last_confirmed_at")
+                && indexExists("t_int_content_trust_profile", "idx_trust_profile_author")
+                && indexExists("t_int_user_revisit_item", "uk_revisit_item_dedup")
+                && indexExists("t_int_user_revisit_item", "idx_revisit_user_status_due")
+                && indexExists("t_search_content_gap", "uk_search_content_gap_key")
+                && indexExists("t_search_content_gap", "idx_search_content_gap_queue");
+    }
+
+    public boolean stageTwoToFiveReady() {
+        return columnDefinitionMatches("t_post_extension", "domain",
+                "tinyint", true, null, null, "VIRTUAL GENERATED", "json_extractext_json$.domain")
+                && columnDefinitionMatches("t_collab_curation_suggestion", "pending_guard",
+                "tinyint", true, null, null, "STORED GENERATED", "review_status=pending")
+                && columnDefinitionMatches("t_collab_governance_case", "pending_guard",
+                "tinyint", true, null, null, "STORED GENERATED", "case_status=pending")
+                && columnDefinitionMatches("t_collab_governance_case", "appeal_guard",
+                "bigint", true, null, null, "STORED GENERATED", "case_type=appeal")
+                && columnDefinitionMatches("t_community_role_application", "active_guard",
+                "tinyint", true, null, null, "STORED GENERATED", "application_status=submitted")
+                && columnDefinitionMatches("t_community_role_grant", "active_guard",
+                "tinyint", true, null, null, "STORED GENERATED", "grant_statusinactive")
+                && indexDefinitionMatches("t_collab_curation_suggestion",
+                "uk_collab_curation_pending", true,
+                "topic_id", "post_id", "submitter_uid", "pending_guard")
+                && indexDefinitionMatches("t_collab_governance_case",
+                "uk_collab_case_pending", true,
+                "case_type", "target_type", "target_id", "submitter_uid", "pending_guard")
+                && indexDefinitionMatches("t_collab_governance_case",
+                "uk_collab_case_single_appeal", true, "appeal_guard")
+                && indexDefinitionMatches("t_incentive_account",
+                "uk_incentive_account_scope", true,
+                "user_id", "account_type", "domain_code")
+                && indexDefinitionMatches("t_incentive_ledger",
+                "uk_incentive_ledger_idempotency", true, "idempotency_key")
+                && indexDefinitionMatches("t_incentive_ledger",
+                "uk_incentive_ledger_reversal", true, "reversed_entry_id")
+                && indexDefinitionMatches("t_incentive_freeze_record",
+                "idx_incentive_freeze_account_status", false,
+                "account_id", "freeze_status", "blocks_spending", "freeze_amount")
+                && indexDefinitionMatches("t_incentive_invalidation_job",
+                "idx_incentive_invalidation_reference", false,
+                "reference_type", "reference_id")
+                && indexDefinitionMatches("t_virtual_benefit_order",
+                "idx_virtual_benefit_order_benefit", false, "benefit_id")
+                && indexDefinitionMatches("t_quota_bounty_submission",
+                "idx_quota_submission_applicant", false,
+                "applicant_uid", "create_time", "id")
+                && indexDefinitionMatches("t_quota_bounty_appeal",
+                "idx_quota_bounty_appeal_applicant", false,
+                "applicant_uid", "create_time", "id")
+                && indexDefinitionMatches("t_community_role_application",
+                "uk_community_role_active_application", true,
+                "applicant_uid", "role_code", "domain_code", "active_guard")
+                && indexDefinitionMatches("t_community_role_grant",
+                "uk_community_role_active_grant", true,
+                "user_id", "role_code", "domain_code", "active_guard")
+                && checkConstraintExists("t_incentive_account", "chk_incentive_account_balances")
+                && checkConstraintExists("t_virtual_benefit_catalog", "chk_virtual_benefit_stock_null_pair")
+                && checkConstraintExists("t_virtual_benefit_order", "chk_virtual_benefit_order_cost")
+                && triggerDefinitionMatches("t_incentive_ledger",
+                "trg_incentive_ledger_block_update", "BEFORE", "UPDATE", "append-only")
+                && triggerDefinitionMatches("t_incentive_ledger",
+                "trg_incentive_ledger_block_delete", "BEFORE", "DELETE", "append-only");
+    }
+
     public boolean contentAssistReady() {
         return tableExists("t_content_assist_record")
                 && columnExists("t_content_assist_record", "scene")
@@ -1194,12 +1348,17 @@ public class MigrationCheckService {
             expectedMigrations = Map.of();
             migrationAssetError = e.getMessage();
         }
-        boolean assetsReady = expectedMigrations.size() == EXPECTED_CORE_MIGRATIONS
-                && expectedMigrations.containsKey(LATEST_CORE_MIGRATION);
+        int expectedCoreMigrations = expectedMigrations.size();
+        String latestExpectedVersion = expectedMigrations.keySet().stream()
+                .reduce((previous, current) -> current)
+                .orElse(null);
+        boolean assetsReady = migrationAssetError == null
+                && expectedCoreMigrations > 0
+                && latestExpectedVersion != null;
         status.put("historyTable", historyTable);
         status.put("historyTableExists", historyTableExists);
-        status.put("expectedCoreMigrations", EXPECTED_CORE_MIGRATIONS);
-        status.put("latestExpectedVersion", LATEST_CORE_MIGRATION);
+        status.put("expectedCoreMigrations", expectedCoreMigrations);
+        status.put("latestExpectedVersion", latestExpectedVersion);
         status.put("baselineVersion", "0");
         status.put("assetsReady", assetsReady);
         if (migrationAssetError != null) {
@@ -1209,7 +1368,7 @@ public class MigrationCheckService {
             status.put("ready", false);
             status.put("appliedCoreMigrations", 0);
             status.put("failedMigrations", 0);
-            status.put("missingChecksums", EXPECTED_CORE_MIGRATIONS);
+            status.put("missingChecksums", expectedCoreMigrations);
             status.put("duplicateVersions", 0);
             status.put("missingVersions", List.copyOf(expectedMigrations.keySet()));
             status.put("checksumMismatches", List.of());
@@ -1304,7 +1463,7 @@ public class MigrationCheckService {
         List<String> unexpectedVersions = unexpectedVersionSet.stream().sorted().toList();
 
         boolean ready = assetsReady
-                && appliedCoreMigrations == EXPECTED_CORE_MIGRATIONS
+                && appliedCoreMigrations == expectedCoreMigrations
                 && failedMigrations == 0
                 && missingChecksums == 0
                 && duplicateVersions == 0
@@ -1312,7 +1471,7 @@ public class MigrationCheckService {
                 && checksumMismatches.isEmpty()
                 && scriptMismatches.isEmpty()
                 && unexpectedVersions.isEmpty()
-                && LATEST_CORE_MIGRATION.equals(latestAppliedVersion);
+                && latestExpectedVersion.equals(latestAppliedVersion);
 
         status.put("ready", ready);
         status.put("appliedCoreMigrations", appliedCoreMigrations);
@@ -1414,9 +1573,7 @@ public class MigrationCheckService {
         if (generationExpressionMarker != null) {
             String normalized = normalizeSqlExpression(value(row, "generation_expression"));
             String marker = normalizeSqlExpression(generationExpressionMarker);
-            if (!normalized.contains(marker)
-                    || !normalized.contains("1")
-                    || !normalized.contains("null")) {
+            if (!normalized.contains(marker)) {
                 return false;
             }
         }
@@ -1509,9 +1666,15 @@ public class MigrationCheckService {
     }
 
     private static String normalizeSqlExpression(String value) {
-        return value == null ? "" : value
+        if (value == null) {
+            return "";
+        }
+        return value
                 .replaceAll("[\\s`(),']", "")
-                .toLowerCase();
+                .toLowerCase()
+                .replace("_utf8mb4", "")
+                .replace("_utf8", "")
+                .replace("_ascii", "");
     }
 
     private String flywayHistoryTableName() {
@@ -1588,6 +1751,42 @@ public class MigrationCheckService {
                   AND constraint_name = ?
                 """, Integer.class, tableName, constraintName);
         return count != null && count > 0;
+    }
+
+    private boolean checkConstraintExists(String tableName, String constraintName) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.table_constraints
+                WHERE constraint_schema = DATABASE()
+                  AND table_name = ?
+                  AND constraint_name = ?
+                  AND constraint_type = 'CHECK'
+                """, Integer.class, tableName, constraintName);
+        return count != null && count == 1;
+    }
+
+    private boolean triggerDefinitionMatches(
+            String tableName,
+            String triggerName,
+            String timing,
+            String event,
+            String actionMarker) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.triggers
+                WHERE trigger_schema = DATABASE()
+                  AND event_object_table = ?
+                  AND trigger_name = ?
+                  AND action_timing = ?
+                  AND event_manipulation = ?
+                  AND LOWER(action_statement) LIKE ?
+                """, Integer.class,
+                tableName,
+                triggerName,
+                timing,
+                event,
+                "%" + actionMarker.toLowerCase() + "%");
+        return count != null && count == 1;
     }
 
     private record FlywayMigrationExpectation(String version, String script, int checksum) {

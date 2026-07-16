@@ -55,6 +55,19 @@ public interface DiscussionFollowMapper extends BaseMapper<DiscussionFollowPO> {
                      @Param("uid") Long uid,
                      @Param("commentId") Long commentId);
 
+    @Update("""
+            UPDATE t_int_discussion_follow
+            SET last_read_comment_id = GREATEST(COALESCE(last_read_comment_id, 0), #{commentId}),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE post_id = #{postId}
+              AND uid = #{uid}
+              AND follow_status = 1
+              AND is_deleted = 0
+            """)
+    int markRead(@Param("postId") Long postId,
+                 @Param("uid") Long uid,
+                 @Param("commentId") Long commentId);
+
     @Select("""
             SELECT uid
             FROM t_int_discussion_follow

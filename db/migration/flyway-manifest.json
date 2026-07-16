@@ -7,7 +7,7 @@
                     "core":  {
                                  "location":  "classpath:db/flyway/core",
                                  "autoMigrate":  true,
-                                 "expectedMigrations":  54
+                                 "expectedMigrations":  57
                              },
                     "demo":  {
                                  "location":  "classpath:db/flyway/demo",
@@ -538,6 +538,33 @@
                            "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260714.02__incentive_stage3_stage5.sql",
                            "sha256":  "203eabb70d66f3406d70524d94c0d6ca2dbb841c57f991b59e3d67e45e23cb65",
                            "flywayChecksum":  352378318
+                       },
+                       {
+                           "version":  "20260714.03",
+                           "description":  "database_integrity_hardening",
+                           "stream":  "core",
+                           "source":  "db/migration/20260714_database_integrity_hardening.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260714.03__database_integrity_hardening.sql",
+                           "sha256":  "f481da11cd5798db5a93848a0fa3b764a28159c567cd3e2b96851f3f7d50b0ea",
+                           "flywayChecksum":  -1645347877
+                       },
+                       {
+                           "version":  "20260715.01",
+                           "description":  "trusted_distribution_revisit",
+                           "stream":  "core",
+                           "source":  "db/migration/20260715_trusted_distribution_revisit.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260715.01__trusted_distribution_revisit.sql",
+                           "sha256":  "d8bc46961b53fc292d4ffcf5cf2a97dbf86b623963dd779765ecda9c8a025069",
+                           "flywayChecksum":  227874065
+                       },
+                       {
+                           "version":  "20260715.02",
+                           "description":  "content_maintenance_stage8",
+                           "stream":  "core",
+                           "source":  "db/migration/20260715_content_maintenance_stage8.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260715.02__content_maintenance_stage8.sql",
+                           "sha256":  "db070b627228a95680718be600b96bf2ab38db12dd64a5cc6403979efd1cbfc6",
+                           "flywayChecksum":  -1332374068
                        }
                    ]
 }

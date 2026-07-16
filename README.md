@@ -85,6 +85,9 @@ mvn -DskipTests clean install
 启动后端：
 
 ```powershell
+$env:SPRING_PROFILES_ACTIVE = "local"
+$env:DB_PASSWORD = "offerlab-local-db-change-me"
+$env:REDIS_PASSWORD = "offerlab-local-redis-change-me"
 mvn -pl community-bootstrap -am spring-boot:run
 ```
 

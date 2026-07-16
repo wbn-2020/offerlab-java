@@ -56,6 +56,13 @@ public interface GrowthInsightMapper {
                 ) AS freshnessAwaitingConfirmation,
                 (
                     SELECT COUNT(*)
+                    FROM t_int_content_trust_profile profile
+                    JOIN public_posts p ON p.postId = profile.post_id
+                    WHERE profile.last_confirmed_at IS NULL
+                       OR profile.last_confirmed_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 180 DAY)
+                ) AS profileConfirmationDue,
+                (
+                    SELECT COUNT(*)
                     FROM public_posts p
                     LEFT JOIN t_int_post_trust_state s ON s.post_id = p.postId
                     WHERE p.postType = #{questionPostType}
@@ -137,6 +144,29 @@ public interface GrowthInsightMapper {
             </script>
             """)
     List<Map<String, Object>> selectFreshnessItems(@Param("authorId") Long authorId);
+
+    @Select("""
+            <script>
+            SELECT p.id AS postId,
+                   p.title AS postTitle,
+                   'PROFILE_CONFIRMATION_DUE' AS status,
+                   profile.create_time AS createdAt,
+                   COALESCE(profile.last_confirmed_at, profile.update_time) AS updatedAt
+            FROM t_int_content_trust_profile profile
+            JOIN t_post_main p ON p.id = profile.post_id
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.author_id = #{authorId}
+              AND (profile.last_confirmed_at IS NULL
+                   OR profile.last_confirmed_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 180 DAY))
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
+            ORDER BY COALESCE(profile.last_confirmed_at, profile.update_time) ASC, p.id DESC
+            LIMIT 5
+            </script>
+            """)
+    List<Map<String, Object>> selectProfileConfirmationItems(@Param("authorId") Long authorId);
 
     @Select("""
             <script>
@@ -312,4 +342,45 @@ public interface GrowthInsightMapper {
     List<Map<String, Object>> selectCreatorReplyOpportunities(@Param("authorId") Long authorId,
                                                               @Param("since") LocalDateTime since,
                                                               @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT e.domain AS domain,
+                   COUNT(DISTINCT p.id) AS publicPostCount,
+                   COUNT(DISTINCT profile.post_id) AS trustProfileCount,
+                   COUNT(DISTINCT CASE
+                       WHEN state.freshness_status = 'AWAITING_AUTHOR_CONFIRMATION' THEN p.id
+                   END) AS freshnessAwaitingConfirmation,
+                   COUNT(DISTINCT CASE
+                       WHEN suggestion.decision IS NULL THEN suggestion.id
+                   END) AS pendingSuggestions,
+                   COUNT(DISTINCT CASE
+                       WHEN p.post_type = #{questionPostType}
+                        AND COALESCE(state.question_status, 'OPEN') IN ('OPEN', 'ANSWERED')
+                       THEN p.id
+                   END) AS unresolvedQuestions,
+                   COUNT(DISTINCT CASE
+                       WHEN need.need_status IN ('OPEN', 'CLAIMED') THEN need.id
+                   END) AS openContentNeeds
+            FROM t_post_main p
+            JOIN t_post_extension e ON e.post_id = p.id
+            LEFT JOIN t_int_content_trust_profile profile ON profile.post_id = p.id
+            LEFT JOIN t_int_post_trust_state state ON state.post_id = p.id
+            LEFT JOIN t_int_content_suggestion suggestion ON suggestion.post_id = p.id
+            LEFT JOIN t_collab_content_need need
+              ON need.domain = e.domain
+             AND need.moderation_hidden = 0
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND e.domain IS NOT NULL
+              <if test="domain != null">
+                AND e.domain = #{domain}
+              </if>
+            GROUP BY e.domain
+            ORDER BY e.domain ASC
+            </script>
+            """)
+    List<Map<String, Object>> selectChannelHealth(@Param("domain") Integer domain,
+                                                   @Param("questionPostType") int questionPostType);
 }

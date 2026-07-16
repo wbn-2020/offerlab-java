@@ -1,5 +1,6 @@
 param(
-  [switch] $Write
+  [switch] $Write,
+  [switch] $AllowTrackedMigrationRewrite
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,8 +13,65 @@ $resourceRoot = [System.IO.Path]::GetFullPath(
 $manifestPath = Join-Path $sourceDir "flyway-manifest.json"
 $initSeedPath = Join-Path $repoRoot "db\init\99_seed.sql"
 $demoSeedSourcePath = Join-Path $sourceDir "20260712_demo_community_seed.sql"
+$initMirrorMappings = @(
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260714_collaboration_stage2.sql"
+    Destination = Join-Path $repoRoot "db\init\14_collaboration.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260714_incentive_stage3_stage5.sql"
+    Destination = Join-Path $repoRoot "db\init\15_incentive.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260714_database_integrity_hardening.sql"
+    Destination = Join-Path $repoRoot "db\init\16_database_integrity_hardening.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260715_trusted_distribution_revisit.sql"
+    Destination = Join-Path $repoRoot "db\init\17_trusted_distribution_revisit.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260715_content_maintenance_stage8.sql"
+    Destination = Join-Path $repoRoot "db\init\18_content_maintenance_stage8.sql"
+  }
+)
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"
 $generatedSeedEnd = "-- END GENERATED FROM db/migration/20260712_demo_community_seed.sql"
+$existingManifest = $null
+$existingVersionsBySource = @{}
+$existingMigrationsBySource = @{}
+$usedVersions = [System.Collections.Generic.HashSet[string]]::new(
+  [System.StringComparer]::OrdinalIgnoreCase
+)
+$nextSequenceByDate = @{}
+
+if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+  $existingManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  foreach ($migration in @($existingManifest.migrations)) {
+    $source = [string] $migration.source
+    $version = [string] $migration.version
+    if ($source -notmatch "^db/migration/20\d{6}_[a-z0-9_]+\.sql$") {
+      throw "Existing Flyway manifest contains an invalid source: $source"
+    }
+    if ($version -notmatch "^(?<date>\d{8})\.(?<sequence>\d{2})$") {
+      throw "Existing Flyway manifest contains an invalid version: $version"
+    }
+    if ($existingVersionsBySource.ContainsKey($source)) {
+      throw "Existing Flyway manifest contains a duplicate source: $source"
+    }
+    if (-not $usedVersions.Add($version)) {
+      throw "Existing Flyway manifest contains a duplicate version: $version"
+    }
+    $existingVersionsBySource[$source] = $version
+    $existingMigrationsBySource[$source] = $migration
+    $date = $Matches.date
+    $sequence = [int] $Matches.sequence
+    $nextSequenceByDate[$date] = [Math]::Max(
+      $sequence,
+      [int] ($nextSequenceByDate[$date] | ForEach-Object { $_ } | Select-Object -First 1)
+    )
+  }
+}
 
 if (-not $resourceRoot.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "Resolved Flyway resource directory escapes the repository: $resourceRoot"
@@ -74,11 +132,22 @@ namespace OfferLabMigrationTools
 
 $sourceFiles = Get-ChildItem -LiteralPath $sourceDir -Filter "20*.sql" -File |
   Sort-Object Name
-if ($sourceFiles.Count -lt 56) {
-  throw "Expected at least 56 canonical migration files, found $($sourceFiles.Count)."
+if ($sourceFiles.Count -eq 0) {
+  throw "No canonical migration files were found in $sourceDir."
 }
 
-$dateSequence = @{}
+$canonicalSources = [System.Collections.Generic.HashSet[string]]::new(
+  [System.StringComparer]::OrdinalIgnoreCase
+)
+foreach ($sourceFile in $sourceFiles) {
+  [void] $canonicalSources.Add("db/migration/$($sourceFile.Name)")
+}
+foreach ($existingSource in $existingVersionsBySource.Keys) {
+  if (-not $canonicalSources.Contains($existingSource)) {
+    throw "Refusing to remove a migration already tracked by the Flyway manifest: $existingSource"
+  }
+}
+
 $migrations = foreach ($sourceFile in $sourceFiles) {
   if ($sourceFile.BaseName -notmatch "^(?<date>\d{8})_(?<description>[a-z0-9_]+)$") {
     throw "Migration name is not canonical: $($sourceFile.Name)"
@@ -86,15 +155,42 @@ $migrations = foreach ($sourceFile in $sourceFiles) {
 
   $date = $Matches.date
   $description = $Matches.description
-  $dateSequence[$date] = 1 + ($dateSequence[$date] | ForEach-Object { $_ } | Select-Object -First 1)
-  $sequence = $dateSequence[$date]
-  $version = "$date.$($sequence.ToString('00'))"
+  $sourceRelative = "db/migration/$($sourceFile.Name)"
+  if ($existingVersionsBySource.ContainsKey($sourceRelative)) {
+    $version = $existingVersionsBySource[$sourceRelative]
+    if (-not $version.StartsWith("$date.", [System.StringComparison]::Ordinal)) {
+      throw "Migration date does not match its preserved Flyway version: $sourceRelative -> $version"
+    }
+  } else {
+    $sequence = 1 + [int] (
+      $nextSequenceByDate[$date] | ForEach-Object { $_ } | Select-Object -First 1
+    )
+    do {
+      $version = "$date.$($sequence.ToString('00'))"
+      $sequence++
+    } while ($usedVersions.Contains($version))
+    $nextSequenceByDate[$date] = $sequence - 1
+    [void] $usedVersions.Add($version)
+  }
   $stream = if ($description.StartsWith("demo_")) { "demo" } else { "core" }
   $flywayName = "V${version}__${description}.sql"
   $resourceRelative = "community-bootstrap/src/main/resources/db/flyway/$stream/$flywayName"
   $resourcePath = Join-Path $repoRoot ($resourceRelative.Replace("/", "\"))
   $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFile.FullName).Hash.ToLowerInvariant()
   $flywayChecksum = Get-FlywayChecksum -Path $sourceFile.FullName
+  if ($existingMigrationsBySource.ContainsKey($sourceRelative)) {
+    $trackedMigration = $existingMigrationsBySource[$sourceRelative]
+    $trackedHash = ([string] $trackedMigration.sha256).ToLowerInvariant()
+    $trackedChecksum = [int] $trackedMigration.flywayChecksum
+    $contentChanged = $trackedHash -ne $sourceHash -or $trackedChecksum -ne $flywayChecksum
+    if ($contentChanged -and -not $AllowTrackedMigrationRewrite) {
+      throw (
+        "Tracked migration content changed: $sourceRelative. " +
+        "Published migrations are immutable. If this migration is known to be " +
+        "unreleased, rerun with -AllowTrackedMigrationRewrite and record the reason."
+      )
+    }
+  }
 
   if ($Write) {
     $targetDir = Split-Path -Parent $resourcePath
@@ -114,12 +210,13 @@ $migrations = foreach ($sourceFile in $sourceFiles) {
     version = $version
     description = $description
     stream = $stream
-    source = "db/migration/$($sourceFile.Name)"
+    source = $sourceRelative
     resource = $resourceRelative
     sha256 = $sourceHash
     flywayChecksum = $flywayChecksum
   }
 }
+$migrations = @($migrations | Sort-Object { [string] $_["version"] })
 
 $expectedResources = @($migrations | ForEach-Object { $_.resource })
 if ($Write -and (Test-Path -LiteralPath $resourceRoot)) {
@@ -131,6 +228,21 @@ if ($Write -and (Test-Path -LiteralPath $resourceRoot)) {
     $relative = $resolved.Substring($repoRoot.Length + 1).Replace("\", "/")
     if ($relative -notin $expectedResources) {
       Remove-Item -LiteralPath $resolved -Force
+    }
+  }
+}
+
+$initMirrorMappings | ForEach-Object {
+  if ($Write) {
+    Copy-Item -LiteralPath $_.Source -Destination $_.Destination -Force
+  } else {
+    if (-not (Test-Path -LiteralPath $_.Destination -PathType Leaf)) {
+      throw "Database init mirror is missing: $($_.Destination)"
+    }
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.Source).Hash
+    $destinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.Destination).Hash
+    if ($sourceHash -ne $destinationHash) {
+      throw "Database init mirror drift detected: $($_.Destination)"
     }
   }
 }
@@ -226,7 +338,6 @@ if ($Write) {
   if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "Flyway manifest is missing: $manifestPath"
   }
-  $existingManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
   if (($existingManifest | ConvertTo-Json -Depth 8) -ne $manifestJson) {
     throw "Flyway manifest drift detected. Run this script with -Write."
   }

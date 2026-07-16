@@ -106,6 +106,23 @@ public class DiscussionFollowService implements DiscussionFollowFacade {
     }
 
     @Override
+    @Transactional
+    public DiscussionFollowStatusDTO markRead(Long uid, Long postId, Long lastReadCommentId) {
+        requireUid(uid);
+        requirePostId(postId);
+        if (lastReadCommentId == null || lastReadCommentId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        requirePostVisible(postId, uid);
+        DiscussionFollowPO existing = activeFollow(uid, postId);
+        if (existing == null) {
+            return toStatus(postId, null, "not_followed");
+        }
+        discussionFollowMapper.markRead(postId, uid, lastReadCommentId);
+        return toStatus(postId, activeFollow(uid, postId), "followed");
+    }
+
+    @Override
     public PageResult<PostBriefDTO> listFollowedPosts(Long uid, long cursor, int size) {
         requireUid(uid);
         int limit = Math.max(1, Math.min(size, MAX_PAGE_SIZE));

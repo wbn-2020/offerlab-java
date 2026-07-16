@@ -15,6 +15,8 @@ public interface DiscussionFollowFacade {
 
     DiscussionFollowStatusDTO unfollow(Long uid, Long postId);
 
+    DiscussionFollowStatusDTO markRead(Long uid, Long postId, Long lastReadCommentId);
+
     PageResult<PostBriefDTO> listFollowedPosts(Long uid, long cursor, int size);
 
     List<Long> followerUidsForNotification(Long postId, Set<Long> excludedUids, int limit);

@@ -15,6 +15,7 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
@@ -25,12 +26,14 @@ import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
+import com.offerlab.community.post.infrastructure.persistence.mapper.PostTrustSignalsMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
+import com.offerlab.community.post.infrastructure.persistence.projection.PostTrustSignalsRow;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
@@ -61,6 +64,7 @@ public class PostFacadeImpl implements PostFacade {
     private final PostExtensionMapper extensionMapper;
     private final PostCounterMapper counterMapper;
     private final TagMapper tagMapper;
+    private final PostTrustSignalsMapper trustSignalsMapper;
     private final PostCounterRedis postCounterRedis;
     private final PostVersionHistoryService versionHistoryService;
     private final MultiLevelCache<PostDTO> multiLevelCache;
@@ -92,6 +96,18 @@ public class PostFacadeImpl implements PostFacade {
             return null;
         }
         return enrichFull(dto, viewerUid);
+    }
+
+    @Override
+    public PostDTO getPostForAuthor(Long postId, Long authorUid) {
+        if (postId == null || postId <= 0 || authorUid == null || authorUid <= 0) {
+            return null;
+        }
+        PostDTO dto = postRepo.findById(postId)
+                .filter(post -> Objects.equals(post.getAuthorId(), authorUid))
+                .map(this::toFullDto)
+                .orElse(null);
+        return dto == null ? null : enrichFull(dto, authorUid);
     }
 
     @Override
@@ -509,8 +525,10 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, PostCounterDTO> counters = batchGetCounters(postIds);
         Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(
                 posts.stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet()));
+        Map<Long, PostTrustSignalsDTO> trustSignals = trustSignalsByPostIds(postIds);
         posts.forEach(p -> {
             p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
+            p.setTrustSignals(trustSignals.getOrDefault(p.getId(), emptyTrustSignals()));
             boolean revealAuthor = !isAnonymousPost(p) || canViewRealAuthor(viewerUid, p.getAuthorId());
             p.setAuthor(revealAuthor ? sanitizeAuthor(viewerUid, p.getAuthorId(), authors.get(p.getAuthorId())) : anonymousAuthor());
             if (!revealAuthor) {
@@ -539,6 +557,7 @@ public class PostFacadeImpl implements PostFacade {
                 .anonymous(isAnonymousPost(dto))
                 .tags(dto.getTags())
                 .counter(batchGetCounters(List.of(dto.getId())).getOrDefault(dto.getId(), emptyCounter(dto.getId())))
+                .trustSignals(trustSignalsByPostIds(List.of(dto.getId())).getOrDefault(dto.getId(), emptyTrustSignals()))
                 .createTime(dto.getCreateTime())
                 .updateTime(dto.getUpdateTime())
                 .build();
@@ -662,6 +681,55 @@ public class PostFacadeImpl implements PostFacade {
                 .profileVisible(false)
                 .intentVisible(false)
                 .privacyReason("匿名发布")
+                .build();
+    }
+
+    private Map<Long, PostTrustSignalsDTO> trustSignalsByPostIds(Collection<Long> postIds) {
+        List<Long> ids = normalizeBatchIds(postIds, MAX_BATCH_LOOKUP_IDS);
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return trustSignalsMapper.selectByPostIds(ids).stream()
+                    .filter(row -> row.getPostId() != null)
+                    .collect(Collectors.toMap(PostTrustSignalsRow::getPostId, this::toTrustSignals,
+                            (left, right) -> left));
+        } catch (RuntimeException ignored) {
+            // Stage 6 migration may be absent during a rolling upgrade. Public post reads must stay available.
+            return Map.of();
+        }
+    }
+
+    private PostTrustSignalsDTO toTrustSignals(PostTrustSignalsRow row) {
+        boolean profileAvailable = Objects.equals(row.getProfileAvailable(), 1);
+        boolean acceptedAnswer = row.getAcceptedCommentId() != null && row.getAcceptedCommentId() > 0;
+        String freshness = row.getFreshnessStatus();
+        boolean resolved = acceptedAnswer
+                || "ACCEPTED".equals(freshness)
+                || "UPDATED".equals(freshness)
+                || "CURRENT".equals(freshness);
+        return PostTrustSignalsDTO.builder()
+                .profileAvailable(profileAvailable)
+                .completenessScore(Math.max(0, Math.min(row.getCompletenessScore() == null ? 0 : row.getCompletenessScore(), 100)))
+                .lastConfirmedAt(row.getLastConfirmedAt())
+                .freshnessStatus(freshness)
+                .hasAcceptedAnswer(acceptedAnswer)
+                .acceptedSuggestionCount(Math.max(0, row.getAcceptedSuggestionCount() == null ? 0 : row.getAcceptedSuggestionCount()))
+                .publicCorrectionCount(Math.max(0, row.getPublicCorrectionCount() == null ? 0 : row.getPublicCorrectionCount()))
+                .sourceComplete(Objects.equals(row.getSourceComplete(), 1))
+                .resolved(resolved)
+                .build();
+    }
+
+    private PostTrustSignalsDTO emptyTrustSignals() {
+        return PostTrustSignalsDTO.builder()
+                .profileAvailable(false)
+                .completenessScore(0)
+                .hasAcceptedAnswer(false)
+                .acceptedSuggestionCount(0)
+                .publicCorrectionCount(0)
+                .sourceComplete(false)
+                .resolved(false)
                 .build();
     }
 

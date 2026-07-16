@@ -13,6 +13,7 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.api.dto.SearchAnalyticsTrackCmd;
 import com.offerlab.community.search.api.dto.SearchStatusDTO;
+import com.offerlab.community.search.api.dto.SearchTrustFilter;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -76,11 +77,22 @@ public class SearchController {
                                                        @RequestParam(required = false) Integer type,
                                                        @RequestParam(required = false) @Min(1) @Max(5) Integer domain,
                                                        @RequestParam(required = false) @Size(max = 16) String sort,
+                                                       @RequestParam(required = false) Boolean trustProfile,
+                                                       @RequestParam(required = false) @Size(max = 40) String freshnessStatus,
+                                                       @RequestParam(required = false) Boolean resolved,
+                                                       @RequestParam(required = false) Boolean sourceComplete,
                                                        @RequestParam(required = false) @Size(max = 32) String cursor,
                                                        @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
                                                        HttpServletRequest request) {
         domain = requireOptionalDomain(domain);
-        return Result.ok(facade.searchPosts(keyword, company, position, type, domain, sort, cursor, size, false).publicView());
+        SearchTrustFilter trustFilter;
+        try {
+            trustFilter = SearchTrustFilter.of(trustProfile, freshnessStatus, resolved, sourceComplete);
+        } catch (IllegalArgumentException ex) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), ex.getMessage());
+        }
+        return Result.ok(facade.searchPosts(keyword, company, position, type, domain, sort, cursor, size, false,
+                trustFilter).publicView());
     }
 
     @GetMapping("/suggest")

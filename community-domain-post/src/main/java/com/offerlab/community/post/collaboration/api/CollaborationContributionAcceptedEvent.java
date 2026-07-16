@@ -15,6 +15,8 @@ public class CollaborationContributionAcceptedEvent {
     private String contributionType;
     private Long sourceId;
     private Long targetPostId;
+    private String resolutionType;
+    private Long resolutionId;
     private String stableKey;
     private Long occurredAt;
 }

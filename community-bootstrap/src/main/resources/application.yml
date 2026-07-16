@@ -114,3 +114,11 @@ logging:
     com.offerlab.community: ${OFFERLAB_LOG_LEVEL:INFO}
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}] %logger{36} - %msg%n"
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  flyway:
+    enabled: ${OFFERLAB_FLYWAY_ENABLED:false}

@@ -6,6 +6,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.search.application.SearchContentGapService;
 import com.offerlab.community.search.application.SearchIndexTaskService;
 import com.offerlab.community.search.controller.SearchAdminController;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +34,8 @@ class SearchAdminControllerApiTest {
     @Mock
     private SearchIndexTaskService taskService;
     @Mock
+    private SearchContentGapService contentGapService;
+    @Mock
     private AdminPermissionService adminPermissionService;
     @Mock
     private AdminAuditService adminAuditService;
@@ -43,7 +46,7 @@ class SearchAdminControllerApiTest {
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new SearchAdminController(taskService, adminPermissionService, adminAuditService), jwtService);
+        mvc = ApiTestSupport.mvc(new SearchAdminController(taskService, contentGapService, adminPermissionService, adminAuditService), jwtService);
     }
 
     @Test

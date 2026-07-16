@@ -7,9 +7,9 @@ manual ledger, not an automatic migration runner.
 
 - `db/init` is for fresh local or disposable demo schemas only. It contains
   destructive guards and table creation scripts.
-- `db/migration` is for existing databases. Review and execute scripts one at a
-  time, then record the operator, timestamp, database, script name, checksum or
-  reviewed file revision, and result.
+- `db/migration` is the canonical source for existing databases. Review and
+  deploy the generated core resources through Flyway, then record the operator,
+  timestamp, database, version, checksum or reviewed file revision, and result.
 - A single acceptance database must use one chosen source path. Do not mix an
   already initialized schema with selected init files.
 
@@ -29,6 +29,11 @@ manual ledger, not an automatic migration runner.
 | Discussion follows | `db/init/03_interaction.sql` | `db/migration/20260707_discussion_follow.sql` | Adds discussion follow state, notification cursors, and full `(uid,post_id)` duplicate precheck before the unique key. |
 | Public read indexes | `db/init` baseline review required | `db/migration/20260708_public_read_indexes.sql` | Adds read-heavy public listing and detail indexes; confirm against production query plans before execution. |
 | Retry task claim indexes | `db/init/04_notification.sql`, `db/init/06_infra.sql`, `db/init/10_question.sql` | `db/migration/20260709_retry_task_claim_indexes.sql` | Idempotently ensures notification, search-index, and question-index retry claim indexes for existing databases; some fresh init baselines already include equivalent indexes. |
+| Trusted content | `db/init/02_post.sql`, `db/init/03_interaction.sql`, `db/init/05_analytics.sql` | `db/migration/20260713_trusted_content_stage1.sql` | Adds question/freshness state, useful feedback, content suggestions, public update metadata, and idempotent growth events. |
+| Collaboration network | `db/init/12_community_topics.sql`, `db/init/14_collaboration.sql` | `db/migration/20260714_collaboration_stage2.sql` | Adds topic domain scope, content needs, collaborative series, activities, office hours, structured discussions, curation, reports, and appeals. |
+| Incentives and governed roles | `db/init/15_incentive.sql` | `db/migration/20260714_incentive_stage3_stage5.sql` | Adds non-cash reputation/points, append-only ledger controls, virtual benefits, thank tickets, bounded platform bounties, and manually governed community roles. |
+| Stage 2-5 integrity hardening | `db/init/16_database_integrity_hardening.sql` | `db/migration/20260714_database_integrity_hardening.sql` | Adds guarded query indexes plus stock-pair and order-cost invariants after explicit existing-data prechecks; intentionally defers foreign keys until orphan audits are available. |
+| Trusted distribution and revisit | `db/init/17_trusted_distribution_revisit.sql` | `db/migration/20260715_trusted_distribution_revisit.sql` | Adds author-maintained trust profiles, server-side on-site revisit work items, and governed aggregate search-content gap state. |
 
 ## Soft-delete unique key policy
 

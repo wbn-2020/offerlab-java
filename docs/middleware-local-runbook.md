@@ -100,6 +100,9 @@ OfferLab backend:
 
 ```powershell
 Set-Location C:\project\offerlab-java
+$env:SPRING_PROFILES_ACTIVE = "local"
+$env:DB_PASSWORD = "offerlab-local-db-change-me"
+$env:REDIS_PASSWORD = "offerlab-local-redis-change-me"
 $env:OFFERLAB_KAFKA_ENABLED = "true"
 $env:KAFKA_BROKERS = "localhost:9092"
 $env:ELASTICSEARCH_ENABLED = "true"

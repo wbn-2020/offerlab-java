@@ -15,6 +15,7 @@ import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
 import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.api.dto.CommentReportDTO;
 import com.offerlab.community.interaction.api.dto.DiscussionFollowStatusDTO;
+import com.offerlab.community.interaction.api.dto.DiscussionFollowReadCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderCreateCmd;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderDTO;
 import com.offerlab.community.interaction.api.dto.FavoriteFolderReorderCmd;
@@ -237,6 +238,15 @@ public class InteractionController {
     @RateLimit(key = "'discussion-unfollow:' + #uid", rate = 60, per = 60)
     public Result<DiscussionFollowStatusDTO> unfollowDiscussion(@PathVariable Long postId) {
         return Result.ok(discussionFollowFacade.unfollow(UserContext.require(), postId));
+    }
+
+    @PostMapping("/posts/{postId}/discussion-follow/read")
+    @RateLimit(key = "'discussion-follow:read:' + #uid", rate = 120, per = 60)
+    public Result<DiscussionFollowStatusDTO> markDiscussionRead(
+            @PathVariable @Positive Long postId,
+            @Valid @RequestBody DiscussionFollowReadCmd cmd) {
+        return Result.ok(discussionFollowFacade.markRead(
+                UserContext.require(), postId, cmd.getLastReadCommentId()));
     }
 
     @GetMapping("/users/me/discussion-follows")

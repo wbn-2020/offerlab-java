@@ -14,7 +14,9 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @EnableTransactionManagement
 public class CommunityApplication {
     public static void main(String[] args) {
-        SpringApplication.run(CommunityApplication.class, args);
+        SpringApplication application = new SpringApplication(CommunityApplication.class);
+        application.addInitializers(new FlywayEnvironmentGuard());
+        application.run(args);
     }
 }
 

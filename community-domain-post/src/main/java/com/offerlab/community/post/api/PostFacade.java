@@ -20,6 +20,15 @@ public interface PostFacade {
 
     PostDTO getPost(Long postId, Long viewerUid);
 
+    /**
+     * Returns a post to its author regardless of public publication state.
+     * This narrow capability is for author-owned workflow metadata only.
+     */
+    default PostDTO getPostForAuthor(Long postId, Long authorUid) {
+        PostDTO post = getPost(postId, authorUid);
+        return post != null && java.util.Objects.equals(post.getAuthorId(), authorUid) ? post : null;
+    }
+
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds);
 
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid);

@@ -7,11 +7,16 @@ SHA-256 checksum for every source. It also keeps the marked community seed block
 in `db/init/99_seed.sql` content-aligned with
 `20260712_demo_community_seed.sql`.
 
-The directory contains 56 canonical migrations. The application automatically
-scans the 52 production-safe migrations from
-`classpath:db/flyway/core`. The four `demo_*` data seeds are tracked in
+`flyway-manifest.json` is the source of truth for migration counts, versions,
+checksums, and source-to-resource mappings. Existing mappings are immutable:
+adding another file on the same date receives the next free sequence instead of
+renumbering published migrations. The application automatically scans the
+production-safe migrations from `classpath:db/flyway/core`. The four `demo_*`
+data seeds are tracked in
 `classpath:db/flyway/demo`, but are deliberately excluded from application
-startup so acceptance and production databases never receive demo content.
+startup. A startup guard rejects demo locations and the demo history table in
+the `prod`, `production`, and `acceptance` profiles, and requires the core
+classpath location to be the only configured migration source.
 
 When demo seeds are applied intentionally, keep their history isolated from the
 core readiness contract:
@@ -23,20 +28,21 @@ $env:OFFERLAB_FLYWAY_TABLE='flyway_demo_schema_history'
 
 ## Existing schemas
 
-Flyway uses baseline version `0`. The `dev` and local profiles allow a one-time
-automatic baseline for a non-empty legacy schema, then execute every guarded
-versioned migration so `flyway_schema_history` records the checksum of all 52 core files.
-Acceptance and production keep `baseline-on-migrate` disabled by
-default. For their first adoption:
+Flyway uses baseline version `0`. The `dev` profile allows a one-time automatic
+baseline for a non-empty legacy schema; the local profile defaults to the
+Flyway-disabled fresh-init mode unless explicitly overridden. Acceptance and production
+require `baseline-on-migrate=false`, enforced before the application context
+starts. For their first adoption:
 
 1. Take and verify a full database backup.
 2. Run `scripts/check-migration-safety.ps1`.
 3. Run the uniqueness prechecks and stop on any duplicate row.
-4. Set `OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE=true` for exactly the first
-   deployment.
-5. Confirm `scripts/check-schema-readiness.mjs --json` reports 52 successful core migrations,
-   no failed rows, no missing checksums, and the expected latest version.
-6. Remove the one-time baseline override from later deployments.
+4. Establish baseline version `0` before application deployment with an
+   independently reviewed Flyway baseline operation and retain its audit output.
+5. Deploy with `baseline-on-migrate=false`.
+6. Confirm `scripts/check-schema-readiness.mjs --json` reports every manifest
+   core migration as successful, with no failed rows, missing checksums,
+   mismatches, or unexpected versions.
 
 Never use `flyway clean` for this project; configuration keeps it disabled.
 
@@ -49,6 +55,11 @@ After adding or editing a canonical SQL file:
 .\scripts\check-migration-safety.ps1
 node .\scripts\test-flyway-migration-lifecycle.mjs
 ```
+
+Once a source appears in `flyway-manifest.json`, ordinary synchronization treats
+its bytes and Flyway checksum as immutable. Rewriting a known-unreleased
+migration requires the explicit `-AllowTrackedMigrationRewrite` switch and a
+recorded reason. Never use that switch for a migration applied to any database.
 
 Do not edit generated files below
 `community-bootstrap/src/main/resources/db/flyway` directly. Checksum drift

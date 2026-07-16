@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 const root = resolve(import.meta.dirname, '..')
 const manifest = JSON.parse(readFileSync(resolve(root, 'db/migration/flyway-manifest.json'), 'utf8'))
 const migrations = manifest.migrations
+const coreMigrations = migrations.filter(({ stream }) => stream === 'core')
+const demoMigrations = migrations.filter(({ stream }) => stream === 'demo')
 
 assert.deepEqual(Object.keys(manifest), [
   'formatVersion',
@@ -23,18 +25,17 @@ assert.deepEqual(manifest.streams, {
   core: {
     location: 'classpath:db/flyway/core',
     autoMigrate: true,
-    expectedMigrations: 52,
+    expectedMigrations: coreMigrations.length,
   },
   demo: {
     location: 'classpath:db/flyway/demo',
     autoMigrate: false,
-    expectedMigrations: 4,
+    expectedMigrations: demoMigrations.length,
     historyTable: 'flyway_demo_schema_history',
   },
 })
-assert.equal(migrations.length, 56, 'all canonical migrations must be tracked')
-assert.equal(migrations.filter(({ stream }) => stream === 'core').length, 52)
-assert.equal(migrations.filter(({ stream }) => stream === 'demo').length, 4)
+assert.ok(coreMigrations.length > 0, 'at least one core migration must be tracked')
+assert.equal(migrations.length, coreMigrations.length + demoMigrations.length)
 assert.equal(new Set(migrations.map(({ version }) => version)).size, migrations.length)
 
 const sortedVersions = [...migrations].sort((left, right) =>
@@ -82,25 +83,28 @@ assert.match(application, /baseline-version:\s*["']?0["']?/)
 assert.match(application, /clean-disabled:\s*true/)
 assert.match(application, /validate-on-migrate:\s*true/)
 assert.match(application, /validate-migration-naming:\s*true/)
+assert.match(application, /on-profile:\s*local[\s\S]*?enabled:\s*\$\{OFFERLAB_FLYWAY_ENABLED:false\}/)
 
 const migrationReadme = readFileSync(resolve(root, 'db/migration/README.md'), 'utf8')
-assert.match(migrationReadme, /56 canonical migrations/)
-assert.match(migrationReadme, /52 production-safe migrations/)
-assert.match(migrationReadme, /four `demo_\*` data seeds/)
-assert.match(migrationReadme, /checksum of all 52 core files/)
-assert.match(migrationReadme, /reports 52 successful core migrations/)
+assert.match(migrationReadme, /four `demo_\*`\s+data seeds/)
+assert.match(migrationReadme, /flyway-manifest\.json/)
 assert.match(migrationReadme, /OFFERLAB_FLYWAY_LOCATIONS='classpath:db\/flyway\/demo'/)
 assert.match(migrationReadme, /OFFERLAB_FLYWAY_TABLE='flyway_demo_schema_history'/)
 
 const syncScript = readFileSync(resolve(root, 'db/migration/sync-flyway-resources.ps1'), 'utf8')
-assert.doesNotMatch(syncScript, /\$existingManifest\.migrations/)
+assert.match(syncScript, /\$existingManifest\.migrations/)
+assert.match(syncScript, /Refusing to remove a migration already tracked by the Flyway manifest/)
+assert.match(syncScript, /\$existingVersionsBySource\[\$sourceRelative\]/)
+assert.match(syncScript, /AllowTrackedMigrationRewrite/)
+assert.match(syncScript, /Tracked migration content changed/)
 assert.match(syncScript, /Flyway manifest drift detected/)
 assert.match(syncScript, /flywayChecksum/)
 assert.match(syncScript, /Get-FlywayChecksum/)
+assert.match(syncScript, /Database init mirror drift detected/)
 
 const safetyScript = readFileSync(resolve(root, 'scripts/check-migration-safety.ps1'), 'utf8')
-assert.match(safetyScript, /\$files\.Count -ne 56/)
-assert.match(safetyScript, /expected 56 canonical migration files/)
+assert.match(safetyScript, /canonical migration count does not match the manifest/)
+assert.doesNotMatch(safetyScript, /\$files\.Count -ne \d+/)
 
 const relationMigration = readFileSync(resolve(root, 'db/migration/20260530_relation_unique_keys.sql'), 'utf8')
 assert.match(relationMigration, /DROP INDEX `', p_index, '`, ADD /)
@@ -220,11 +224,93 @@ assert.doesNotMatch(
 assert.doesNotMatch(trustedContentMigration, /\bDROP TABLE\b/i)
 assert.doesNotMatch(trustedContentMigration, /\bDELETE\s+FROM\b/i)
 
+const collaborationMigration = readFileSync(
+  resolve(root, 'db/migration/20260714_collaboration_stage2.sql'),
+  'utf8',
+)
+assert.match(collaborationMigration, /ALTER TABLE t_community_topic/)
+assert.doesNotMatch(collaborationMigration, /v20260714_collaboration_ensure_topic_schema/)
+assert.match(collaborationMigration, /idx_community_topic_domain/)
+assert.equal(
+  migrations.find(({ source }) =>
+    source === 'db/migration/20260714_collaboration_stage2.sql')?.flywayChecksum,
+  384653082,
+  'published collaboration migration checksum must remain immutable',
+)
+
+const collaborationInit = readFileSync(resolve(root, 'db/init/14_collaboration.sql'), 'utf8')
+const incentiveInit = readFileSync(resolve(root, 'db/init/15_incentive.sql'), 'utf8')
+const hardeningMigration = readFileSync(
+  resolve(root, 'db/migration/20260714_database_integrity_hardening.sql'),
+  'utf8',
+)
+const hardeningInit = readFileSync(
+  resolve(root, 'db/init/16_database_integrity_hardening.sql'),
+  'utf8',
+)
+assert.equal(
+  collaborationInit,
+  collaborationMigration,
+  'fresh collaboration init must mirror the canonical Stage 2 migration',
+)
+assert.equal(
+  incentiveInit,
+  readFileSync(resolve(root, 'db/migration/20260714_incentive_stage3_stage5.sql'), 'utf8'),
+  'fresh incentive init must mirror the canonical Stage 3-5 migration',
+)
+assert.equal(
+  hardeningInit,
+  hardeningMigration,
+  'fresh integrity init must mirror the canonical hardening migration',
+)
+for (const index of [
+  'idx_incentive_freeze_account_status',
+  'idx_incentive_invalidation_reference',
+  'idx_virtual_benefit_order_benefit',
+  'idx_quota_submission_applicant',
+  'idx_quota_bounty_appeal_applicant',
+]) {
+  assert.match(hardeningMigration, new RegExp(index))
+}
+assert.match(hardeningMigration, /chk_virtual_benefit_stock_null_pair/)
+assert.match(hardeningMigration, /chk_virtual_benefit_order_cost/)
+assert.match(hardeningMigration, /SIGNAL SQLSTATE '45000'/)
+assert.match(hardeningMigration, /conflicting integrity index/)
+assert.match(hardeningMigration, /conflicting integrity check/)
+assert.match(hardeningMigration, /reward rule seed identity conflicts/)
+assert.match(hardeningMigration, /virtual benefit seed identity conflicts/)
+assert.match(hardeningMigration, /community role seed identity conflicts/)
+for (const table of [
+  't_collab_content_need',
+  't_collab_series',
+  't_collab_activity',
+  't_collab_office_hour',
+  't_collab_discussion',
+  't_collab_governance_case',
+]) {
+  assert.match(collaborationInit, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
+}
+for (const table of [
+  't_incentive_account',
+  't_incentive_ledger',
+  't_incentive_reward_inbox',
+  't_virtual_benefit_catalog',
+  't_quota_bounty',
+  't_community_role_grant',
+]) {
+  assert.match(incentiveInit, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
+}
+
 const postInit = readFileSync(resolve(root, 'db/init/02_post.sql'), 'utf8')
 assert.match(postInit, /result_version/)
 assert.match(postInit, /public_update_summary/)
 assert.match(postInit, /impact_scope/)
 assert.match(postInit, /idx_post_public_update/)
+assert.doesNotMatch(postInit, /allowed_domains/)
+assert.doesNotMatch(postInit, /idx_community_topic_domain/)
+const communityTopicsInit = readFileSync(resolve(root, 'db/init/12_community_topics.sql'), 'utf8')
+assert.doesNotMatch(communityTopicsInit, /allowed_domains/)
+assert.doesNotMatch(communityTopicsInit, /idx_community_topic_domain/)
 
 const interactionInit = readFileSync(resolve(root, 'db/init/03_interaction.sql'), 'utf8')
 assert.match(interactionInit, /CREATE TABLE t_int_post_trust_state/)
@@ -319,6 +405,13 @@ assert.match(readinessScript, /migrationLifecycle/)
 assert.match(readinessScript, /t_int_post_trust_state/)
 assert.match(readinessScript, /t_int_post_useful_feedback/)
 assert.match(readinessScript, /t_int_content_suggestion/)
+assert.match(readinessScript, /t_collab_content_need/)
+assert.match(readinessScript, /t_collab_governance_case/)
+assert.match(readinessScript, /t_incentive_account/)
+assert.match(readinessScript, /t_incentive_ledger/)
+assert.match(readinessScript, /t_virtual_benefit_catalog/)
+assert.match(readinessScript, /t_community_role_grant/)
+assert.match(readinessScript, /idx_community_topic_domain/)
 assert.match(readinessScript, /uk_growth_event_key/)
 assert.match(readinessScript, /foreignKey/)
 assert.match(readinessScript, /20260713_trusted_content_stage1\.sql/)
@@ -330,6 +423,8 @@ assert.match(readinessScript, /flywayChecksum/)
 assert.match(readinessScript, /function flywayChecksum\(content\)/)
 assert.match(readinessScript, /checksumMismatches/)
 assert.match(readinessScript, /unexpectedVersions/)
+assert.match(readinessScript, /input:\s*sql/)
+assert.doesNotMatch(readinessScript, /['"]-e['"]/)
 
 const runtimeReadiness = readFileSync(
   resolve(
@@ -338,17 +433,27 @@ const runtimeReadiness = readFileSync(
   ),
   'utf8',
 )
-assert.match(runtimeReadiness, /EXPECTED_CORE_MIGRATIONS = 52/)
-assert.match(runtimeReadiness, /LATEST_CORE_MIGRATION = "20260713\.01"/)
+assert.doesNotMatch(runtimeReadiness, /EXPECTED_CORE_MIGRATIONS/)
+assert.doesNotMatch(runtimeReadiness, /LATEST_CORE_MIGRATION/)
+assert.match(runtimeReadiness, /int expectedCoreMigrations = expectedMigrations\.size\(\)/)
 assert.match(runtimeReadiness, /flywayLifecycleStatus\(\)/)
 assert.match(runtimeReadiness, /trustedContentReady\(\)/)
+assert.match(runtimeReadiness, /t_collab_content_need/)
+assert.match(runtimeReadiness, /t_collab_governance_case/)
+assert.match(runtimeReadiness, /t_incentive_account/)
+assert.match(runtimeReadiness, /t_incentive_ledger/)
+assert.match(runtimeReadiness, /t_virtual_benefit_catalog/)
+assert.match(runtimeReadiness, /t_community_role_grant/)
+assert.match(runtimeReadiness, /idx_community_topic_domain/)
 assert.match(runtimeReadiness, /columnDefinitionMatches/)
 assert.match(runtimeReadiness, /indexDefinitionMatches/)
 assert.match(runtimeReadiness, /foreignKeyDefinitionMatches/)
 assert.match(runtimeReadiness, /expectedCoreMigrations/)
+assert.match(runtimeReadiness, /migrationLifecycleRequired/)
 assert.match(runtimeReadiness, /calculateFlywayChecksum/)
 assert.match(runtimeReadiness, /checksumMismatches/)
 assert.match(runtimeReadiness, /unexpectedVersions/)
+assert.match(runtimeReadiness, /replace\("_utf8mb4", ""\)/)
 for (const index of [
   'idx_content_suggestion_mine_time',
   'idx_content_suggestion_mine_decided',
@@ -357,6 +462,21 @@ for (const index of [
 ]) {
   assert.match(runtimeReadiness, new RegExp(index), `runtime readiness must check ${index}`)
 }
+
+const applicationMain = readFileSync(
+  resolve(root, 'community-bootstrap/src/main/java/com/offerlab/community/CommunityApplication.java'),
+  'utf8',
+)
+const flywayEnvironmentGuard = readFileSync(
+  resolve(root, 'community-bootstrap/src/main/java/com/offerlab/community/FlywayEnvironmentGuard.java'),
+  'utf8',
+)
+assert.match(applicationMain, /addInitializers\(new FlywayEnvironmentGuard\(\)\)/)
+assert.match(flywayEnvironmentGuard, /Set\.of\("prod", "production", "acceptance"\)/)
+assert.match(flywayEnvironmentGuard, /must load only the core Flyway location/)
+assert.match(flywayEnvironmentGuard, /must keep Flyway enabled/)
+assert.match(flywayEnvironmentGuard, /must use the core Flyway history table/)
+assert.match(flywayEnvironmentGuard, /must not enable Flyway baseline-on-migrate/)
 for (const legacyIndex of [
   'idx_content_suggestion_post_status',
   'idx_content_suggestion_submitter',

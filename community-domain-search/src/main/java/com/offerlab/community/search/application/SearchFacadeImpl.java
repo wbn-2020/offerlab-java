@@ -2,13 +2,16 @@ package com.offerlab.community.search.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
+import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
@@ -18,6 +21,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.search.api.SearchFacade;
+import com.offerlab.community.search.api.dto.SearchTrustFilter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -79,36 +83,78 @@ public class SearchFacadeImpl implements SearchFacade {
     public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
                                                 Integer type, Integer domain, String sort, String cursor, int size,
                                                 boolean includeTestData) {
+        return searchPosts(keyword, company, position, type, domain, sort, cursor, size, includeTestData,
+                SearchTrustFilter.empty());
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
+                                                Integer type, Integer domain, String sort, String cursor, int size,
+                                                boolean includeTestData, SearchTrustFilter trustFilter) {
         int limit = Math.min(size <= 0 ? 20 : size, 50);
         String normalizedSort = normalizeSort(sort);
-        boolean firstPage = parseCursor(cursor) <= 0;
+        SearchTrustFilter normalizedTrustFilter = trustFilter == null ? SearchTrustFilter.empty() : trustFilter;
+        boolean trustedSort = "trusted".equals(normalizedSort);
+        boolean trustConstrained = trustedSort || normalizedTrustFilter.active();
+        boolean firstPage = trustedSort ? trustedOffset(cursor) == 0 : parseCursor(cursor) <= 0;
+        if (trustConstrained && !migrationCheckService.trustedDistributionReady()) {
+            PageResult<PostBriefDTO> unavailable = withSearchMetadata(
+                    PageResult.empty(),
+                    "mysql",
+                    true,
+                    "trusted_distribution_migration_pending",
+                    0,
+                    includeTestData,
+                    keyword,
+                    type,
+                    domain,
+                    normalizedTrustFilter,
+                    normalizedSort
+            );
+            searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, 0, firstPage);
+            return unavailable;
+        }
         PageResult<PostBriefDTO> result;
-        if (!"hot".equals(normalizedSort) && postSearchIndexer.ensurePostIndex()) {
+        if (trustedSort) {
+            result = searchTrustedByMysql(keyword, company, position, type, domain, cursor, limit, includeTestData,
+                    normalizedTrustFilter);
+            result = withSearchMetadata(result, "mysql", false, null, MYSQL_FALLBACK_MAX_SCAN,
+                    includeTestData, keyword, type, domain, normalizedTrustFilter, normalizedSort);
+            searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                    result.getItems().size(), firstPage);
+            return result;
+        }
+        if (!trustConstrained && !"hot".equals(normalizedSort) && postSearchIndexer.ensurePostIndex()) {
             Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(keyword, company, position, type, domain,
                     normalizedSort, cursor, limit, includeTestData);
             if (esResult.isPresent()) {
                 ElasticsearchSearchPage esPage = esResult.get();
                 result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit(),
-                        includeTestData, keyword, type, domain);
+                        includeTestData, keyword, type, domain, normalizedTrustFilter, normalizedSort);
                 boolean emptyFirstPage = firstPage && isEmptyPage(result);
                 boolean sparseAfterVisibilityFilter = isSparseAfterVisibilityFiltering(esPage, limit);
                 if (emptyFirstPage || sparseAfterVisibilityFilter) {
                     PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type, domain,
-                            normalizedSort, cursor, limit, includeTestData);
+                            normalizedSort, cursor, limit, includeTestData, normalizedTrustFilter);
                     if (shouldUseMysqlFallback(result, mysqlFallback)) {
                         result = withSearchMetadata(mysqlFallback, "mysql", true,
                                 emptyFirstPage ? "elasticsearch_empty" : "elasticsearch_visibility_filtered",
-                                fallbackScanLimit(limit), includeTestData, keyword, type, domain);
+                                fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                                normalizedTrustFilter, normalizedSort);
                     }
                 }
                 searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
                 return result;
             }
         }
-        result = searchByMysql(keyword, company, position, type, domain, normalizedSort, cursor, limit, includeTestData);
-        result = withSearchMetadata(result, "mysql", !"hot".equals(normalizedSort),
-                "hot".equals(normalizedSort) ? "hot_sort_mysql" : "elasticsearch_unavailable",
-                fallbackScanLimit(limit), includeTestData, keyword, type, domain);
+        result = searchByMysql(keyword, company, position, type, domain, normalizedSort, cursor, limit,
+                includeTestData, normalizedTrustFilter);
+        result = withSearchMetadata(result, "mysql", !("hot".equals(normalizedSort) || trustConstrained),
+                "hot".equals(normalizedSort) ? "hot_sort_mysql"
+                        : trustConstrained ? "trust_filter_mysql"
+                        : "elasticsearch_unavailable",
+                fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                normalizedTrustFilter, normalizedSort);
         searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
         return result;
     }
@@ -116,7 +162,7 @@ public class SearchFacadeImpl implements SearchFacade {
     private PageResult<PostBriefDTO> withSearchMetadata(PageResult<PostBriefDTO> result, String source,
                                                         boolean degraded, String fallbackReason, int scanLimit,
                                                         boolean includeTestData, String keyword, Integer type,
-                                                        Integer domain) {
+                                                        Integer domain, SearchTrustFilter trustFilter, String sort) {
         boolean syntheticQuery = PublicContentFilter.isSyntheticText(keyword);
         attachHitReasons(result, keyword);
         result.withMetadata(source, degraded, fallbackReason, scanLimit)
@@ -125,6 +171,11 @@ public class SearchFacadeImpl implements SearchFacade {
                 .withDiagnostic("syntheticQuery", syntheticQuery)
                 .withDiagnostic("type", type)
                 .withDiagnostic("domain", domain)
+                .withDiagnostic("trustProfile", trustFilter == null ? null : trustFilter.trustProfile())
+                .withDiagnostic("freshnessStatus", trustFilter == null ? null : trustFilter.freshnessStatus())
+                .withDiagnostic("resolved", trustFilter == null ? null : trustFilter.resolved())
+                .withDiagnostic("sourceComplete", trustFilter == null ? null : trustFilter.sourceComplete())
+                .withDiagnostic("sort", sort)
                 .withDiagnostic("hitExplanation", hitExplanation(source));
         if (isEmptyPage(result) && syntheticQuery && !includeTestData) {
             result.withDiagnostic("emptyReason", "test_data_filtered_unless_includeTestData");
@@ -401,7 +452,35 @@ public class SearchFacadeImpl implements SearchFacade {
             if (!reasons.isEmpty()) {
                 post.setRecommendationReasons(reasons);
             }
+            post.setRankingReasons(rankingReasons(post));
         }
+    }
+
+    private List<String> rankingReasons(PostBriefDTO post) {
+        if (post == null || post.getTrustSignals() == null) {
+            return List.of();
+        }
+        PostTrustSignalsDTO trust = post.getTrustSignals();
+        LinkedHashSet<String> reasons = new LinkedHashSet<>();
+        if (Boolean.TRUE.equals(trust.getProfileAvailable())) {
+            reasons.add("trust_profile_available");
+        }
+        if ((trust.getCompletenessScore() == null ? 0 : trust.getCompletenessScore()) >= 60) {
+            reasons.add("experience_context_complete");
+        }
+        if (trust.getLastConfirmedAt() != null) {
+            reasons.add("author_recently_confirmed");
+        }
+        if (Boolean.TRUE.equals(trust.getSourceComplete())) {
+            reasons.add("source_or_disclosure_provided");
+        }
+        if (Boolean.TRUE.equals(trust.getHasAcceptedAnswer())) {
+            reasons.add("accepted_public_answer");
+        }
+        if ((trust.getPublicCorrectionCount() == null ? 0 : trust.getPublicCorrectionCount()) > 0) {
+            reasons.add("public_correction_history");
+        }
+        return reasons.stream().limit(3).toList();
     }
 
     private List<String> hitReasons(PostBriefDTO post, String keyword) {
@@ -582,7 +661,7 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private PageResult<PostBriefDTO> searchByMysql(String keyword, String company, String position,
                                                    Integer type, Integer domain, String sort, String cursor, int limit,
-                                                   boolean includeTestData) {
+                                                   boolean includeTestData, SearchTrustFilter trustFilter) {
         long c = parseCursor(cursor);
         String kw = clean(keyword);
         Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
@@ -631,6 +710,7 @@ public class SearchFacadeImpl implements SearchFacade {
                 .filter(PublicContentFilter::isSyntheticPost)
                 .count();
         items = filterVisibleSearchResults(items, includeTestData);
+        items = filterTrust(items, trustFilter);
         if ("hot".equals(sort)) {
             items = items.stream()
                     .sorted(Comparator.comparingDouble(this::hotScore).reversed()
@@ -646,6 +726,113 @@ public class SearchFacadeImpl implements SearchFacade {
                 .withDiagnostic("rawHits", candidates.size())
                 .withDiagnostic("visibleHits", items.size())
                 .withDiagnostic("syntheticFiltered", syntheticFiltered);
+    }
+
+    private PageResult<PostBriefDTO> searchTrustedByMysql(String keyword, String company, String position,
+                                                          Integer type, Integer domain, String cursor, int limit,
+                                                          boolean includeTestData, SearchTrustFilter trustFilter) {
+        String kw = clean(keyword);
+        Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
+        List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
+                ? postMapper.searchPublicPostsFallback(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
+                blankToNull(clean(position)), type, domain, null, MYSQL_FALLBACK_MAX_SCAN)
+                : postMapper.searchPublicPostsFallbackCompat(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
+                blankToNull(clean(position)), type, domain, null, MYSQL_FALLBACK_MAX_SCAN);
+        if (candidates.isEmpty()) {
+            return PageResult.empty();
+        }
+        Map<Long, String> extByPostId = loadExtJson(candidates.stream().map(PostPO::getId).toList());
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(candidates.stream().map(PostPO::getId).toList());
+        List<PostBriefDTO> candidatesBriefs = candidates.stream().map(p -> PostBriefDTO.builder()
+                .id(p.getId())
+                .authorId(p.getAuthorId())
+                .postType(p.getPostType())
+                .domain(domainOf(extByPostId.get(p.getId())))
+                .title(p.getTitle())
+                .summary(summary(p.getContent()))
+                .coverUrl(p.getCoverUrl())
+                .extJson(extByPostId.get(p.getId()))
+                .tags(tags.getOrDefault(p.getId(), List.of()))
+                .createTime(p.getCreateTime())
+                .build()).toList();
+        List<PostBriefDTO> visible = filterTrust(filterVisibleSearchResults(candidatesBriefs, includeTestData), trustFilter)
+                .stream()
+                .sorted(trustedComparator())
+                .toList();
+        int offset = trustedOffset(cursor);
+        if (offset >= visible.size()) {
+            return PageResult.empty();
+        }
+        int toIndex = Math.min(offset + limit, visible.size());
+        List<PostBriefDTO> page = visible.subList(offset, toIndex);
+        boolean hasMore = toIndex < visible.size();
+        String next = hasMore ? "trusted:" + toIndex : null;
+        return PageResult.of(page, next, hasMore)
+                .withDiagnostic("trustedCandidateBound", MYSQL_FALLBACK_MAX_SCAN)
+                .withDiagnostic("rawHits", candidates.size())
+                .withDiagnostic("visibleHits", visible.size())
+                .withDiagnostic("trustedOffset", offset);
+    }
+
+    private List<PostBriefDTO> filterTrust(List<PostBriefDTO> posts, SearchTrustFilter trustFilter) {
+        if (posts == null || posts.isEmpty() || trustFilter == null || !trustFilter.active()) {
+            return posts == null ? List.of() : posts;
+        }
+        return posts.stream().filter(post -> {
+            PostTrustSignalsDTO signals = post.getTrustSignals();
+            if (signals == null) {
+                return false;
+            }
+            if (trustFilter.trustProfile() != null
+                    && !trustFilter.trustProfile().equals(Boolean.TRUE.equals(signals.getProfileAvailable()))) {
+                return false;
+            }
+            if (trustFilter.freshnessStatus() != null
+                    && !trustFilter.freshnessStatus().equals(signals.getFreshnessStatus())) {
+                return false;
+            }
+            if (trustFilter.resolved() != null
+                    && !trustFilter.resolved().equals(Boolean.TRUE.equals(signals.getResolved()))) {
+                return false;
+            }
+            return trustFilter.sourceComplete() == null
+                    || trustFilter.sourceComplete().equals(Boolean.TRUE.equals(signals.getSourceComplete()));
+        }).toList();
+    }
+
+    private Comparator<PostBriefDTO> trustedComparator() {
+        return Comparator.comparing((PostBriefDTO post) -> Boolean.TRUE.equals(post.getTrustSignals() == null
+                        ? null : post.getTrustSignals().getProfileAvailable()))
+                .reversed()
+                .thenComparing(post -> Boolean.TRUE.equals(post.getTrustSignals() == null
+                        ? null : post.getTrustSignals().getSourceComplete()), Comparator.reverseOrder())
+                .thenComparing(post -> post.getTrustSignals() == null || post.getTrustSignals().getCompletenessScore() == null
+                        ? 0 : post.getTrustSignals().getCompletenessScore(), Comparator.reverseOrder())
+                .thenComparing(post -> post.getTrustSignals() == null ? null : post.getTrustSignals().getLastConfirmedAt(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(post -> Boolean.TRUE.equals(post.getTrustSignals() == null
+                        ? null : post.getTrustSignals().getResolved()), Comparator.reverseOrder())
+                .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(PostBriefDTO::getId, Comparator.nullsLast(Comparator.reverseOrder()));
+    }
+
+    private int trustedOffset(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return 0;
+        }
+        String value = cursor.trim();
+        if (!value.startsWith("trusted:")) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid trusted search cursor");
+        }
+        try {
+            int offset = Integer.parseInt(value.substring("trusted:".length()));
+            if (offset < 0 || offset > MYSQL_FALLBACK_MAX_SCAN) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid trusted search cursor");
+            }
+            return offset;
+        } catch (NumberFormatException ex) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid trusted search cursor");
+        }
     }
 
     private int fallbackScanLimit(int limit) {
@@ -839,7 +1026,7 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private String normalizeSort(String sort) {
         String value = clean(sort).toLowerCase();
-        if ("hot".equals(value) || "latest".equals(value) || "relevance".equals(value)) {
+        if ("hot".equals(value) || "latest".equals(value) || "relevance".equals(value) || "trusted".equals(value)) {
             return value;
         }
         return "relevance";

@@ -172,6 +172,37 @@ public interface CollaborationMapper {
                    create_time AS createTime,
                    update_time AS updateTime
             FROM t_collab_content_need
+            WHERE source_type = #{sourceType}
+              AND source_ref_id = #{sourceRefId}
+            ORDER BY id ASC
+            LIMIT 1
+            """)
+    CollaborationRows.NeedRow selectNeedBySource(@Param("sourceType") String sourceType,
+                                                  @Param("sourceRefId") Long sourceRefId);
+
+    @Select("""
+            SELECT id,
+                   creator_uid AS creatorUid,
+                   domain,
+                   source_type AS sourceType,
+                   source_ref_id AS sourceRefId,
+                   content_format AS contentFormat,
+                   title,
+                   description,
+                   acceptance_criteria AS acceptanceCriteria,
+                   need_status AS status,
+                   claimed_by_uid AS claimedByUid,
+                   merged_into_need_id AS mergedIntoNeedId,
+                   resolution_type AS resolutionType,
+                   resolution_id AS resolutionId,
+                   resolution_post_id AS resolutionPostId,
+                   closed_reason AS closedReason,
+                   follower_count AS followerCount,
+                   0 AS followed,
+                   moderation_hidden AS hidden,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_collab_content_need
             WHERE id = #{id}
             FOR UPDATE
             """)

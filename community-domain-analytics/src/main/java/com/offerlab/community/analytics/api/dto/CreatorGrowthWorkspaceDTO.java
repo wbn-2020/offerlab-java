@@ -61,6 +61,7 @@ public class CreatorGrowthWorkspaceDTO {
         private String fallbackReason;
         private Long pendingSuggestions;
         private Long freshnessAwaitingConfirmation;
+        private Long profileConfirmationDue;
         private Long unresolvedQuestions;
         private Long usefulFeedback7Days;
         private Long usefulFeedback30Days;
@@ -68,6 +69,7 @@ public class CreatorGrowthWorkspaceDTO {
         private Long effectiveReads30Days;
         private List<TrustedContentTaskItemDTO> pendingSuggestionItems;
         private List<TrustedContentTaskItemDTO> freshnessItems;
+        private List<TrustedContentTaskItemDTO> profileConfirmationItems;
         private List<TrustedContentTaskItemDTO> pendingQuestionItems;
     }
 

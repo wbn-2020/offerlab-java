@@ -43,6 +43,7 @@ public class CreatorGrowthService {
     private static final List<String> TRUSTED_CONTENT_METRIC_FIELDS = List.of(
             "pendingSuggestions",
             "freshnessAwaitingConfirmation",
+            "profileConfirmationDue",
             "unresolvedQuestions",
             "usefulFeedback7Days",
             "usefulFeedback30Days",
@@ -130,6 +131,9 @@ public class CreatorGrowthService {
             List<String> invalidFields = new ArrayList<>();
             for (String field : TRUSTED_CONTENT_METRIC_FIELDS) {
                 Long metric = trustedContentMetric(row, field);
+                if (metric == null && "profileConfirmationDue".equals(field)) {
+                    metric = 0L;
+                }
                 if (metric == null) {
                     invalidFields.add(field);
                 } else {
@@ -144,6 +148,7 @@ public class CreatorGrowthService {
                     .degraded(false)
                     .pendingSuggestions(metrics.get("pendingSuggestions"))
                     .freshnessAwaitingConfirmation(metrics.get("freshnessAwaitingConfirmation"))
+                    .profileConfirmationDue(metrics.get("profileConfirmationDue"))
                     .unresolvedQuestions(metrics.get("unresolvedQuestions"))
                     .usefulFeedback7Days(metrics.get("usefulFeedback7Days"))
                     .usefulFeedback30Days(metrics.get("usefulFeedback30Days"))
@@ -154,6 +159,9 @@ public class CreatorGrowthService {
                             true))
                     .freshnessItems(taskItems(
                             growthInsightMapper.selectFreshnessItems(uid),
+                            false))
+                    .profileConfirmationItems(taskItems(
+                            growthInsightMapper.selectProfileConfirmationItems(uid),
                             false))
                     .pendingQuestionItems(taskItems(
                             growthInsightMapper.selectPendingQuestionItems(uid, Post.TYPE_COMMUNITY_QUESTION),
