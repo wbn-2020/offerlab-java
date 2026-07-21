@@ -21,6 +21,12 @@ public interface PostFacade {
     PostDTO getPost(Long postId, Long viewerUid);
 
     /**
+     * Internal read model with the persisted author and lifecycle metadata.
+     * Callers must apply their own public or owner visibility policy.
+     */
+    PostDTO getPostMetadata(Long postId);
+
+    /**
      * Returns a post to its author regardless of public publication state.
      * This narrow capability is for author-owned workflow metadata only.
      */

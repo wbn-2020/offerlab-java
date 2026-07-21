@@ -48,6 +48,21 @@ public interface ReviewQueueMapper extends BaseMapper<ReviewQueueItemPO> {
             """)
     int upsertItem(ReviewQueueItemPO item);
 
+    @Update("""
+            UPDATE t_review_queue
+            SET queue_status = 'pending',
+                assignee_uid = NULL,
+                handled_time = NULL,
+                handle_result = NULL,
+                handle_note = NULL,
+                update_time = NOW(3)
+            WHERE source_type = #{sourceType}
+              AND source_id = #{sourceId}
+              AND is_deleted = 0
+            """)
+    int reopenBySource(@Param("sourceType") String sourceType,
+                       @Param("sourceId") Long sourceId);
+
     @Select("""
             <script>
             SELECT *

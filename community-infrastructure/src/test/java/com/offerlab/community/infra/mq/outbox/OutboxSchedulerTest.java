@@ -70,6 +70,23 @@ class OutboxSchedulerTest {
         assertEquals(List.of("cleanup:1:1000", "cleanup:2:1000"), operations);
     }
 
+    @Test
+    void malformedEnvelopeFailsImmediatelyWithoutRetryOrKafkaSend() {
+        List<String> operations = new ArrayList<>();
+        OutboxMessage malformed = OutboxMessage.builder()
+                .id(9L)
+                .aggregateId(9L)
+                .topic("test.events")
+                .payload("{not-json")
+                .retryCount(0)
+                .build();
+        RecordingMapper mapper = new RecordingMapper(List.of(malformed), null, operations);
+
+        new OutboxScheduler(mapper.proxy(), new RecordingKafkaTemplate(operations), objectMapper).flush();
+
+        assertEquals(List.of("claim:100", "load:100", "renew:9", "poison:9"), operations);
+    }
+
     private OutboxMessage message(Long id) throws Exception {
         EventEnvelope<Long> envelope = EventEnvelope.<Long>builder()
                 .messageId(String.valueOf(id))
@@ -125,6 +142,10 @@ class OutboxSchedulerTest {
                 }
                 case "markSent" -> {
                     operations.add("sent:" + args[0]);
+                    yield 1;
+                }
+                case "markPoisonFailed" -> {
+                    operations.add("poison:" + args[0]);
                     yield 1;
                 }
                 case "deleteTerminalBefore" -> {

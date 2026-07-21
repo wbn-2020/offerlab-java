@@ -12,6 +12,7 @@ public final class CollaborationRows {
     @Data
     public static class NeedRow {
         private Long id;
+        private Long followId;
         private Long creatorUid;
         private Integer domain;
         private String sourceType;
@@ -22,16 +23,84 @@ public final class CollaborationRows {
         private String acceptanceCriteria;
         private String status;
         private Long claimedByUid;
+        private LocalDateTime claimedAt;
+        private LocalDateTime lastProgressAt;
         private Long mergedIntoNeedId;
         private String resolutionType;
         private Long resolutionId;
         private Long resolutionPostId;
         private String closedReason;
+        private Long submittedByUid;
+        private LocalDateTime submittedAt;
+        private String submissionResolutionType;
+        private Long submissionResolutionId;
+        private String submissionNote;
+        private String rejectReason;
         private Integer followerCount;
         private Integer followed;
         private Integer hidden;
         private LocalDateTime createTime;
         private LocalDateTime updateTime;
+    }
+
+    @Data
+    public static class NeedEventRow {
+        private Long id;
+        private Long needId;
+        private String eventType;
+        private Long actorUid;
+        private String fromStatus;
+        private String toStatus;
+        private String targetType;
+        private Long targetId;
+        private String note;
+        private String visibilityScope;
+        private LocalDateTime createTime;
+    }
+
+    @Data
+    public static class NeedClaimCycleRow {
+        private Long id;
+        private Long needId;
+        private Integer cycleNo;
+        private Long claimantUid;
+        private String status;
+        private String cycleOrigin;
+        private LocalDateTime claimedAt;
+        private LocalDateTime lastProgressAt;
+        private LocalDateTime endedAt;
+        private String endReason;
+        private LocalDateTime createTime;
+        private LocalDateTime updateTime;
+    }
+
+    @Data
+    public static class NeedRevisionRow {
+        private Long id;
+        private Long needId;
+        private Long cycleId;
+        private Integer cycleNo;
+        private Integer revisionNo;
+        private Long submitterUid;
+        private String resolutionType;
+        private Long resolutionId;
+        private Long resolutionPostId;
+        private String note;
+        private String status;
+        private String revisionOrigin;
+        private LocalDateTime submittedAt;
+        private Long decidedBy;
+        private LocalDateTime decidedAt;
+        private String decisionNote;
+        private String visibilityScope;
+        private LocalDateTime createTime;
+        private LocalDateTime updateTime;
+    }
+
+    @Data
+    public static class NeedFollowRow {
+        private Long id;
+        private Long uid;
     }
 
     @Data

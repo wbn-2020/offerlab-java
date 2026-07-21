@@ -118,6 +118,33 @@ assert.match(operationMigration, /DROP INDEX `', p_index, '`, ADD /)
 assert.match(operationMigration, /operation_assert_no_active_duplicates/)
 assert.doesNotMatch(operationMigration, /CALL v20260708_operation_drop_index_if_exists/)
 
+const collaborationLifecycleMigration = readFileSync(
+  resolve(root, 'db/migration/20260718_collab_need_lifecycle.sql'),
+  'utf8',
+)
+for (const token of [
+  'claimed_at',
+  'last_progress_at',
+  't_collab_content_need_event',
+  'visibility_scope',
+  'idx_collab_need_follow_uid_active_id',
+  'idx_collab_need_follow_need_active_id',
+  'idx_collab_need_event_need',
+  'idx_collab_need_event_visibility',
+]) {
+  assert.match(
+    collaborationLifecycleMigration,
+    new RegExp(token),
+    `collaboration lifecycle migration must include ${token}`,
+  )
+}
+assert.match(collaborationLifecycleMigration, /UPDATE t_collab_content_need/)
+assert.match(collaborationLifecycleMigration, /WHERE need_status IN \('CLAIMED', 'SUBMITTED'\)/)
+assert.match(collaborationLifecycleMigration, /COALESCE\(claimed_at, update_time, create_time\)/)
+assert.match(collaborationLifecycleMigration, /COALESCE\(last_progress_at, update_time, create_time\)/)
+assert.doesNotMatch(collaborationLifecycleMigration, /INSERT INTO t_collab_content_need_event/)
+assert.doesNotMatch(collaborationLifecycleMigration, /FOREIGN\s+KEY/i)
+
 const trustedContentMigration = readFileSync(
   resolve(root, 'db/migration/20260713_trusted_content_stage1.sql'),
   'utf8',
@@ -223,6 +250,58 @@ assert.doesNotMatch(
 )
 assert.doesNotMatch(trustedContentMigration, /\bDROP TABLE\b/i)
 assert.doesNotMatch(trustedContentMigration, /\bDELETE\s+FROM\b/i)
+
+const knowledgeLifecycleMigration = readFileSync(
+  resolve(root, 'db/migration/20260720_knowledge_lifecycle.sql'),
+  'utf8',
+)
+const knowledgeLifecycleBackfill = readFileSync(
+  resolve(root, 'db/migration/20260720_knowledge_lifecycle_backfill.sql'),
+  'utf8',
+)
+for (const token of [
+  'ALTER TABLE t_int_content_suggestion',
+  'base_version',
+  'target_scope',
+  'target_locator',
+  'expected_change',
+  'resolution',
+  'delivery_status',
+  'CREATE TABLE t_post_reference',
+  'normalized_url',
+  'active_guard',
+  'uk_post_reference_active_url',
+  'CREATE TABLE t_post_knowledge_relation',
+  'visibility_status',
+  'effective_guard',
+  'uk_post_knowledge_relation_effective',
+  'CREATE TABLE t_int_post_outcome',
+  'publication_status',
+  'uk_int_post_outcome_current',
+]) {
+  assert.match(
+    knowledgeLifecycleMigration,
+    new RegExp(token),
+    `V10 knowledge lifecycle migration must include ${token}`,
+  )
+}
+assert.match(knowledgeLifecycleMigration, /source_post_id\s*<>\s*target_post_id/)
+assert.match(knowledgeLifecycleMigration, /reviewer_uid IS NULL OR reviewer_uid <> proposer_uid/)
+assert.doesNotMatch(knowledgeLifecycleMigration, /\bCREATE TABLE t_knowledge_relation\b/)
+assert.doesNotMatch(knowledgeLifecycleMigration, /\bCREATE TABLE t_post_outcome\b/)
+assert.doesNotMatch(knowledgeLifecycleMigration, /\bALTER TABLE t_content_suggestion\b/)
+assert.match(knowledgeLifecycleBackfill, /SET resolution = CASE decision/)
+assert.match(knowledgeLifecycleBackfill, /WHEN 'PARTIAL_ACCEPTED' THEN 'PARTIAL'/)
+assert.match(knowledgeLifecycleBackfill, /WHEN 'MERGED' THEN 'ACCEPTED'/)
+assert.match(knowledgeLifecycleBackfill, /delivery_status = CASE/)
+assert.match(knowledgeLifecycleBackfill, /result_version IS NOT NULL/)
+assert.match(knowledgeLifecycleBackfill, /WHERE decision IS NOT NULL/)
+assert.equal(
+  migrations.find(({ source }) =>
+    source === 'db/migration/20260720_knowledge_lifecycle.sql')?.version,
+  '20260720.02',
+  'V10 knowledge lifecycle migration must retain Flyway version 20260720.02',
+)
 
 const collaborationMigration = readFileSync(
   resolve(root, 'db/migration/20260714_collaboration_stage2.sql'),
@@ -406,9 +485,24 @@ assert.match(readinessScript, /t_int_post_trust_state/)
 assert.match(readinessScript, /t_int_post_useful_feedback/)
 assert.match(readinessScript, /t_int_content_suggestion/)
 assert.match(readinessScript, /t_collab_content_need/)
+assert.match(readinessScript, /t_collab_content_need_event/)
+assert.match(readinessScript, /idx_collab_need_follow_uid_active_id/)
+assert.match(readinessScript, /idx_collab_need_follow_need_active_id/)
+assert.match(readinessScript, /idx_collab_need_event_need/)
+assert.match(readinessScript, /idx_collab_need_event_visibility/)
+assert.match(readinessScript, /20260718_collab_need_lifecycle\.sql/)
 assert.match(readinessScript, /t_collab_governance_case/)
 assert.match(readinessScript, /t_incentive_account/)
 assert.match(readinessScript, /t_incentive_ledger/)
+assert.match(readinessScript, /t_search_index_rebuild_task/)
+assert.match(readinessScript, /uk_search_index_rebuild_active/)
+assert.match(readinessScript, /idx_search_index_rebuild_status_time/)
+assert.match(readinessScript, /idx_search_index_rebuild_lease/)
+assert.match(readinessScript, /20260720_search_index_rebuild_task\.sql/)
+assert.match(readinessScript, /t_post_reference/)
+assert.match(readinessScript, /t_post_knowledge_relation/)
+assert.match(readinessScript, /t_int_post_outcome/)
+assert.match(readinessScript, /20260720_knowledge_lifecycle\.sql/)
 assert.match(readinessScript, /t_virtual_benefit_catalog/)
 assert.match(readinessScript, /t_community_role_grant/)
 assert.match(readinessScript, /idx_community_topic_domain/)
@@ -439,9 +533,38 @@ assert.match(runtimeReadiness, /int expectedCoreMigrations = expectedMigrations\
 assert.match(runtimeReadiness, /flywayLifecycleStatus\(\)/)
 assert.match(runtimeReadiness, /trustedContentReady\(\)/)
 assert.match(runtimeReadiness, /t_collab_content_need/)
+assert.match(runtimeReadiness, /t_collab_content_need_event/)
+for (const column of [
+  'submitted_by_uid',
+  'submitted_at',
+  'submission_resolution_type',
+  'submission_resolution_id',
+  'submission_note',
+  'reject_reason',
+  'claimed_at',
+  'last_progress_at',
+]) {
+  assert.match(
+    runtimeReadiness,
+    new RegExp(`"${column}"`),
+    `runtime collaboration readiness must check ${column}`,
+  )
+}
+assert.match(runtimeReadiness, /collaborationLifecycleReady\(\)/)
+assert.match(runtimeReadiness, /idx_collab_need_follow_uid_active_id/)
+assert.match(runtimeReadiness, /idx_collab_need_follow_need_active_id/)
+assert.match(runtimeReadiness, /idx_collab_need_event_need/)
+assert.match(runtimeReadiness, /idx_collab_need_event_visibility/)
 assert.match(runtimeReadiness, /t_collab_governance_case/)
 assert.match(runtimeReadiness, /t_incentive_account/)
 assert.match(runtimeReadiness, /t_incentive_ledger/)
+assert.match(runtimeReadiness, /searchIndexRebuildTaskReady\(\)/)
+assert.match(runtimeReadiness, /knowledgeLifecycleReady\(\)/)
+assert.match(runtimeReadiness, /t_post_reference/)
+assert.match(runtimeReadiness, /t_post_knowledge_relation/)
+assert.match(runtimeReadiness, /t_int_post_outcome/)
+assert.match(runtimeReadiness, /t_search_index_rebuild_task/)
+assert.match(runtimeReadiness, /uk_search_index_rebuild_active/)
 assert.match(runtimeReadiness, /t_virtual_benefit_catalog/)
 assert.match(runtimeReadiness, /t_community_role_grant/)
 assert.match(runtimeReadiness, /idx_community_topic_domain/)

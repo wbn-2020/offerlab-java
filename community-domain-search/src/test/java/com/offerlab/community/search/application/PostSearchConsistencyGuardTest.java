@@ -20,10 +20,13 @@ class PostSearchConsistencyGuardTest {
         String opsController = read("src/main/java/com/offerlab/community/search/controller/OpsController.java");
         String facade = read("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java");
         String taskService = read("src/main/java/com/offerlab/community/search/application/SearchIndexTaskService.java");
+        String rebuildMapper = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/mapper/SearchIndexRebuildTaskMapper.java");
+        String rebuildPo = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/po/SearchIndexRebuildTaskPO.java");
         String postService = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostApplicationService.java");
         String resolver = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/mq/producer/EventTopicResolver.java");
         String initSql = read("../db/init/02_post.sql");
         String migration = read("../db/migration/20260530_search_index_retry_task.sql");
+        String rebuildMigration = read("../db/migration/20260720_search_index_rebuild_task.sql");
 
         assertTrue(indexer.contains("deletePostDocument(postId)"), "indexer must delete ES docs when a post becomes non-indexable");
         assertTrue(indexer.contains("elasticsearch.deleteDocument"), "indexer must call ES deleteDocument for stale posts");
@@ -72,15 +75,27 @@ class PostSearchConsistencyGuardTest {
         assertTrue(facade.contains("isSparseAfterVisibilityFiltering"), "sparse ES pages must be detected after visibility filtering");
         assertTrue(facade.contains("rawHitCount() >= esPage.scanLimit()"), "sparse detection must only trigger when ES exhausted the scan window");
         assertTrue(facade.contains("shouldUseMysqlFallback"), "sparse ES pages must be eligible for MySQL compensation");
-        assertTrue(taskService.contains("REDIS_ACTIVE_REBUILD_KEY"), "post index rebuild task must use a distributed active gate");
-        assertTrue(taskService.contains("setIfAbsent"), "post index rebuild distributed gate must be claimed atomically");
-        assertTrue(taskService.contains("remoteActiveSnapshot"), "post index rebuild must return the active remote task instead of creating a duplicate");
-        assertTrue(taskService.contains("releaseDistributedActiveTask"), "post index rebuild must release its distributed gate after completion");
+        assertTrue(taskService.contains("taskMapper.insertPending"), "post index rebuild task must persist PENDING before execution");
+        assertTrue(taskService.contains("taskMapper.markRunning"), "post index rebuild worker must atomically claim PENDING");
+        assertTrue(taskService.contains("taskMapper.heartbeat"), "post index rebuild worker must persist checkpoint and heartbeat");
+        assertTrue(taskService.contains("taskMapper.finish"), "post index rebuild worker must persist terminal state");
+        assertTrue(taskService.contains("taskMapper.failExpiredLease"), "expired RUNNING rebuilds must be failed explicitly");
         assertTrue(taskService.contains("ThreadPoolExecutor"), "post index rebuild must use a dedicated bounded executor");
         assertTrue(taskService.contains("ArrayBlockingQueue<>(1)"), "post index rebuild executor must have a bounded queue");
         assertTrue(!taskService.contains("ForkJoinPool.commonPool()"), "post index rebuild must not use the JVM common pool for blocking rebuild work");
+        assertTrue(rebuildMapper.contains("task_status='FAILED'") && rebuildMapper.contains("worker lease expired"),
+                "expired rebuild leases must transition directly to FAILED");
+        assertTrue(rebuildMapper.contains("task_status = 'PENDING'"),
+                "restart recovery must only reclaim PENDING rebuilds");
+        assertTrue(rebuildPo.contains("@TableName(\"t_search_index_rebuild_task\")"),
+                "rebuild task PO must map to the persistent rebuild table");
+        assertTrue(rebuildMigration.contains("GENERATED ALWAYS AS")
+                        && rebuildMigration.contains("UNIQUE KEY uk_search_index_rebuild_active"),
+                "database schema must enforce one active rebuild across instances");
 
         assertTrue(retryService.contains("@Scheduled(fixedDelay = 5000)"), "search retry service must periodically replay due tasks");
+        assertTrue(retryService.contains("if (rebuildActive())"),
+                "single-post retry claims must pause while a rebuild is active");
         assertTrue(retryService.contains("claimDue(owner, lockUntil, BATCH_SIZE)"), "search retry service must claim tasks before replaying");
         assertTrue(retryService.contains("indexer.indexPost(task.getPostId())"), "index retry must re-run the indexer");
         assertTrue(retryService.contains("indexer.deletePost(task.getPostId())"), "delete retry must re-run the delete path");

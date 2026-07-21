@@ -33,6 +33,7 @@ import com.offerlab.community.incentive.api.IncentiveDtos.RoleDefinitionCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleDefinitionDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleGrantDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleMetricCmd;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleReviewContextDTO;
 import com.offerlab.community.incentive.application.AccountLedgerService;
 import com.offerlab.community.incentive.application.BenefitService;
 import com.offerlab.community.incentive.application.CommunityRoleService;
@@ -258,10 +259,20 @@ public class IncentiveAdminController {
     }
 
     @GetMapping("/roles/applications")
+    @RateLimit(key = "'incentive:admin:role-application-queue:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<PageResult<RoleApplicationDTO>> roleApplications(@RequestParam(required = false) String status,
                                                                    @RequestParam(defaultValue = "1") Integer page,
                                                                    @RequestParam(defaultValue = "20") Integer size) {
         return Result.ok(communityRoleService.adminApplications(status, page, size, UserContext.require()));
+    }
+
+    @GetMapping("/roles/review-context/{applicationId}")
+    @RateLimit(key = "'incentive:admin:role-review-context:' + #uid", rate = 30, per = 60, failOpen = false)
+    public Result<RoleReviewContextDTO> roleReviewContext(
+            @PathVariable Long applicationId,
+            @RequestParam String reason) {
+        return Result.ok(communityRoleService.reviewContext(
+                applicationId, reason, UserContext.require()));
     }
 
     @PostMapping("/roles/applications/{applicationId}/review")
@@ -272,6 +283,7 @@ public class IncentiveAdminController {
     }
 
     @GetMapping("/roles/grants")
+    @RateLimit(key = "'incentive:admin:role-grant-queue:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<PageResult<RoleGrantDTO>> roleGrants(@RequestParam(required = false) String status,
                                                        @RequestParam(defaultValue = "1") Integer page,
                                                        @RequestParam(defaultValue = "20") Integer size) {

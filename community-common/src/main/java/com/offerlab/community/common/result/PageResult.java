@@ -78,6 +78,10 @@ public class PageResult<T> {
                 .nextCursor(nextCursor)
                 .hasMore(Boolean.TRUE.equals(hasMore))
                 .total(total == null ? 0L : total)
+                .source(source)
+                .degraded(degraded)
+                .fallbackReason(fallbackReason)
+                .scanLimit(scanLimit)
                 .build();
     }
 }

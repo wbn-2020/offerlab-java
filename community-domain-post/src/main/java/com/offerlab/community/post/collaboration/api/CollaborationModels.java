@@ -91,6 +91,37 @@ public final class CollaborationModels {
     }
 
     @Data
+    public static class NeedSubmitCmd {
+        @Positive
+        private Long resolutionPostId;
+        @Size(max = 24)
+        private String resolutionType;
+        @Positive
+        private Long resolutionId;
+        @Size(max = 1000)
+        private String note;
+    }
+
+    @Data
+    public static class NeedAcceptCmd {
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
+    public static class NeedRejectCmd {
+        @NotBlank
+        @Size(max = 500)
+        private String reason;
+    }
+
+    @Data
+    public static class NeedReleaseCmd {
+        @Size(max = 500)
+        private String note;
+    }
+
+    @Data
     public static class CloseCmd {
         @Size(max = 500)
         private String note;
@@ -110,14 +141,86 @@ public final class CollaborationModels {
         private String acceptanceCriteria;
         private String status;
         private Long claimedByUid;
+        private LocalDateTime claimedAt;
+        private LocalDateTime lastProgressAt;
+        private Boolean stalled;
         private Long mergedIntoNeedId;
         private String resolutionType;
         private Long resolutionId;
         private Long resolutionPostId;
         private String closedReason;
+        private Long submittedByUid;
+        private LocalDateTime submittedAt;
+        private String submissionResolutionType;
+        private Long submissionResolutionId;
+        private String submissionNote;
+        private String rejectReason;
+        private Integer currentClaimCycleNo;
+        private String currentClaimCycleOrigin;
+        private Integer currentRevisionNo;
+        private String currentRevisionOrigin;
+        private List<NeedClaimCycleDTO> claimCycles;
         private Integer followerCount;
         private Boolean followed;
         private Boolean canManage;
+        private LocalDateTime createTime;
+        private LocalDateTime updateTime;
+    }
+
+    @Data
+    @Builder
+    public static class NeedEventDTO {
+        private Long id;
+        private Long needId;
+        private String eventType;
+        private Long actorUid;
+        private String fromStatus;
+        private String toStatus;
+        private String targetType;
+        private Long targetId;
+        private String note;
+        private String visibilityScope;
+        private LocalDateTime createTime;
+    }
+
+    @Data
+    @Builder
+    public static class NeedClaimCycleDTO {
+        private Long id;
+        private Long needId;
+        private Integer cycleNo;
+        private Long claimantUid;
+        private String status;
+        private String cycleOrigin;
+        private LocalDateTime claimedAt;
+        private LocalDateTime lastProgressAt;
+        private LocalDateTime endedAt;
+        private String endReason;
+        private List<NeedRevisionDTO> revisions;
+        private LocalDateTime createTime;
+        private LocalDateTime updateTime;
+    }
+
+    @Data
+    @Builder
+    public static class NeedRevisionDTO {
+        private Long id;
+        private Long needId;
+        private Long cycleId;
+        private Integer cycleNo;
+        private Integer revisionNo;
+        private Long submitterUid;
+        private String resolutionType;
+        private Long resolutionId;
+        private Long resolutionPostId;
+        private String note;
+        private String status;
+        private String revisionOrigin;
+        private LocalDateTime submittedAt;
+        private Long decidedBy;
+        private LocalDateTime decidedAt;
+        private String decisionNote;
+        private String visibilityScope;
         private LocalDateTime createTime;
         private LocalDateTime updateTime;
     }

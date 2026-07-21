@@ -1,17 +1,23 @@
 package com.offerlab.community;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.web.handler.GlobalExceptionHandler;
 import com.offerlab.community.infra.web.interceptor.AuthInterceptor;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.question.application.QuestionIndexRetryService;
+import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchIndexRetryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -34,7 +40,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -47,10 +56,12 @@ class HealthControllerReadinessTest {
     private RedisConnection redisConnection;
     private ElasticsearchHttpClient elasticsearch;
     private OutboxMessageMapper outboxMessageMapper;
+    private PostSearchIndexer postSearchIndexer;
     private SearchIndexRetryService searchIndexRetryService;
     private QuestionIndexRetryService questionIndexRetryService;
     private NotificationRetryService notificationRetryService;
     private MigrationCheckService migrationCheckService;
+    private AdminPermissionService adminPermissionService;
     private ApplicationContext applicationContext;
 
     @BeforeEach
@@ -62,10 +73,12 @@ class HealthControllerReadinessTest {
         redisConnection = mock(RedisConnection.class);
         elasticsearch = mock(ElasticsearchHttpClient.class);
         outboxMessageMapper = mock(OutboxMessageMapper.class);
+        postSearchIndexer = mock(PostSearchIndexer.class);
         searchIndexRetryService = mock(SearchIndexRetryService.class);
         questionIndexRetryService = mock(QuestionIndexRetryService.class);
         notificationRetryService = mock(NotificationRetryService.class);
         migrationCheckService = mock(MigrationCheckService.class);
+        adminPermissionService = mock(AdminPermissionService.class);
         applicationContext = mock(ApplicationContext.class);
 
         when(dataSource.getConnection()).thenReturn(dbConnection);
@@ -75,10 +88,12 @@ class HealthControllerReadinessTest {
         when(redisConnection.ping()).thenReturn("PONG");
         when(outboxMessageMapper.countByStatus()).thenReturn(List.of());
         when(outboxMessageMapper.countDuePending()).thenReturn(0L);
+        when(postSearchIndexer.status()).thenReturn(searchFallbackStatus("NONE", false));
         when(searchIndexRetryService.status()).thenReturn(Map.of("status", "UP"));
         when(questionIndexRetryService.status()).thenReturn(Map.of("status", "UP"));
         when(notificationRetryService.status()).thenReturn(Map.of("status", "UP"));
         when(migrationCheckService.governanceStatus()).thenReturn(Map.of("status", "UP", "ready", true));
+        when(applicationContext.getBean(AdminPermissionService.class)).thenReturn(adminPermissionService);
     }
 
     @Test
@@ -94,8 +109,13 @@ class HealthControllerReadinessTest {
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> kafka = (Map<?, ?>) components.get("kafka");
         Map<?, ?> es = (Map<?, ?>) components.get("elasticsearch");
+        Map<?, ?> releaseGates = (Map<?, ?>) readiness.get("releaseGates");
+        Map<?, ?> kafkaReleaseGate = (Map<?, ?>) releaseGates.get("kafka");
+        Map<?, ?> esReleaseGate = (Map<?, ?>) releaseGates.get("elasticsearch");
 
         assertEquals("UP", readiness.get("status"));
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
         assertEquals(false, readiness.get("operationalAttentionRequired"));
         assertEquals(false, readiness.get("coreDependencyAttentionRequired"));
         assertEquals("DISABLED_BY_CONFIG", kafka.get("status"));
@@ -103,6 +123,58 @@ class HealthControllerReadinessTest {
         assertEquals(false, kafka.get("reachable"));
         assertEquals("DISABLED_BY_CONFIG", es.get("status"));
         assertEquals(false, es.get("enabled"));
+        assertEquals(false, kafkaReleaseGate.get("ready"));
+        assertEquals(false, esReleaseGate.get("ready"));
+        assertEquals(HttpStatus.OK, controller().readiness().getStatusCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, controller().strictReadiness().getStatusCode());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PENDING", "RUNNING", "FAILED"})
+    void searchRebuildBlocksElasticsearchReleaseGate(String rebuildStatus) {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("offerlab.kafka.enabled", "false")
+                .withProperty("spring.kafka.bootstrap-servers", "localhost:9092");
+        when(applicationContext.getEnvironment()).thenReturn(environment);
+        when(elasticsearch.enabled()).thenReturn(true);
+        when(elasticsearch.available()).thenReturn(true);
+        when(postSearchIndexer.status()).thenReturn(searchRebuildBlockedStatus(rebuildStatus));
+
+        ResponseEntity<Map<String, Object>> response = controller().strictReadiness();
+        Map<String, Object> readiness = response.getBody();
+        assertNotNull(readiness);
+        Map<?, ?> releaseGates = (Map<?, ?>) readiness.get("releaseGates");
+        Map<?, ?> esReleaseGate = (Map<?, ?>) releaseGates.get("elasticsearch");
+        Map<?, ?> components = (Map<?, ?>) readiness.get("components");
+        Map<?, ?> search = (Map<?, ?>) components.get("search");
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
+        assertEquals(false, esReleaseGate.get("ready"));
+        assertEquals(rebuildStatus, esReleaseGate.get("rebuildStatus"));
+        assertEquals(true, esReleaseGate.get("rebuildBlocksElasticsearch"));
+        assertEquals(true, search.get("publicSearchAvailable"));
+    }
+
+    @Test
+    void completedSearchRebuildAllowsElasticsearchReleaseGate() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("offerlab.kafka.enabled", "false")
+                .withProperty("spring.kafka.bootstrap-servers", "localhost:9092");
+        when(applicationContext.getEnvironment()).thenReturn(environment);
+        when(elasticsearch.enabled()).thenReturn(true);
+        when(elasticsearch.available()).thenReturn(true);
+        when(postSearchIndexer.status()).thenReturn(searchIndexReadyStatus("SUCCEEDED"));
+
+        Map<String, Object> readiness = detailedReadiness();
+        Map<?, ?> releaseGates = (Map<?, ?>) readiness.get("releaseGates");
+        Map<?, ?> esReleaseGate = (Map<?, ?>) releaseGates.get("elasticsearch");
+
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
+        assertEquals(true, esReleaseGate.get("ready"));
+        assertEquals(false, esReleaseGate.get("rebuildBlocksElasticsearch"));
     }
 
     @Test
@@ -373,6 +445,59 @@ class HealthControllerReadinessTest {
                 .andExpect(jsonPath("$.ready").value(true));
         mvc.perform(get("/api/v1/health/readiness/strict"))
                 .andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/health/operator-health"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void authenticatedMemberCannotAccessStrictOrOperatorHealth() throws Exception {
+        configureDisabledOptionalDependencies();
+        JwtService jwtService = mock(JwtService.class);
+        when(jwtService.parseUid("member-token")).thenReturn(11L);
+        doThrow(new BizException(ErrorCode.FORBIDDEN))
+                .when(adminPermissionService)
+                .requireScope(11L, AdminPermissionService.ROLE_OPS);
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .addInterceptors(new AuthInterceptor(jwtService))
+                .build();
+
+        mvc.perform(get("/api/v1/health/readiness/strict")
+                        .header("Authorization", "Bearer member-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorCode.FORBIDDEN.getCode()));
+        mvc.perform(get("/api/v1/health/operator-health")
+                        .header("Authorization", "Bearer member-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(ErrorCode.FORBIDDEN.getCode()));
+
+        verify(adminPermissionService, times(2))
+                .requireScope(11L, AdminPermissionService.ROLE_OPS);
+    }
+
+    @Test
+    void opsUserCanReachStrictAndOperatorHealthOverHttp() throws Exception {
+        configureDisabledOptionalDependencies();
+        JwtService jwtService = mock(JwtService.class);
+        when(jwtService.parseUid("ops-token")).thenReturn(7L);
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .addInterceptors(new AuthInterceptor(jwtService))
+                .build();
+
+        mvc.perform(get("/api/v1/health/readiness/strict")
+                        .header("Authorization", "Bearer ops-token"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.serviceReady").value(true))
+                .andExpect(jsonPath("$.releaseReady").value(false));
+        mvc.perform(get("/api/v1/health/operator-health")
+                        .header("Authorization", "Bearer ops-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.serviceReady").value(true))
+                .andExpect(jsonPath("$.releaseReady").value(false));
+
+        verify(adminPermissionService, times(2))
+                .requireScope(7L, AdminPermissionService.ROLE_OPS);
     }
 
     @Test
@@ -471,6 +596,7 @@ class HealthControllerReadinessTest {
                 redis,
                 elasticsearch,
                 outboxMessageMapper,
+                postSearchIndexer,
                 searchIndexRetryService,
                 questionIndexRetryService,
                 notificationRetryService,
@@ -483,6 +609,51 @@ class HealthControllerReadinessTest {
         Map<String, Object> body = controller().strictReadiness().getBody();
         assertNotNull(body);
         return body;
+    }
+
+    private void configureDisabledOptionalDependencies() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("offerlab.kafka.enabled", "false")
+                .withProperty("spring.kafka.bootstrap-servers", "");
+        when(applicationContext.getEnvironment()).thenReturn(environment);
+        when(elasticsearch.enabled()).thenReturn(false);
+        when(elasticsearch.available()).thenReturn(false);
+    }
+
+    private static Map<String, Object> searchFallbackStatus(String rebuildStatus, boolean rebuildBlocksElasticsearch) {
+        return Map.of(
+                "status", "DEGRADED",
+                "enabled", false,
+                "available", false,
+                "indexReady", false,
+                "publicSearchAvailable", true,
+                "rebuildStatus", rebuildStatus,
+                "rebuildBlocksElasticsearch", rebuildBlocksElasticsearch
+        );
+    }
+
+    private static Map<String, Object> searchIndexReadyStatus(String rebuildStatus) {
+        return Map.of(
+                "status", "UP",
+                "enabled", true,
+                "available", true,
+                "indexReady", true,
+                "publicSearchAvailable", true,
+                "rebuildStatus", rebuildStatus,
+                "rebuildBlocksElasticsearch", false
+        );
+    }
+
+    private static Map<String, Object> searchRebuildBlockedStatus(String rebuildStatus) {
+        return Map.of(
+                "status", "DEGRADED",
+                "enabled", true,
+                "available", true,
+                "indexReady", false,
+                "publicSearchAvailable", true,
+                "rebuildStatus", rebuildStatus,
+                "rebuildBlocksElasticsearch", true
+        );
     }
 
     private static Map<String, Object> retryDown(String message) {

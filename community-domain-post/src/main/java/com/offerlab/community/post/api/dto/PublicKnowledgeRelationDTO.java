@@ -19,6 +19,8 @@ public class PublicKnowledgeRelationDTO {
     private String reasonText;
     private String source;
     private String reviewStatus;
+    @Builder.Default
+    private String visibilityStatus = "VISIBLE";
     private String riskLevel;
     private LocalDateTime createdAt;
 }

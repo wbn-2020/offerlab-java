@@ -41,6 +41,11 @@ public class MigrationCheckService {
         Map<String, Boolean> tables = new LinkedHashMap<>();
         for (String table : List.of(
                 "t_admin_audit_log",
+                "t_search_index_rebuild_task",
+                "t_post_reference",
+                "t_post_knowledge_relation",
+                "t_int_post_outcome",
+                "t_projection_reconcile_request",
                 "t_moderation_keyword",
                 "t_moderation_keyword_hit",
                 "t_user_moderation_state",
@@ -65,6 +70,7 @@ public class MigrationCheckService {
                 "t_content_series",
                 "t_content_series_post",
                 "t_feed_recommend_support_stat",
+                "t_feed_feedback_preference",
                 "t_expert_cert_application",
                 "t_operation_curation_item",
                 "t_operation_slot",
@@ -73,6 +79,7 @@ public class MigrationCheckService {
                 "t_operation_topic_section",
                 "t_int_contact_request",
                 "t_user_privacy_setting",
+                "t_user_subscription_preference",
                 "t_int_discussion_follow",
                 "t_int_favorite",
                 "t_int_favorite_folder",
@@ -86,6 +93,9 @@ public class MigrationCheckService {
                 "t_search_content_gap",
                 "t_collab_content_need",
                 "t_collab_content_need_follow",
+                "t_collab_content_need_event",
+                "t_collab_content_need_claim_cycle",
+                "t_collab_content_need_revision",
                 "t_collab_series",
                 "t_collab_series_member",
                 "t_collab_series_submission",
@@ -293,6 +303,18 @@ public class MigrationCheckService {
         )) {
             columns.put("t_feed_recommend_support_stat." + column, columnExists("t_feed_recommend_support_stat", column));
         }
+        putColumns(columns, "t_feed_feedback_preference", List.of(
+                "id",
+                "uid",
+                "post_id",
+                "action",
+                "target_type",
+                "target_id",
+                "reason",
+                "expires_at",
+                "create_time",
+                "update_time"
+        ));
         for (String column : List.of(
                 "id",
                 "applicant_uid",
@@ -427,6 +449,75 @@ public class MigrationCheckService {
                 "contact_request_policy",
                 "contact_request_daily_limit"
         ));
+        putColumns(columns, "t_user_subscription_preference", List.of(
+                "id",
+                "uid",
+                "source_type",
+                "source_id",
+                "delivery_mode",
+                "expires_at",
+                "create_time",
+                "update_time",
+                "is_deleted"
+        ));
+        putColumns(columns, "t_projection_reconcile_request", List.of(
+                "id",
+                "resource_id",
+                "operator_uid",
+                "projection_type",
+                "idempotency_key",
+                "request_fingerprint",
+                "request_status",
+                "result_json",
+                "create_time",
+                "update_time"
+        ));
+        putColumns(columns, "t_search_index_rebuild_task", List.of(
+                "task_id",
+                "task_type",
+                "task_status",
+                "operator_uid",
+                "checkpoint_id",
+                "indexed_count",
+                "failed_count",
+                "total_count",
+                "index_name",
+                "last_error",
+                "lock_owner",
+                "lock_until",
+                "heartbeat_time",
+                "started_at",
+                "finished_at",
+                "active_key",
+                "create_time",
+                "update_time"
+        ));
+        putColumns(columns, "t_int_content_suggestion", List.of(
+                "base_version",
+                "target_scope",
+                "target_locator",
+                "expected_change",
+                "resolution",
+                "delivery_status"
+        ));
+        putColumns(columns, "t_post_reference", List.of(
+                "id", "post_id", "owner_uid", "reference_type", "title", "url",
+                "normalized_url", "source_domain", "note", "broken_reason",
+                "reference_status", "sort_order", "revision", "last_confirmed_at",
+                "create_time", "update_time", "is_deleted", "active_guard"
+        ));
+        putColumns(columns, "t_post_knowledge_relation", List.of(
+                "id", "source_post_id", "target_post_id", "relation_type", "reason_text",
+                "proposer_uid", "review_status", "visibility_status", "reviewer_uid",
+                "review_note", "reviewed_at", "risk_level", "create_time", "update_time",
+                "is_deleted", "effective_guard"
+        ));
+        putColumns(columns, "t_int_post_outcome", List.of(
+                "id", "post_id", "uid", "outcome_type", "context_note", "result_note",
+                "visibility", "publication_status", "consented_at", "reviewer_uid",
+                "review_note", "reviewed_at", "follow_up_at", "outcome_status", "revision",
+                "create_time", "update_time", "is_deleted", "effective_guard"
+        ));
         putColumns(columns, "t_int_discussion_follow", List.of(
                 "id",
                 "uid",
@@ -525,6 +616,66 @@ public class MigrationCheckService {
                 "create_time",
                 "update_time"
         ));
+        putColumns(columns, "t_collab_content_need", List.of(
+                "submitted_by_uid",
+                "submitted_at",
+                "submission_resolution_type",
+                "submission_resolution_id",
+                "submission_note",
+                "reject_reason",
+                "claimed_at",
+                "last_progress_at"
+        ));
+        putColumns(columns, "t_collab_content_need_event", List.of(
+                "id",
+                "need_id",
+                "event_type",
+                "actor_uid",
+                "claimant_uid",
+                "from_status",
+                "to_status",
+                "target_type",
+                "target_id",
+                "note",
+                "visibility_scope",
+                "create_time"
+        ));
+        putColumns(columns, "t_collab_content_need_claim_cycle", List.of(
+                "id",
+                "need_id",
+                "cycle_no",
+                "claimant_uid",
+                "cycle_status",
+                "cycle_origin",
+                "claimed_at",
+                "last_progress_at",
+                "ended_at",
+                "end_reason",
+                "create_time",
+                "update_time",
+                "active_need_guard"
+        ));
+        putColumns(columns, "t_collab_content_need_revision", List.of(
+                "id",
+                "need_id",
+                "cycle_id",
+                "cycle_no",
+                "revision_no",
+                "submitter_uid",
+                "resolution_type",
+                "resolution_id",
+                "resolution_post_id",
+                "revision_note",
+                "revision_status",
+                "revision_origin",
+                "submitted_at",
+                "decided_by",
+                "decided_at",
+                "decision_note",
+                "visibility_scope",
+                "create_time",
+                "update_time"
+        ));
         Map<String, Boolean> indexes = new LinkedHashMap<>();
         indexes.put("t_post_report.idx_post_reporter_status", indexExists("t_post_report", "idx_post_reporter_status"));
         indexes.put("t_comment_report.idx_comment_reporter_status", indexExists("t_comment_report", "idx_comment_reporter_status"));
@@ -578,6 +729,12 @@ public class MigrationCheckService {
         indexes.put("t_feed_recommend_support_stat.idx_feed_recommend_support_stat_create_time", indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_create_time"));
         indexes.put("t_feed_recommend_support_stat.idx_feed_recommend_support_stat_domain_create_time", indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_domain_create_time"));
         indexes.put("t_feed_recommend_support_stat.idx_feed_recommend_support_stat_viewer_create_time", indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_viewer_create_time"));
+        putIndexes(indexes, "t_feed_feedback_preference", List.of(
+                "uk_feed_feedback_uid_post",
+                "idx_feed_feedback_uid_action_active",
+                "idx_feed_feedback_uid_target_active",
+                "idx_feed_feedback_uid_cursor"
+        ));
         indexes.put("t_expert_cert_application.uk_expert_cert_active_guard", indexExists("t_expert_cert_application", "uk_expert_cert_active_guard"));
         indexes.put("t_expert_cert_application.idx_expert_cert_applicant_domain", indexExists("t_expert_cert_application", "idx_expert_cert_applicant_domain"));
         indexes.put("t_expert_cert_application.idx_expert_cert_review_queue", indexExists("t_expert_cert_application", "idx_expert_cert_review_queue"));
@@ -620,6 +777,38 @@ public class MigrationCheckService {
                 "idx_contact_request_requester_page"
         ));
         indexes.put("t_user_privacy_setting.idx_contact_request_policy", indexExists("t_user_privacy_setting", "idx_contact_request_policy"));
+        putIndexes(indexes, "t_user_subscription_preference", List.of(
+                "uk_user_subscription_preference_source",
+                "idx_user_subscription_preference_mode",
+                "idx_user_subscription_preference_expiry"
+        ));
+        putIndexes(indexes, "t_projection_reconcile_request", List.of(
+                "uk_projection_reconcile_resource",
+                "idx_projection_reconcile_operator_time",
+                "idx_projection_reconcile_type_time"
+        ));
+        putIndexes(indexes, "t_search_index_rebuild_task", List.of(
+                "uk_search_index_rebuild_active",
+                "idx_search_index_rebuild_status_time",
+                "idx_search_index_rebuild_lease"
+        ));
+        putIndexes(indexes, "t_post_reference", List.of(
+                "uk_post_reference_active_url",
+                "idx_post_reference_public",
+                "idx_post_reference_owner"
+        ));
+        putIndexes(indexes, "t_post_knowledge_relation", List.of(
+                "uk_post_knowledge_relation_effective",
+                "idx_post_knowledge_relation_source",
+                "idx_post_knowledge_relation_target",
+                "idx_post_knowledge_relation_review",
+                "idx_post_knowledge_relation_proposer"
+        ));
+        putIndexes(indexes, "t_int_post_outcome", List.of(
+                "uk_int_post_outcome_current",
+                "idx_int_post_outcome_public",
+                "idx_int_post_outcome_follow_up"
+        ));
         putIndexes(indexes, "t_int_favorite", List.of(
                 "uk_user_post",
                 "idx_user_folder_sort",
@@ -676,6 +865,28 @@ public class MigrationCheckService {
                 "idx_content_suggestion_public",
                 "idx_content_suggestion_type_status"
         ));
+        putIndexes(indexes, "t_collab_content_need_follow", List.of(
+                "idx_collab_need_follow_uid_active_id",
+                "idx_collab_need_follow_need_active_id"
+        ));
+        putIndexes(indexes, "t_collab_content_need_event", List.of(
+                "idx_collab_need_event_need",
+                "idx_collab_need_event_visibility"
+        ));
+        putIndexes(indexes, "t_collab_content_need_claim_cycle", List.of(
+                "uk_collab_need_claim_cycle_no",
+                "uk_collab_need_claim_cycle_active",
+                "idx_collab_need_claim_cycle_need",
+                "idx_collab_need_claim_cycle_status",
+                "idx_collab_need_claim_cycle_claimant"
+        ));
+        putIndexes(indexes, "t_collab_content_need_revision", List.of(
+                "uk_collab_need_revision_no",
+                "idx_collab_need_revision_need",
+                "idx_collab_need_revision_cycle_status",
+                "idx_collab_need_revision_submitter",
+                "idx_collab_need_revision_visibility"
+        ));
         Map<String, Boolean> constraints = new LinkedHashMap<>();
         constraints.put("t_domain_moderator.PRIMARY(id)", primaryKeyExists("t_domain_moderator", "id"));
         constraints.put("t_domain_config.PRIMARY(domain)", primaryKeyExists("t_domain_config", "domain"));
@@ -686,6 +897,12 @@ public class MigrationCheckService {
         constraints.put("t_content_series.PRIMARY(id)", primaryKeyExists("t_content_series", "id"));
         constraints.put("t_content_series_post.PRIMARY(id)", primaryKeyExists("t_content_series_post", "id"));
         constraints.put("t_feed_recommend_support_stat.PRIMARY(id)", primaryKeyExists("t_feed_recommend_support_stat", "id"));
+        constraints.put("t_feed_feedback_preference.PRIMARY(id)",
+                primaryKeyExists("t_feed_feedback_preference", "id"));
+        constraints.put("t_feed_feedback_preference.chk_feed_feedback_action",
+                checkConstraintExists("t_feed_feedback_preference", "chk_feed_feedback_action"));
+        constraints.put("t_feed_feedback_preference.chk_feed_feedback_target_type",
+                checkConstraintExists("t_feed_feedback_preference", "chk_feed_feedback_target_type"));
         constraints.put("t_expert_cert_application.PRIMARY(id)", primaryKeyExists("t_expert_cert_application", "id"));
         constraints.put("t_operation_curation_item.PRIMARY(id)", primaryKeyExists("t_operation_curation_item", "id"));
         constraints.put("t_operation_slot.PRIMARY(id)", primaryKeyExists("t_operation_slot", "id"));
@@ -694,6 +911,27 @@ public class MigrationCheckService {
         constraints.put("t_operation_topic_section.PRIMARY(id)", primaryKeyExists("t_operation_topic_section", "id"));
         constraints.put("t_int_contact_request.PRIMARY(id)", primaryKeyExists("t_int_contact_request", "id"));
         constraints.put("t_user_privacy_setting.PRIMARY(user_id)", primaryKeyExists("t_user_privacy_setting", "user_id"));
+        constraints.put("t_user_subscription_preference.PRIMARY(id)",
+                primaryKeyExists("t_user_subscription_preference", "id"));
+        constraints.put("t_user_subscription_preference.chk_user_subscription_preference_source_type",
+                checkConstraintExists("t_user_subscription_preference",
+                        "chk_user_subscription_preference_source_type"));
+        constraints.put("t_user_subscription_preference.chk_user_subscription_preference_delivery_mode",
+                checkConstraintExists("t_user_subscription_preference",
+                        "chk_user_subscription_preference_delivery_mode"));
+        constraints.put("t_user_subscription_preference.chk_user_subscription_preference_deleted",
+                checkConstraintExists("t_user_subscription_preference",
+                        "chk_user_subscription_preference_deleted"));
+        constraints.put("t_projection_reconcile_request.PRIMARY(id)",
+                primaryKeyExists("t_projection_reconcile_request", "id"));
+        constraints.put("t_projection_reconcile_request.chk_projection_reconcile_status",
+                checkConstraintExists("t_projection_reconcile_request",
+                        "chk_projection_reconcile_status"));
+        constraints.put("t_search_index_rebuild_task.PRIMARY(task_id)",
+                primaryKeyExists("t_search_index_rebuild_task", "task_id"));
+        constraints.put("t_search_index_rebuild_task.chk_search_index_rebuild_status",
+                checkConstraintExists("t_search_index_rebuild_task",
+                        "chk_search_index_rebuild_status"));
         constraints.put("t_int_discussion_follow.PRIMARY(id)", primaryKeyExists("t_int_discussion_follow", "id"));
         constraints.put("t_int_favorite.PRIMARY(id)", primaryKeyExists("t_int_favorite", "id"));
         constraints.put("t_int_favorite_folder.PRIMARY(id)", primaryKeyExists("t_int_favorite_folder", "id"));
@@ -702,6 +940,12 @@ public class MigrationCheckService {
         constraints.put("t_int_post_trust_state.PRIMARY(post_id)", primaryKeyExists("t_int_post_trust_state", "post_id"));
         constraints.put("t_int_post_useful_feedback.PRIMARY(id)", primaryKeyExists("t_int_post_useful_feedback", "id"));
         constraints.put("t_int_content_suggestion.PRIMARY(id)", primaryKeyExists("t_int_content_suggestion", "id"));
+        constraints.put("t_collab_content_need_event.PRIMARY(id)",
+                primaryKeyExists("t_collab_content_need_event", "id"));
+        constraints.put("t_collab_content_need_claim_cycle.PRIMARY(id)",
+                primaryKeyExists("t_collab_content_need_claim_cycle", "id"));
+        constraints.put("t_collab_content_need_revision.PRIMARY(id)",
+                primaryKeyExists("t_collab_content_need_revision", "id"));
         for (String foreignKey : List.of(
                 "fk_trust_state_post",
                 "fk_trust_state_accepted_comment",
@@ -733,6 +977,17 @@ public class MigrationCheckService {
         boolean trustedContentDefinitionsReady = trustedContentReady();
         boolean stageTwoToFiveDefinitionsReady = stageTwoToFiveReady();
         boolean trustedDistributionDefinitionsReady = trustedDistributionReady();
+        boolean collaborationLifecycleDefinitionsReady = collaborationLifecycleReady();
+        boolean collaborationClaimCycleRevisionDefinitionsReady =
+                collaborationClaimCycleRevisionReady();
+        boolean userSubscriptionPreferenceDefinitionsReady =
+                userSubscriptionPreferenceReady();
+        boolean feedFeedbackControlDefinitionsReady =
+                feedFeedbackControlReady();
+        boolean projectionReconcileRequestDefinitionsReady =
+                projectionReconcileRequestReady();
+        boolean searchIndexRebuildTaskDefinitionsReady =
+                searchIndexRebuildTaskReady();
         boolean ready = tables.values().stream().allMatch(Boolean::booleanValue)
                 && columns.values().stream().allMatch(Boolean::booleanValue)
                 && indexes.values().stream().allMatch(Boolean::booleanValue)
@@ -740,6 +995,12 @@ public class MigrationCheckService {
                 && trustedContentDefinitionsReady
                 && stageTwoToFiveDefinitionsReady
                 && trustedDistributionDefinitionsReady
+                && collaborationLifecycleDefinitionsReady
+                && collaborationClaimCycleRevisionDefinitionsReady
+                && userSubscriptionPreferenceDefinitionsReady
+                && feedFeedbackControlDefinitionsReady
+                && projectionReconcileRequestDefinitionsReady
+                && searchIndexRebuildTaskDefinitionsReady
                 && (!migrationLifecycleRequired || migrationLifecycleReady);
         List<String> missing = missingItems(tables, columns, indexes, constraints);
         if (!trustedContentDefinitionsReady) {
@@ -750,6 +1011,24 @@ public class MigrationCheckService {
         }
         if (!trustedDistributionDefinitionsReady) {
             missing.add("schema:trusted-distribution-definitions");
+        }
+        if (!collaborationLifecycleDefinitionsReady) {
+            missing.add("schema:collaboration-lifecycle-definitions");
+        }
+        if (!collaborationClaimCycleRevisionDefinitionsReady) {
+            missing.add("schema:collaboration-claim-cycle-revision-definitions");
+        }
+        if (!userSubscriptionPreferenceDefinitionsReady) {
+            missing.add("schema:user-subscription-preference-definitions");
+        }
+        if (!feedFeedbackControlDefinitionsReady) {
+            missing.add("schema:feed-feedback-control-definitions");
+        }
+        if (!projectionReconcileRequestDefinitionsReady) {
+            missing.add("schema:projection-reconcile-request-definitions");
+        }
+        if (!searchIndexRebuildTaskDefinitionsReady) {
+            missing.add("schema:search-index-rebuild-task-definitions");
         }
         if (migrationLifecycleRequired && !migrationLifecycleReady) {
             missing.add("flyway:migration-lifecycle");
@@ -764,6 +1043,17 @@ public class MigrationCheckService {
         status.put("trustedContentDefinitionsReady", trustedContentDefinitionsReady);
         status.put("stageTwoToFiveDefinitionsReady", stageTwoToFiveDefinitionsReady);
         status.put("trustedDistributionDefinitionsReady", trustedDistributionDefinitionsReady);
+        status.put("collaborationLifecycleDefinitionsReady", collaborationLifecycleDefinitionsReady);
+        status.put("collaborationClaimCycleRevisionDefinitionsReady",
+                collaborationClaimCycleRevisionDefinitionsReady);
+        status.put("userSubscriptionPreferenceDefinitionsReady",
+                userSubscriptionPreferenceDefinitionsReady);
+        status.put("feedFeedbackControlDefinitionsReady",
+                feedFeedbackControlDefinitionsReady);
+        status.put("projectionReconcileRequestDefinitionsReady",
+                projectionReconcileRequestDefinitionsReady);
+        status.put("searchIndexRebuildTaskDefinitionsReady",
+                searchIndexRebuildTaskDefinitionsReady);
         status.put("migrationLifecycleRequired", migrationLifecycleRequired);
         status.put("migrationLifecycle", migrationLifecycle);
         status.put("missing", missing);
@@ -798,7 +1088,15 @@ public class MigrationCheckService {
                 "db/migration/20260714_collaboration_stage2.sql",
                 "db/migration/20260714_incentive_stage3_stage5.sql",
                 "db/migration/20260714_database_integrity_hardening.sql",
-                "db/migration/20260715_trusted_distribution_revisit.sql"
+                "db/migration/20260715_trusted_distribution_revisit.sql",
+                "db/migration/20260715_content_maintenance_stage8.sql",
+                "db/migration/20260717_collab_need_submission.sql",
+                "db/migration/20260718_collab_need_lifecycle.sql",
+                "db/migration/20260719_collab_need_claim_cycle_revision.sql",
+                "db/migration/20260719_feed_feedback_control.sql",
+                "db/migration/20260719_user_subscription_preference.sql",
+                "db/migration/20260719_projection_reconcile_request.sql",
+                "db/migration/20260720_search_index_rebuild_task.sql"
         ));
         if (!ready) {
             status.put("message", "数据库结构或 Flyway 执行历史未补齐，相关功能会降级或被阻断。");
@@ -1094,6 +1392,156 @@ public class MigrationCheckService {
                 && indexExists("t_search_content_gap", "idx_search_content_gap_queue");
     }
 
+    public boolean collaborationLifecycleReady() {
+        return tableExists("t_collab_content_need_event")
+                && tableExists("t_collab_content_need_claim_cycle")
+                && tableExists("t_collab_content_need_revision")
+                && columnDefinitionMatches("t_collab_content_need", "submitted_by_uid",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "submitted_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "submission_resolution_type",
+                "varchar(24)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "submission_resolution_id",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "submission_note",
+                "varchar(1000)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "reject_reason",
+                "varchar(500)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "claimed_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need", "last_progress_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "need_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "event_type",
+                "varchar(24)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "actor_uid",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "claimant_uid",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "from_status",
+                "varchar(24)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "to_status",
+                "varchar(24)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "target_type",
+                "varchar(32)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "target_id",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "note",
+                "varchar(1000)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "visibility_scope",
+                "varchar(24)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_event", "create_time",
+                "datetime(3)", false, null, null, null, null)
+                && primaryKeyExists("t_collab_content_need_event", "id")
+                && indexDefinitionMatches("t_collab_content_need_follow",
+                "idx_collab_need_follow_uid_active_id", false, "uid", "active", "id")
+                && indexDefinitionMatches("t_collab_content_need_follow",
+                "idx_collab_need_follow_need_active_id", false, "need_id", "active", "id")
+                && indexDefinitionMatches("t_collab_content_need_event",
+                "idx_collab_need_event_need", false, "need_id", "id")
+                && indexDefinitionMatches("t_collab_content_need_event",
+                "idx_collab_need_event_visibility", false,
+                "need_id", "visibility_scope", "id");
+    }
+
+    public boolean collaborationClaimCycleRevisionReady() {
+        return columnDefinitionMatches("t_collab_content_need_claim_cycle", "id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "need_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "cycle_no",
+                "int", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "claimant_uid",
+                "bigint", false, null, null, null, null)
+                 && columnDefinitionMatches("t_collab_content_need_claim_cycle", "cycle_status",
+                 "varchar(24)", false, null, null, null, null)
+                 && columnDefinitionMatches("t_collab_content_need_claim_cycle", "cycle_origin",
+                 "varchar(32)", false, null, null, null, null)
+                 && columnDefinitionMatches("t_collab_content_need_claim_cycle", "claimed_at",
+                "datetime(3)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "last_progress_at",
+                "datetime(3)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "ended_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "end_reason",
+                "varchar(500)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "create_time",
+                "datetime(3)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "update_time",
+                "datetime(3)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_claim_cycle", "active_need_guard",
+                "bigint", true, null, null, "STORED GENERATED", "cycle_status=active")
+                && columnDefinitionMatches("t_collab_content_need_revision", "id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "need_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "cycle_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "cycle_no",
+                "int", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "revision_no",
+                "int", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "submitter_uid",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "resolution_type",
+                "varchar(24)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "resolution_id",
+                "bigint", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "resolution_post_id",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "revision_note",
+                "varchar(1000)", true, null, null, null, null)
+                 && columnDefinitionMatches("t_collab_content_need_revision", "revision_status",
+                 "varchar(24)", false, null, null, null, null)
+                 && columnDefinitionMatches("t_collab_content_need_revision", "revision_origin",
+                 "varchar(32)", false, null, null, null, null)
+                 && columnDefinitionMatches("t_collab_content_need_revision", "submitted_at",
+                "datetime(3)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "decided_by",
+                "bigint", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "decided_at",
+                "datetime(3)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "decision_note",
+                "varchar(1000)", true, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "visibility_scope",
+                "varchar(24)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "create_time",
+                "datetime(3)", false, null, null, null, null)
+                && columnDefinitionMatches("t_collab_content_need_revision", "update_time",
+                "datetime(3)", false, null, null, null, null)
+                && primaryKeyExists("t_collab_content_need_claim_cycle", "id")
+                && primaryKeyExists("t_collab_content_need_revision", "id")
+                && indexDefinitionMatches("t_collab_content_need_claim_cycle",
+                "uk_collab_need_claim_cycle_no", true, "need_id", "cycle_no")
+                && indexDefinitionMatches("t_collab_content_need_claim_cycle",
+                "uk_collab_need_claim_cycle_active", true, "active_need_guard")
+                && indexDefinitionMatches("t_collab_content_need_claim_cycle",
+                "idx_collab_need_claim_cycle_need", false, "need_id", "cycle_no", "id")
+                && indexDefinitionMatches("t_collab_content_need_claim_cycle",
+                "idx_collab_need_claim_cycle_status", false, "need_id", "cycle_status", "id")
+                && indexDefinitionMatches("t_collab_content_need_claim_cycle",
+                "idx_collab_need_claim_cycle_claimant", false,
+                "claimant_uid", "cycle_status", "update_time", "id")
+                && indexDefinitionMatches("t_collab_content_need_revision",
+                "uk_collab_need_revision_no", true, "cycle_id", "revision_no")
+                && indexDefinitionMatches("t_collab_content_need_revision",
+                "idx_collab_need_revision_need", false,
+                "need_id", "cycle_no", "revision_no", "id")
+                && indexDefinitionMatches("t_collab_content_need_revision",
+                "idx_collab_need_revision_cycle_status", false,
+                "cycle_id", "revision_status", "id")
+                && indexDefinitionMatches("t_collab_content_need_revision",
+                "idx_collab_need_revision_submitter", false,
+                "submitter_uid", "create_time", "id")
+                && indexDefinitionMatches("t_collab_content_need_revision",
+                "idx_collab_need_revision_visibility", false,
+                "need_id", "visibility_scope", "id");
+    }
+
     public boolean stageTwoToFiveReady() {
         return columnDefinitionMatches("t_post_extension", "domain",
                 "tinyint", true, null, null, "VIRTUAL GENERATED", "json_extractext_json$.domain")
@@ -1194,6 +1642,23 @@ public class MigrationCheckService {
                 && indexExists("t_feed_recommend_support_stat", "idx_feed_recommend_support_stat_viewer_create_time");
     }
 
+    public boolean feedFeedbackControlReady() {
+        return tableExists("t_feed_feedback_preference")
+                && columnExists("t_feed_feedback_preference", "uid")
+                && columnExists("t_feed_feedback_preference", "post_id")
+                && columnExists("t_feed_feedback_preference", "action")
+                && columnExists("t_feed_feedback_preference", "target_type")
+                && columnExists("t_feed_feedback_preference", "target_id")
+                && columnExists("t_feed_feedback_preference", "expires_at")
+                && primaryKeyExists("t_feed_feedback_preference", "id")
+                && indexExists("t_feed_feedback_preference", "uk_feed_feedback_uid_post")
+                && indexExists("t_feed_feedback_preference", "idx_feed_feedback_uid_action_active")
+                && indexExists("t_feed_feedback_preference", "idx_feed_feedback_uid_target_active")
+                && indexExists("t_feed_feedback_preference", "idx_feed_feedback_uid_cursor")
+                && checkConstraintExists("t_feed_feedback_preference", "chk_feed_feedback_action")
+                && checkConstraintExists("t_feed_feedback_preference", "chk_feed_feedback_target_type");
+    }
+
     public boolean expertCertificationReady() {
         return tableExists("t_expert_cert_application")
                 && columnExists("t_expert_cert_application", "applicant_uid")
@@ -1274,6 +1739,91 @@ public class MigrationCheckService {
                 && columnExists("t_user_privacy_setting", "contact_request_daily_limit")
                 && primaryKeyExists("t_user_privacy_setting", "user_id")
                 && indexExists("t_user_privacy_setting", "idx_contact_request_policy");
+    }
+
+    public boolean userSubscriptionPreferenceReady() {
+        return tableExists("t_user_subscription_preference")
+                && columnExists("t_user_subscription_preference", "uid")
+                && columnExists("t_user_subscription_preference", "source_type")
+                && columnExists("t_user_subscription_preference", "source_id")
+                && columnExists("t_user_subscription_preference", "delivery_mode")
+                && columnExists("t_user_subscription_preference", "expires_at")
+                && columnExists("t_user_subscription_preference", "is_deleted")
+                && primaryKeyExists("t_user_subscription_preference", "id")
+                && indexExists("t_user_subscription_preference",
+                "uk_user_subscription_preference_source")
+                && indexExists("t_user_subscription_preference",
+                "idx_user_subscription_preference_mode")
+                && indexExists("t_user_subscription_preference",
+                "idx_user_subscription_preference_expiry")
+                && checkConstraintExists("t_user_subscription_preference",
+                "chk_user_subscription_preference_source_type")
+                && checkConstraintExists("t_user_subscription_preference",
+                "chk_user_subscription_preference_delivery_mode")
+                && checkConstraintExists("t_user_subscription_preference",
+                "chk_user_subscription_preference_deleted");
+    }
+
+    public boolean projectionReconcileRequestReady() {
+        return tableExists("t_projection_reconcile_request")
+                && columnExists("t_projection_reconcile_request", "resource_id")
+                && columnExists("t_projection_reconcile_request", "operator_uid")
+                && columnExists("t_projection_reconcile_request", "projection_type")
+                && columnExists("t_projection_reconcile_request", "idempotency_key")
+                && columnExists("t_projection_reconcile_request", "request_fingerprint")
+                && columnExists("t_projection_reconcile_request", "request_status")
+                && columnExists("t_projection_reconcile_request", "result_json")
+                && primaryKeyExists("t_projection_reconcile_request", "id")
+                && indexExists("t_projection_reconcile_request",
+                "uk_projection_reconcile_resource")
+                && indexExists("t_projection_reconcile_request",
+                "idx_projection_reconcile_operator_time")
+                && indexExists("t_projection_reconcile_request",
+                "idx_projection_reconcile_type_time")
+                && checkConstraintExists("t_projection_reconcile_request",
+                "chk_projection_reconcile_status");
+    }
+
+    public boolean searchIndexRebuildTaskReady() {
+        return tableExists("t_search_index_rebuild_task")
+                && columnExists("t_search_index_rebuild_task", "task_status")
+                && columnExists("t_search_index_rebuild_task", "checkpoint_id")
+                && columnExists("t_search_index_rebuild_task", "heartbeat_time")
+                && columnExists("t_search_index_rebuild_task", "active_key")
+                && primaryKeyExists("t_search_index_rebuild_task", "task_id")
+                && indexExists("t_search_index_rebuild_task",
+                "uk_search_index_rebuild_active")
+                && indexExists("t_search_index_rebuild_task",
+                "idx_search_index_rebuild_status_time")
+                && indexExists("t_search_index_rebuild_task",
+                "idx_search_index_rebuild_lease")
+                && checkConstraintExists("t_search_index_rebuild_task",
+                "chk_search_index_rebuild_status");
+    }
+
+    public boolean knowledgeLifecycleReady() {
+        return tableExists("t_post_reference")
+                && tableExists("t_post_knowledge_relation")
+                && tableExists("t_int_post_outcome")
+                && columnExists("t_int_content_suggestion", "base_version")
+                && columnExists("t_int_content_suggestion", "target_scope")
+                && columnExists("t_int_content_suggestion", "resolution")
+                && columnExists("t_int_content_suggestion", "delivery_status")
+                && columnExists("t_post_reference", "active_guard")
+                && columnExists("t_post_knowledge_relation", "effective_guard")
+                && columnExists("t_int_post_outcome", "effective_guard")
+                && primaryKeyExists("t_post_reference", "id")
+                && primaryKeyExists("t_post_knowledge_relation", "id")
+                && primaryKeyExists("t_int_post_outcome", "id")
+                && indexExists("t_post_reference", "uk_post_reference_active_url")
+                && indexExists("t_post_knowledge_relation",
+                "uk_post_knowledge_relation_effective")
+                && indexExists("t_int_post_outcome", "uk_int_post_outcome_current")
+                && checkConstraintExists("t_post_reference", "chk_post_reference_status")
+                && checkConstraintExists("t_post_knowledge_relation",
+                "chk_post_knowledge_relation_review")
+                && checkConstraintExists("t_int_post_outcome",
+                "chk_int_post_outcome_publication");
     }
 
     public boolean favoriteFolderReady() {

@@ -31,6 +31,7 @@ public class ContentMaintenanceTaskDTO {
     private Boolean canSubmit;
     private Boolean canReview;
     private Boolean canClose;
+    private Boolean canReassign;
     private LocalDateTime claimedAt;
     private LocalDateTime submittedAt;
     private Long reviewedByUid;

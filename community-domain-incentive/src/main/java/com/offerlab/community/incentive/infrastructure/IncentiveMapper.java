@@ -270,6 +270,33 @@ public interface IncentiveMapper {
     List<Long> selectPendingInboxIds(@Param("code") String code, @Param("version") Integer version,
                                      @Param("limit") int limit);
 
+    @Select("""
+            SELECT COUNT(*)
+            FROM (
+                SELECT id
+                FROM t_incentive_reward_inbox
+                WHERE inbox_status = 'PENDING'
+                  AND create_time <= #{cutoff}
+                ORDER BY create_time, id
+                LIMIT #{cap}
+            ) bounded
+            """)
+    int countOverduePendingInbox(@Param("cutoff") LocalDateTime cutoff,
+                                 @Param("cap") int cap);
+
+    @Select("""
+            SELECT id
+            FROM t_incentive_reward_inbox
+            WHERE inbox_status = 'PENDING'
+              AND create_time <= #{cutoff}
+            ORDER BY create_time, id
+            LIMIT #{limit}
+            FOR UPDATE SKIP LOCKED
+            """)
+    List<Long> selectOverduePendingInboxIdsForUpdate(
+            @Param("cutoff") LocalDateTime cutoff,
+            @Param("limit") int limit);
+
     @Update("""
             UPDATE t_incentive_reward_inbox
             SET inbox_status = #{status}, batch_id = #{batchId}, attempt_count = attempt_count + 1,
@@ -558,6 +585,12 @@ public interface IncentiveMapper {
             FROM t_incentive_reconciliation_cursor WHERE id = 1 FOR UPDATE
             """)
     Map<String, Object> lockReconciliationCursor();
+
+    @Select("""
+            SELECT last_account_id AS lastAccountId, cycle_no AS cycleNo, version
+            FROM t_incentive_reconciliation_cursor WHERE id = 1
+            """)
+    Map<String, Object> selectReconciliationCursor();
 
     @Insert("""
             INSERT INTO t_incentive_reconciliation_run(
@@ -1611,6 +1644,9 @@ public interface IncentiveMapper {
     @Select("SELECT * FROM t_community_role_application WHERE id = #{id} FOR UPDATE")
     RoleApplicationPO lockRoleApplication(@Param("id") Long id);
 
+    @Select("SELECT * FROM t_community_role_application WHERE id = #{id}")
+    RoleApplicationPO selectRoleApplication(@Param("id") Long id);
+
     @Update("""
             UPDATE t_community_role_application
             SET application_status = #{status}, reviewer_uid = #{reviewerUid}, review_reason = #{reason}
@@ -1625,6 +1661,36 @@ public interface IncentiveMapper {
             """)
     List<RoleApplicationPO> selectUserRoleApplications(@Param("userId") Long userId,
                                                        @Param("offset") int offset, @Param("limit") int limit);
+
+    @Select("""
+            SELECT * FROM t_community_role_application
+            WHERE applicant_uid = #{userId}
+              AND role_code = #{roleCode}
+              AND domain_code = #{domainCode}
+            ORDER BY create_time DESC, id DESC
+            LIMIT 1
+            """)
+    RoleApplicationPO selectLatestUserRoleApplication(@Param("userId") Long userId,
+                                                      @Param("roleCode") String roleCode,
+                                                      @Param("domainCode") String domainCode);
+
+    @Select("""
+            WITH ranked AS (
+                SELECT application.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY role_code, domain_code
+                           ORDER BY create_time DESC, id DESC
+                       ) AS row_num
+                FROM t_community_role_application application
+                WHERE applicant_uid = #{userId}
+            )
+            SELECT * FROM ranked
+            WHERE row_num = 1
+            ORDER BY update_time DESC, id DESC
+            LIMIT #{limit}
+            """)
+    List<RoleApplicationPO> selectLatestUserRoleApplications(@Param("userId") Long userId,
+                                                             @Param("limit") int limit);
 
     @Select("SELECT COUNT(*) FROM t_community_role_application WHERE applicant_uid = #{userId}")
     long countUserRoleApplications(@Param("userId") Long userId);
@@ -1680,6 +1746,36 @@ public interface IncentiveMapper {
     List<RoleGrantPO> selectUserRoleGrants(@Param("userId") Long userId,
                                            @Param("offset") int offset, @Param("limit") int limit);
 
+    @Select("""
+            SELECT * FROM t_community_role_grant
+            WHERE user_id = #{userId}
+              AND role_code = #{roleCode}
+              AND domain_code = #{domainCode}
+            ORDER BY update_time DESC, id DESC
+            LIMIT 1
+            """)
+    RoleGrantPO selectLatestUserRoleGrant(@Param("userId") Long userId,
+                                          @Param("roleCode") String roleCode,
+                                          @Param("domainCode") String domainCode);
+
+    @Select("""
+            WITH ranked AS (
+                SELECT grant_row.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY role_code, domain_code
+                           ORDER BY update_time DESC, id DESC
+                       ) AS row_num
+                FROM t_community_role_grant grant_row
+                WHERE user_id = #{userId}
+            )
+            SELECT * FROM ranked
+            WHERE row_num = 1
+            ORDER BY update_time DESC, id DESC
+            LIMIT #{limit}
+            """)
+    List<RoleGrantPO> selectLatestUserRoleGrants(@Param("userId") Long userId,
+                                                 @Param("limit") int limit);
+
     @Select("SELECT COUNT(*) FROM t_community_role_grant WHERE user_id = #{userId}")
     long countUserRoleGrants(@Param("userId") Long userId);
 
@@ -1701,4 +1797,52 @@ public interface IncentiveMapper {
             ORDER BY expires_at, id LIMIT #{limit}
             """)
     List<Long> selectExpiredGrantIds(@Param("limit") int limit);
+
+    @Select("""
+            SELECT h.id,
+                   h.grant_id AS grantId,
+                   h.from_status AS fromStatus,
+                   h.to_status AS toStatus,
+                   h.operator_uid AS operatorUid,
+                   h.action_reason AS actionReason,
+                   h.create_time AS createTime
+            FROM t_community_role_grant_history h
+            WHERE h.grant_id = #{grantId}
+            ORDER BY h.create_time DESC, h.id DESC
+            LIMIT #{limit}
+            """)
+    List<Map<String, Object>> selectRoleGrantHistory(@Param("grantId") Long grantId,
+                                                     @Param("limit") int limit);
+
+    @Select("""
+            SELECT
+                (SELECT COUNT(*)
+                 FROM t_incentive_ledger l
+                 WHERE l.user_id = #{userId}
+                   AND l.entry_type = 'REWARD'
+                   AND l.create_time >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 180 DAY)
+                   AND l.rule_code IN (
+                       'FIRST_QUALIFIED_POST_REPUTATION_V1',
+                       'ACCEPTED_ANSWER_REPUTATION_V1',
+                       'SUGGESTION_ACCEPTED_REPUTATION_V1',
+                       'FRESHNESS_UPDATED_REPUTATION_V1',
+                       'HELPFUL_COMMENT_REPUTATION_V1',
+                       'OPERATION_SELECTED_REPUTATION_V1',
+                       'REPORT_ACTION_TAKEN_REPUTATION_V1',
+                       'COLLAB_ACCEPTED_REPUTATION_V1'
+                   )) AS recentTrustedContributionCount,
+                (SELECT COUNT(*)
+                 FROM t_collab_content_maintenance_task task
+                 WHERE task.assignee_uid = #{userId}
+                   AND task.domain = #{domain}
+                   AND task.task_status = 'COMPLETED') AS completedMaintenanceTaskCount,
+                (SELECT COUNT(*)
+                 FROM t_collab_content_maintenance_task task
+                 WHERE task.assignee_uid = #{userId}
+                   AND task.domain = #{domain}
+                   AND task.task_status = 'CLAIMED'
+                   AND task.reviewed_at IS NOT NULL) AS returnedMaintenanceTaskCount
+            """)
+    Map<String, Object> selectRoleReviewContributionSummary(@Param("userId") Long userId,
+                                                            @Param("domain") Integer domain);
 }

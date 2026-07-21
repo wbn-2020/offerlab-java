@@ -11,9 +11,11 @@ import com.offerlab.community.incentive.api.IncentiveDtos.LedgerEntryDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ReconciliationDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ReversalCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.RewardInboxCmd;
+import com.offerlab.community.incentive.api.IncentiveDtos.RewardInboxReconcileDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RewardRuleCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.TrustedRewardInvalidationCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.TrustedRewardInvalidationResultDTO;
+import com.offerlab.community.incentive.api.IncentiveProjectionReconciliationFacade;
 import com.offerlab.community.incentive.domain.IncentiveTypes;
 import com.offerlab.community.incentive.infrastructure.IncentiveMapper;
 import com.offerlab.community.incentive.infrastructure.IncentivePersistence.AccountPO;
@@ -256,6 +258,42 @@ public class AccountLedgerService {
         return completed;
     }
 
+    public int countOverduePendingRewards(Integer requestedLimit, Long operatorUid) {
+        requireAdmin(operatorUid);
+        int limit = IncentiveTypes.safeLimit(requestedLimit);
+        return mapper.countOverduePendingInbox(rewardInboxCutoff(), limit + 1);
+    }
+
+    @Transactional
+    public RewardInboxReconcileDTO reconcileOverduePendingRewards(
+            Integer requestedLimit,
+            String rawReason,
+            Long operatorUid) {
+        requireAdmin(operatorUid);
+        IncentiveTypes.requireReason(rawReason);
+        int limit = IncentiveTypes.safeLimit(requestedLimit);
+        LocalDateTime cutoff = rewardInboxCutoff();
+        List<Long> ids = mapper.selectOverduePendingInboxIdsForUpdate(cutoff, limit);
+        int applied = 0;
+        int rejected = 0;
+        for (Long id : ids) {
+            RewardProcessResult result = processInbox(id, null);
+            if (result == RewardProcessResult.APPLIED) {
+                applied++;
+            } else {
+                rejected++;
+            }
+        }
+        boolean coverageComplete = mapper.countOverduePendingInbox(cutoff, 1) == 0;
+        return RewardInboxReconcileDTO.builder()
+                .slaMinutes(IncentiveProjectionReconciliationFacade.REWARD_INBOX_SLA_MINUTES)
+                .processedCount(ids.size())
+                .appliedCount(applied)
+                .rejectedCount(rejected)
+                .coverageComplete(coverageComplete)
+                .build();
+    }
+
     @Transactional
     public LedgerEntryDTO freeze(Long userId, FreezeCmd cmd, Long operatorUid) {
         requireAdmin(operatorUid);
@@ -482,7 +520,7 @@ public class AccountLedgerService {
     public ReconciliationDTO reconcile(Integer requestedLimit, String rawReason, Long operatorUid) {
         requireAdmin(operatorUid);
         String reason = IncentiveTypes.requireReason(rawReason);
-        int limit = Math.min(IncentiveTypes.safeLimit(requestedLimit) * 10, RECONCILIATION_LIMIT);
+        int limit = reconciliationLimit(requestedLimit);
         mapper.insertReconciliationCursorIfAbsent();
         Map<String, Object> cursor = mapper.lockReconciliationCursor();
         long cursorStart = number(cursor.get("lastAccountId"));
@@ -520,6 +558,43 @@ public class AccountLedgerService {
         adminAuditService.recordRequired(operatorUid, "INCENTIVE_RECONCILIATION_RUN",
                 "INCENTIVE_RECONCILIATION", runId, null, result, reason);
         return result;
+    }
+
+    public ReconciliationDTO previewReconciliation(Integer requestedLimit, String rawReason, Long operatorUid) {
+        requireAdmin(operatorUid);
+        String reason = IncentiveTypes.requireReason(rawReason);
+        int limit = reconciliationLimit(requestedLimit);
+        Map<String, Object> cursor = mapper.selectReconciliationCursor();
+        long cursorStart = cursor == null ? 0 : number(cursor.get("lastAccountId"));
+        long cycleNo = cursor == null ? 1 : Math.max(1, number(cursor.get("cycleNo")));
+        List<Map<String, Object>> rows = mapper.selectReconciliationRows(cursorStart, limit);
+        int mismatches = 0;
+        long totalDifference = 0;
+        for (Map<String, Object> row : rows) {
+            long difference = reconciliationDifference(row);
+            if (difference > 0) {
+                mismatches++;
+                totalDifference = Math.addExact(totalDifference, difference);
+            }
+        }
+        long cursorEnd = rows.isEmpty() ? cursorStart : number(rows.get(rows.size() - 1).get("accountId"));
+        boolean coverageComplete = rows.size() < limit;
+        LocalDateTime now = LocalDateTime.now();
+        return ReconciliationDTO.builder()
+                .status("DRY_RUN")
+                .scannedCount(rows.size())
+                .mismatchCount(mismatches)
+                .totalAbsoluteDifference(totalDifference)
+                .cycleNo(cycleNo)
+                .cursorStartAccountId(cursorStart)
+                .cursorEndAccountId(cursorEnd)
+                .nextCursorAccountId(coverageComplete ? 0 : cursorEnd)
+                .coverageComplete(coverageComplete)
+                .operatorUid(operatorUid)
+                .reason(reason)
+                .createTime(now)
+                .finishTime(now)
+                .build();
     }
 
     public List<ReconciliationDTO> reconciliationRuns(Integer limit, Long operatorUid) {
@@ -1086,6 +1161,27 @@ public class AccountLedgerService {
 
     private static long number(Object value) {
         return value instanceof Number number ? number.longValue() : 0;
+    }
+
+    private static int reconciliationLimit(Integer requestedLimit) {
+        return Math.min(IncentiveTypes.safeLimit(requestedLimit) * 10, RECONCILIATION_LIMIT);
+    }
+
+    private static LocalDateTime rewardInboxCutoff() {
+        return LocalDateTime.now().minusMinutes(
+                IncentiveProjectionReconciliationFacade.REWARD_INBOX_SLA_MINUTES);
+    }
+
+    private static long reconciliationDifference(Map<String, Object> row) {
+        long projectedTotal = number(row.get("projectedTotal"));
+        long ledgerTotal = number(row.get("ledgerTotal"));
+        long projectedAvailable = number(row.get("projectedAvailable"));
+        long ledgerAvailable = number(row.get("ledgerAvailable"));
+        long projectedFrozen = number(row.get("projectedFrozen"));
+        long ledgerFrozen = number(row.get("ledgerFrozen"));
+        return Math.abs(projectedTotal - ledgerTotal)
+                + Math.abs(projectedAvailable - ledgerAvailable)
+                + Math.abs(projectedFrozen - ledgerFrozen);
     }
 
     private static boolean exceedsCap(long current, long increment, long cap) {

@@ -5,11 +5,14 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.security.CommunityRoleAccessService;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.application.DomainModeratorService;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceCandidateDTO;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskCreateCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskDTO;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReassignCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReviewCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskSubmitCmd;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationMapper;
@@ -42,6 +45,7 @@ public class ContentMaintenanceTaskService {
     private final ContentMaintenanceTaskMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
     private final DomainModeratorService domainModeratorService;
+    private final CommunityRoleAccessService communityRoleAccessService;
     private final AdminAuditService adminAuditService;
     private final PostFacade postFacade;
     private final CollaborationMapper collaborationMapper;
@@ -54,6 +58,7 @@ public class ContentMaintenanceTaskService {
         requireModerate(operatorUid, domain);
         Long assigneeUid = requireId(cmd.getAssigneeUid());
         if (mapper.userExists(assigneeUid) <= 0) throw new BizException(ErrorCode.USER_NOT_FOUND);
+        requireMaintenanceRole(assigneeUid, domain);
         Long sourcePostId = positiveOrNull(cmd.getSourcePostId());
         if (sourcePostId != null) requirePublicPostInDomain(sourcePostId, domain);
         Long id = idGenerator.nextId();
@@ -94,15 +99,82 @@ public class ContentMaintenanceTaskService {
         return page(rows, safeSize, row -> toDto(row, operatorUid));
     }
 
+    public PageResult<ContentMaintenanceCandidateDTO> listCandidates(
+            Long uid,
+            Integer requestedDomain,
+            String requestedSourceType,
+            Integer contentType,
+            long cursor,
+            int size) {
+        requireTable();
+        requireId(uid);
+        if (contentType != null && !Post.isSupportedType(contentType)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        String normalizedSourceType = StringUtils.hasText(requestedSourceType)
+                ? sourceType(requestedSourceType)
+                : null;
+        List<Integer> allowedDomains = maintenanceDomains(uid);
+        Integer domain = requestedDomain == null ? null : requireDomain(requestedDomain);
+        if (domain != null && !allowedDomains.contains(domain)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
+        int safeSize = pageSize(size);
+        List<ContentMaintenanceTaskRow> rows;
+        if (domain != null) {
+            rows = mapper.listCandidates(uid, domain, normalizedSourceType, contentType,
+                    safeCursor(cursor), safeSize + 1);
+        } else {
+            rows = allowedDomains.stream()
+                    .flatMap(item -> mapper.listCandidates(uid, item, normalizedSourceType, contentType,
+                            safeCursor(cursor), safeSize + 1).stream())
+                    .sorted((left, right) -> Long.compare(right.getId(), left.getId()))
+                    .limit(safeSize + 1L)
+                    .toList();
+        }
+        return candidatePage(rows, safeSize, uid);
+    }
+
     @Transactional
     public ContentMaintenanceTaskDTO claim(Long id, Long uid) {
         requireTable();
         ContentMaintenanceTaskRow before = requireTask(mapper.lockById(requireId(id)));
         if (!uid.equals(before.getAssigneeUid())) throw new BizException(ErrorCode.FORBIDDEN);
+        requireMaintenanceRole(uid, before.getDomain());
         if (mapper.claim(before.getId(), uid) != 1 && !"CLAIMED".equals(before.getStatus())) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         return toDto(requireTask(mapper.lockById(before.getId())), uid);
+    }
+
+    @Transactional
+    public ContentMaintenanceTaskDTO reassign(
+            Long id,
+            ContentMaintenanceTaskReassignCmd cmd,
+            Long operatorUid) {
+        requireTable();
+        if (cmd == null) throw new BizException(ErrorCode.PARAM_ERROR);
+        ContentMaintenanceTaskRow before = requireTask(mapper.lockById(requireId(id)));
+        requireModerate(operatorUid, before.getDomain());
+        if (!Set.of("OPEN", "CLAIMED").contains(before.getStatus())) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        Long replacementUid = requireId(cmd.getReplacementUid());
+        if (replacementUid.equals(before.getAssigneeUid())) {
+            throw new BizException(ErrorCode.DUPLICATE_OPERATION);
+        }
+        if (mapper.userExists(replacementUid) <= 0) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND);
+        }
+        requireMaintenanceRole(replacementUid, before.getDomain());
+        String reason = required(cmd.getReason(), 500);
+        if (mapper.reassign(before.getId(), replacementUid) != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        ContentMaintenanceTaskRow after = requireTask(mapper.lockById(before.getId()));
+        adminAuditService.recordRequired(operatorUid, "CONTENT_MAINTENANCE_TASK_REASSIGN",
+                "CONTENT_MAINTENANCE_TASK", before.getId(), before, after, reason);
+        return toDto(after, operatorUid);
     }
 
     @Transactional
@@ -111,6 +183,7 @@ public class ContentMaintenanceTaskService {
         if (cmd == null) throw new BizException(ErrorCode.PARAM_ERROR);
         ContentMaintenanceTaskRow before = requireTask(mapper.lockById(requireId(id)));
         if (!uid.equals(before.getAssigneeUid())) throw new BizException(ErrorCode.FORBIDDEN);
+        requireMaintenanceRole(uid, before.getDomain());
         Delivery delivery = delivery(cmd, before.getDomain(), uid);
         if (mapper.submit(before.getId(), uid, delivery.type(), delivery.id(), delivery.postId(),
                 required(cmd.getNote(), 1000)) != 1) {
@@ -196,6 +269,7 @@ public class ContentMaintenanceTaskService {
     private ContentMaintenanceTaskDTO toDto(ContentMaintenanceTaskRow row, Long viewerUid) {
         boolean moderator = viewerUid != null && canModerate(viewerUid, row.getDomain());
         boolean assignee = viewerUid != null && viewerUid.equals(row.getAssigneeUid());
+        boolean activeMaintainer = assignee && hasMaintenanceRole(viewerUid, row.getDomain());
         return ContentMaintenanceTaskDTO.builder()
                 .id(row.getId()).domain(row.getDomain()).sourceType(row.getSourceType())
                 .sourceRefId(row.getSourceRefId()).sourcePostId(row.getSourcePostId())
@@ -204,10 +278,11 @@ public class ContentMaintenanceTaskService {
                 .deliveryType(row.getDeliveryType()).deliveryRefId(row.getDeliveryRefId())
                 .deliveryPostId(row.getDeliveryPostId()).deliveryNote(row.getDeliveryNote())
                 .reviewNote(row.getReviewNote())
-                .canClaim(assignee && "OPEN".equals(row.getStatus()))
-                .canSubmit(assignee && "CLAIMED".equals(row.getStatus()))
+                .canClaim(activeMaintainer && "OPEN".equals(row.getStatus()))
+                .canSubmit(activeMaintainer && "CLAIMED".equals(row.getStatus()))
                 .canReview(moderator && "SUBMITTED".equals(row.getStatus()))
                 .canClose(moderator && Set.of("OPEN", "CLAIMED", "SUBMITTED").contains(row.getStatus()))
+                .canReassign(moderator && Set.of("OPEN", "CLAIMED").contains(row.getStatus()))
                 .claimedAt(row.getClaimedAt()).submittedAt(row.getSubmittedAt())
                 .reviewedByUid(row.getReviewedByUid()).reviewedAt(row.getReviewedAt())
                 .closedByUid(row.getClosedByUid()).closedAt(row.getClosedAt())
@@ -230,6 +305,29 @@ public class ContentMaintenanceTaskService {
                 .toList();
         if (domains.isEmpty()) throw new BizException(ErrorCode.FORBIDDEN);
         return domains;
+    }
+
+    private List<Integer> maintenanceDomains(Long uid) {
+        List<Integer> domains = List.of(1, 2, 3, 4, 5).stream()
+                .filter(domain -> hasMaintenanceRole(uid, domain))
+                .toList();
+        if (domains.isEmpty()) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
+        return domains;
+    }
+
+    private boolean hasMaintenanceRole(Long uid, Integer domain) {
+        return uid != null
+                && domain != null
+                && communityRoleAccessService.hasActiveGrant(
+                uid, "CHANNEL_RESOURCE_MAINTAINER", domainCode(domain));
+    }
+
+    private void requireMaintenanceRole(Long uid, Integer domain) {
+        if (!hasMaintenanceRole(uid, domain)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
     }
 
     private void requireTable() {
@@ -297,6 +395,49 @@ public class ContentMaintenanceTaskService {
         List<ContentMaintenanceTaskRow> visible = safe.stream().limit(size).toList();
         String next = hasMore && !visible.isEmpty() ? String.valueOf(visible.get(visible.size() - 1).getId()) : null;
         return PageResult.of(visible.stream().map(converter).toList(), next, hasMore);
+    }
+
+    private static PageResult<ContentMaintenanceCandidateDTO> candidatePage(
+            List<ContentMaintenanceTaskRow> rows,
+            int size,
+            Long uid) {
+        List<ContentMaintenanceTaskRow> safe = rows == null ? List.of() : rows;
+        boolean hasMore = safe.size() > size;
+        List<ContentMaintenanceTaskRow> visible = safe.stream().limit(size).toList();
+        String next = hasMore && !visible.isEmpty()
+                ? String.valueOf(visible.get(visible.size() - 1).getId())
+                : null;
+        List<ContentMaintenanceCandidateDTO> items = visible.stream()
+                .map(row -> {
+                    boolean assignedToViewer = uid.equals(row.getAssigneeUid());
+                    return ContentMaintenanceCandidateDTO.builder()
+                            .id(row.getId())
+                            .domain(row.getDomain())
+                            .sourceType(row.getSourceType())
+                            .sourceRefId(row.getSourceRefId())
+                            .sourcePostId(row.getSourcePostId())
+                            .sourcePostType(row.getSourcePostType())
+                            .title(row.getTitle())
+                            .status(row.getStatus())
+                            .assignmentStatus(assignedToViewer ? "ASSIGNED_TO_ME" : "UNASSIGNED")
+                            .canClaim(assignedToViewer)
+                            .createTime(row.getCreateTime())
+                            .updateTime(row.getUpdateTime())
+                            .build();
+                })
+                .toList();
+        return PageResult.of(items, next, hasMore);
+    }
+
+    private static String domainCode(Integer domain) {
+        return switch (domain == null ? 0 : domain) {
+            case 1 -> "TECH";
+            case 2 -> "CAREER";
+            case 3 -> "READING";
+            case 4 -> "LIFESTYLE";
+            case 5 -> "INVESTMENT";
+            default -> throw new BizException(ErrorCode.PARAM_ERROR);
+        };
     }
 
     private record Delivery(String type, Long id, Long postId) {

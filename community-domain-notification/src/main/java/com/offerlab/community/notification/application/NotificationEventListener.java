@@ -19,6 +19,8 @@ import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.post.api.event.OperationCurationSelectedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PostReportReviewedEvent;
+import com.offerlab.community.post.collaboration.api.CollaborationNeedFollowFacade;
+import com.offerlab.community.post.collaboration.api.CollaborationNeedStateChangedEvent;
 import com.offerlab.community.user.api.event.UserFollowedEvent;
 import com.offerlab.community.user.api.UserFacade;
 import lombok.RequiredArgsConstructor;
@@ -29,9 +31,11 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -54,6 +58,8 @@ public class NotificationEventListener {
     private static final int POST_VIS_PUBLIC = 1;
     private static final int POST_STATUS_PUBLISHED = 1;
     private static final int DISCUSSION_FOLLOW_NOTIFICATION_BATCH_SIZE = 500;
+    private static final int COLLABORATION_NEED_FOLLOWER_BATCH_SIZE = 100;
+    private static final int COLLABORATION_NEED_SAFE_NOTE_LENGTH = 500;
     private static final String ACTION_DISCUSSION_FOLLOW_COMMENT = "discussion_follow_comment";
     private static final String ACTION_DISCUSSION_FOLLOW_FEATURED_REPLY = "discussion_follow_featured_reply";
     private static final String ACTION_DISCUSSION_FOLLOW_AUTHOR_PINNED = "discussion_follow_author_pinned";
@@ -61,6 +67,8 @@ public class NotificationEventListener {
     private static final String ACTION_ANSWER_ACCEPTED = "answerAccepted";
     private static final String ACTION_CONTENT_SUGGESTION_SUBMITTED = "contentSuggestionSubmitted";
     private static final String ACTION_CONTENT_SUGGESTION_DECIDED = "contentSuggestionDecided";
+    private static final String ACTION_COLLABORATION_NEED_STATE_CHANGED = "collaboration_need_state_changed";
+    private static final String COLLABORATION_NEED_DEDUP_PREFIX = "collaboration_need_event:";
     private static final String ACTION_REPORT_RECEIPT = "report_receipt";
     private static final String ACTION_CONTACT_REQUEST_RECEIVED = "contact_request_received";
     private static final String ACTION_CONTACT_REQUEST_ACCEPTED = "contact_request_accepted";
@@ -77,11 +85,19 @@ public class NotificationEventListener {
     private static final String REPORT_USER_STATUS_ACTION_TAKEN = "ACTION_TAKEN";
     private static final String REPORT_USER_STATUS_NOT_ACCEPTED = "NOT_ACCEPTED";
     private static final String REPORT_USER_STATUS_CLOSED = "CLOSED";
+    private static final Set<String> COLLABORATION_NEED_EVENT_TYPES = Set.of(
+            "CLAIMED", "SUBMITTED", "REJECTED", "WITHDRAWN",
+            "ACCEPTED", "COMPLETED", "CLOSED", "MERGED", "RELEASED");
+    private static final Set<String> COLLABORATION_NEED_FOLLOWER_EVENT_TYPES = Set.of(
+            "ACCEPTED", "COMPLETED", "MERGED");
+    private static final Set<String> COLLABORATION_NEED_CLAIMANT_REQUIRED_EVENT_TYPES = Set.of(
+            "CLAIMED", "SUBMITTED", "REJECTED", "WITHDRAWN", "ACCEPTED", "RELEASED");
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}\\p{N}_\\-\\u4e00-\\u9fa5]{2,32})");
 
     private final NotificationFacade notificationFacade;
     private final UserFacade userFacade;
     private final DiscussionFollowFacade discussionFollowFacade;
+    private final CollaborationNeedFollowFacade collaborationNeedFollowFacade;
     private final NotificationRetryService retryService;
 
     @Async("notificationAsyncExecutor")
@@ -236,6 +252,35 @@ public class NotificationEventListener {
 
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCollaborationNeedStateChanged(CollaborationNeedStateChangedEvent event) {
+        try {
+            handleCollaborationNeedStateChangedSynchronously(event);
+        } catch (RuntimeException e) {
+            log.warn("collaboration need state notification failed: eventId={} needId={}",
+                    event == null ? null : event.getEventId(),
+                    event == null ? null : event.getNeedId(),
+                    e);
+        }
+    }
+
+    public void handleCollaborationNeedStateChangedSynchronously(
+            CollaborationNeedStateChangedEvent event) {
+        String eventType = requireCompleteCollaborationNeedStateChangedEvent(event);
+        Set<Long> directRecipients = collaborationNeedDirectRecipients(event, eventType);
+        Map<String, Object> directContent = collaborationNeedStateContent(event, eventType, true);
+        for (Long receiverUid : directRecipients) {
+            notifyCollaborationNeedStateReceiver(receiverUid, event, eventType, directContent);
+        }
+        if (!COLLABORATION_NEED_FOLLOWER_EVENT_TYPES.contains(eventType)) {
+            return;
+        }
+        Set<Long> excluded = new HashSet<>(directRecipients);
+        addExcludedUid(excluded, event.getActorUid());
+        notifyCollaborationNeedFollowers(event, eventType, excluded);
+    }
+
+    @Async("notificationAsyncExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onUserFollowed(UserFollowedEvent event) {
         runQuietly(() -> notificationFacade.notifyFollower(
                 event.getFolloweeId(), event.getFollowerId()),
@@ -363,7 +408,11 @@ public class NotificationEventListener {
                     receiverUid, senderUid, notifType, targetType, targetId, content);
             log.warn("create notification failed, scene={} dedupKey={}: {}",
                     scene, LogMask.key(dedupKey), e.getMessage());
-            retryService.enqueue(scene, receiverUid, senderUid, notifType, targetType, targetId, content, e);
+            if (!retryService.enqueue(
+                    scene, receiverUid, senderUid, notifType, targetType, targetId, content, e)) {
+                throw new IllegalStateException(
+                        "notification write failed and retry task was not persisted", e);
+            }
             return false;
         }
     }
@@ -438,6 +487,191 @@ public class NotificationEventListener {
                 && isPositive(event.getSubmitterUid())
                 && event.getDecision() != null
                 && !String.valueOf(event.getDecision()).isBlank();
+    }
+
+    private String requireCompleteCollaborationNeedStateChangedEvent(
+            CollaborationNeedStateChangedEvent event) {
+        if (event == null) {
+            throw incompleteCollaborationNeedEvent("event");
+        }
+        if (!isPositive(event.getEventId())) {
+            throw incompleteCollaborationNeedEvent("eventId");
+        }
+        if (!isPositive(event.getNeedId())) {
+            throw incompleteCollaborationNeedEvent("needId");
+        }
+        if (!isPositive(event.getActorUid())) {
+            throw incompleteCollaborationNeedEvent("actorUid");
+        }
+        if (!isPositive(event.getCreatorUid())) {
+            throw incompleteCollaborationNeedEvent("creatorUid");
+        }
+        if (event.getDomain() == null || event.getDomain() < 1 || event.getDomain() > 5) {
+            throw incompleteCollaborationNeedEvent("domain");
+        }
+        if (!isPositive(event.getOccurredAt())) {
+            throw incompleteCollaborationNeedEvent("occurredAt");
+        }
+        if (isBlank(event.getDedupKey())) {
+            throw incompleteCollaborationNeedEvent("dedupKey");
+        }
+        if (isBlank(event.getFromStatus())) {
+            throw incompleteCollaborationNeedEvent("fromStatus");
+        }
+        if (isBlank(event.getToStatus())) {
+            throw incompleteCollaborationNeedEvent("toStatus");
+        }
+        String eventType = normalizeCollaborationNeedValue(event.getEventType());
+        if (!COLLABORATION_NEED_EVENT_TYPES.contains(eventType)) {
+            throw incompleteCollaborationNeedEvent("eventType");
+        }
+        if (COLLABORATION_NEED_CLAIMANT_REQUIRED_EVENT_TYPES.contains(eventType)
+                && !isPositive(event.getClaimantUid())) {
+            throw incompleteCollaborationNeedEvent("claimantUid");
+        }
+        if ("MERGED".equals(eventType) && !isPositive(event.getTargetNeedId())) {
+            throw incompleteCollaborationNeedEvent("targetNeedId");
+        }
+        if (event.getTargetId() != null && !isPositive(event.getTargetId())) {
+            throw incompleteCollaborationNeedEvent("targetId");
+        }
+        return eventType;
+    }
+
+    private Set<Long> collaborationNeedDirectRecipients(
+            CollaborationNeedStateChangedEvent event, String eventType) {
+        Set<Long> recipients = new LinkedHashSet<>();
+        switch (eventType) {
+            case "CLAIMED", "SUBMITTED", "WITHDRAWN", "RELEASED" ->
+                    addCollaborationNeedRecipient(recipients, event.getCreatorUid(), event.getActorUid());
+            case "REJECTED", "ACCEPTED", "COMPLETED", "CLOSED" -> {
+                addCollaborationNeedRecipient(recipients, event.getClaimantUid(), event.getActorUid());
+                addCollaborationNeedRecipient(recipients, event.getCreatorUid(), event.getActorUid());
+            }
+            case "MERGED" -> {
+                addCollaborationNeedRecipient(recipients, event.getCreatorUid(), event.getActorUid());
+                addCollaborationNeedRecipient(recipients, event.getClaimantUid(), event.getActorUid());
+            }
+            default -> {
+                // Validated before dispatch.
+            }
+        }
+        return recipients;
+    }
+
+    private void addCollaborationNeedRecipient(Set<Long> recipients, Long uid, Long actorUid) {
+        if (recipients != null && isPositive(uid) && !uid.equals(actorUid)) {
+            recipients.add(uid);
+        }
+    }
+
+    private void notifyCollaborationNeedFollowers(
+            CollaborationNeedStateChangedEvent event, String eventType, Set<Long> excluded) {
+        long cursor = 0L;
+        Set<Long> visitedCursors = new HashSet<>();
+        visitedCursors.add(cursor);
+        Set<Long> seenReceivers = new HashSet<>(excluded);
+        Map<String, Object> publicContent = collaborationNeedStateContent(event, eventType, false);
+        while (true) {
+            PageResult<Long> page = collaborationNeedFollowFacade.listActiveFollowerUids(
+                    event.getNeedId(), cursor, COLLABORATION_NEED_FOLLOWER_BATCH_SIZE);
+            for (Long receiverUid : safeItems(page)) {
+                if (!isPositive(receiverUid) || !seenReceivers.add(receiverUid)) {
+                    continue;
+                }
+                notifyCollaborationNeedStateReceiver(receiverUid, event, eventType, publicContent);
+            }
+            if (page == null || !Boolean.TRUE.equals(page.getHasMore())) {
+                return;
+            }
+            Long nextCursor = parseCollaborationNeedFollowerCursor(page.getNextCursor());
+            if (nextCursor == null || !visitedCursors.add(nextCursor)) {
+                log.warn("collaboration need follower cursor did not advance: eventId={} needId={} cursor={} nextCursor={}",
+                        event.getEventId(), event.getNeedId(), cursor, page.getNextCursor());
+                return;
+            }
+            cursor = nextCursor;
+        }
+    }
+
+    private Long parseCollaborationNeedFollowerCursor(String nextCursor) {
+        if (nextCursor == null || nextCursor.isBlank()) {
+            return null;
+        }
+        try {
+            long cursor = Long.parseLong(nextCursor.trim());
+            return cursor >= 0 ? cursor : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private void notifyCollaborationNeedStateReceiver(
+            Long receiverUid,
+            CollaborationNeedStateChangedEvent event,
+            String eventType,
+            Map<String, Object> content) {
+        runQuietly(
+                () -> notificationFacade.notifySystem(receiverUid, null, event.getNeedId(), content),
+                ACTION_COLLABORATION_NEED_STATE_CHANGED + ":" + eventType,
+                receiverUid,
+                0L,
+                TYPE_SYSTEM,
+                null,
+                event.getNeedId(),
+                content);
+    }
+
+    private Map<String, Object> collaborationNeedStateContent(
+            CollaborationNeedStateChangedEvent event, String eventType, boolean includePrivateNote) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", ACTION_COLLABORATION_NEED_STATE_CHANGED);
+        content.put("needId", event.getNeedId());
+        content.put("eventType", eventType);
+        content.put("status", normalizeCollaborationNeedValue(event.getToStatus()));
+        if ("MERGED".equals(eventType)) {
+            content.put("targetNeedId", event.getTargetNeedId());
+        }
+        content.put("targetPath", collaborationNeedTargetPath(event, eventType));
+        content.put("dedupKey", COLLABORATION_NEED_DEDUP_PREFIX + event.getEventId());
+        if (includePrivateNote) {
+            String note = safeCollaborationNeedNote(event.getNote());
+            if (note != null) {
+                content.put("reasonText", note);
+            }
+        }
+        return content;
+    }
+
+    private String collaborationNeedTargetPath(
+            CollaborationNeedStateChangedEvent event, String eventType) {
+        Long targetNeedId = "MERGED".equals(eventType)
+                ? event.getTargetNeedId()
+                : event.getNeedId();
+        return "/collaboration/needs/" + targetNeedId;
+    }
+
+    private String safeCollaborationNeedNote(String note) {
+        if (note == null || note.isBlank()) {
+            return null;
+        }
+        String value = note.trim();
+        return value.length() <= COLLABORATION_NEED_SAFE_NOTE_LENGTH
+                ? value
+                : value.substring(0, COLLABORATION_NEED_SAFE_NOTE_LENGTH);
+    }
+
+    private String normalizeCollaborationNeedValue(String value) {
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private IllegalArgumentException incompleteCollaborationNeedEvent(String field) {
+        return new IllegalArgumentException(
+                "incomplete collaboration need state-changed event: " + field);
     }
 
     private Set<Long> notifyMentions(Long senderUid, Long postId, Long commentId, String text, Set<Long> excludedUids) {

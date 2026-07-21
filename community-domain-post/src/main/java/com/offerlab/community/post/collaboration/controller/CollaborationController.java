@@ -47,11 +47,59 @@ public class CollaborationController {
         return Result.ok(service.listNeeds(domain, status, UserContext.get(), cursor, size));
     }
 
+    @GetMapping("/needs/mine")
+    @RateLimit(key = "'collaboration:needs:mine:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<NeedDTO>> listMyClaimedNeeds(
+            @RequestParam(required = false) @Size(max = 24) String status,
+            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
+        return Result.ok(service.listMyClaimedNeeds(UserContext.require(), status, cursor, size));
+    }
+
+    @GetMapping("/needs/mine/created")
+    @RateLimit(key = "'collaboration:needs:mine:created:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<NeedDTO>> listMyCreatedNeeds(
+            @RequestParam(required = false) @Size(max = 24) String status,
+            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
+        return Result.ok(service.listMyCreatedNeeds(UserContext.require(), status, cursor, size));
+    }
+
+    @GetMapping("/needs/mine/followed")
+    @RateLimit(key = "'collaboration:needs:mine:followed:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<NeedDTO>> listMyFollowedNeeds(
+            @RequestParam(required = false) @Size(max = 24) String status,
+            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
+        return Result.ok(service.listMyFollowedNeeds(UserContext.require(), status, cursor, size));
+    }
+
+    @GetMapping("/needs/review-queue")
+    @RateLimit(key = "'collaboration:needs:review-list:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<NeedDTO>> listNeedReviewQueue(
+            @RequestParam(required = false) @Min(1) @Max(5) Integer domain,
+            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
+        return Result.ok(service.listNeedReviewQueue(domain, UserContext.require(), cursor, size));
+    }
+
     @PublicApi
     @GetMapping("/needs/{needId}")
     @RateLimit(key = "'public:collaboration:need:' + #needId + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
     public Result<NeedDTO> getNeed(@PathVariable @Positive Long needId, HttpServletRequest request) {
         return Result.ok(service.getNeed(needId, UserContext.get()));
+    }
+
+    @PublicApi
+    @GetMapping("/needs/{needId}/events")
+    @RateLimit(key = "'public:collaboration:need-events:' + #needId + ':' + #request.remoteAddr",
+            rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<NeedEventDTO>> listNeedEvents(
+            @PathVariable @Positive Long needId,
+            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+            HttpServletRequest request) {
+        return Result.ok(service.listNeedEvents(needId, UserContext.get(), cursor, size));
     }
 
     @PostMapping("/needs")
@@ -91,6 +139,40 @@ public class CollaborationController {
     public Result<NeedDTO> fulfillNeed(@PathVariable @Positive Long needId,
                                        @Valid @RequestBody NeedCompleteCmd cmd) {
         return Result.ok(service.fulfillNeed(needId, cmd, UserContext.require()));
+    }
+
+    @PostMapping("/needs/{needId}/submit")
+    @RateLimit(key = "'collaboration:need:submit:' + #uid", rate = 20, per = 300, failOpen = false)
+    public Result<NeedDTO> submitNeed(@PathVariable @Positive Long needId,
+                                      @Valid @RequestBody NeedSubmitCmd cmd) {
+        return Result.ok(service.submitNeed(needId, cmd, UserContext.require()));
+    }
+
+    @PostMapping("/needs/{needId}/accept")
+    @RateLimit(key = "'collaboration:need:accept:' + #uid", rate = 20, per = 300, failOpen = false)
+    public Result<NeedDTO> acceptNeed(@PathVariable @Positive Long needId,
+                                      @Valid @RequestBody(required = false) NeedAcceptCmd cmd) {
+        return Result.ok(service.acceptNeed(needId, cmd, UserContext.require()));
+    }
+
+    @PostMapping("/needs/{needId}/reject")
+    @RateLimit(key = "'collaboration:need:reject:' + #uid", rate = 20, per = 300, failOpen = false)
+    public Result<NeedDTO> rejectNeed(@PathVariable @Positive Long needId,
+                                      @Valid @RequestBody NeedRejectCmd cmd) {
+        return Result.ok(service.rejectNeed(needId, cmd, UserContext.require()));
+    }
+
+    @PostMapping("/needs/{needId}/withdraw")
+    @RateLimit(key = "'collaboration:need:withdraw:' + #uid", rate = 20, per = 300, failOpen = false)
+    public Result<NeedDTO> withdrawNeed(@PathVariable @Positive Long needId) {
+        return Result.ok(service.withdrawNeed(needId, UserContext.require()));
+    }
+
+    @PostMapping("/needs/{needId}/release")
+    @RateLimit(key = "'collaboration:need:release:' + #uid", rate = 20, per = 300, failOpen = false)
+    public Result<NeedDTO> releaseNeed(@PathVariable @Positive Long needId,
+                                      @Valid @RequestBody(required = false) NeedReleaseCmd cmd) {
+        return Result.ok(service.releaseNeed(needId, cmd, UserContext.require()));
     }
 
     @PostMapping("/needs/{needId}/close")

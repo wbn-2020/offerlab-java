@@ -32,7 +32,7 @@ public class TrustedContentEventListener {
         if (event == null) {
             return;
         }
-        trustedContentService.mergeSuggestionsFromPostUpdate(
+        trustedContentService.linkSuggestionsFromPostUpdate(
                 event.getPostId(),
                 event.getAuthorId(),
                 event.getRespondedSuggestionIds(),

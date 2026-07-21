@@ -129,7 +129,8 @@ public class NotificationController {
             "resultText", "userResultText", "targetPath", "jumpPath", "href", "topicId",
             "topicSlug", "topicName", "topics", "placementType", "placementKey", "source",
             "dedupKey", "message", "title", "eventId", "eventType", "contentId", "contentTitle",
-            "placementId", "placementLabel", "sectionKey", "reason", "reasonText", "entrance"
+            "placementId", "placementLabel", "sectionKey", "reason", "reasonText", "entrance",
+            "needId", "targetNeedId"
     );
 
     private Map<String, Object> sanitizeContent(Map<?, ?> raw) {

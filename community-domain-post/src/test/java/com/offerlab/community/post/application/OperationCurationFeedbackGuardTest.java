@@ -42,9 +42,9 @@ class OperationCurationFeedbackGuardTest {
                 "anonymous, private, deleted, reviewing, violating, and synthetic content must not become author-visible feedback");
         assertTrue(service.contains("isRealRemotePlacement"),
                 "fallback/demo/fixture placements must not create real author feedback");
-        assertTrue(service.contains("applicationEventPublisher.publishEvent")
-                        && service.contains("OperationCurationSelectedEvent"),
-                "publishing a real placement must emit a creator curation selected event");
+        assertTrue(service.contains("private final EventPublisher events")
+                        && service.contains("events.publish(OperationCurationSelectedEvent.builder()"),
+                "publishing a real placement must emit a creator curation selected event through the durable event publisher");
         assertTrue(service.contains("publishCreatorCurationSelectedEvents(current)"),
                 "draft and preview edits must not send real notifications; only publish/rollback of published snapshots may emit events");
         assertTrue(service.contains("rollback") && service.contains("listCreatorCurationFeedback"),

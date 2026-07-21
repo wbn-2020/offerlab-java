@@ -41,13 +41,13 @@ public class NotificationRetryService {
     private final NotificationFacadeImpl notificationFacade;
     private final String owner = buildOwner();
 
-    public void enqueue(String scene, Long receiverUid, Long senderUid, Integer notifType,
-                        Integer targetType, Long targetId, Map<String, Object> content, Throwable cause) {
+    public boolean enqueue(String scene, Long receiverUid, Long senderUid, Integer notifType,
+                           Integer targetType, Long targetId, Map<String, Object> content, Throwable cause) {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
-            return;
+            return false;
         }
         if (!tableReady()) {
-            return;
+            return false;
         }
         NotificationRetryTaskPO task = new NotificationRetryTaskPO();
         task.setId(idGen.nextId());
@@ -66,6 +66,7 @@ public class NotificationRetryService {
         taskMapper.upsertPending(task);
         log.warn("notification retry task enqueued: scene={} dedupKey={} receiverUid={} targetId={}",
                 scene, LogMask.key(task.getDedupKey()), LogMask.id(receiverUid), LogMask.id(targetId), cause);
+        return true;
     }
 
     @Scheduled(fixedDelay = 5000)

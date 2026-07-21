@@ -11,6 +11,8 @@ import com.offerlab.community.infra.security.CommunityRoleAccessService;
 import com.offerlab.community.post.application.DomainConfigService;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.collaboration.api.CollaborationContributionAcceptedEvent;
+import com.offerlab.community.post.collaboration.api.CollaborationNeedFollowFacade;
+import com.offerlab.community.post.collaboration.api.CollaborationNeedStateChangedEvent;
 import com.offerlab.community.post.collaboration.api.CollaborationModels.*;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationMapper;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationRows;
@@ -34,16 +36,24 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-public class CollaborationService {
+public class CollaborationService implements CollaborationNeedFollowFacade {
 
-    private static final int REQUIRED_TABLES = 17;
-    private static final int REQUIRED_CRITICAL_COLUMNS = 18;
+    private static final int REQUIRED_TABLES = 18;
+    private static final int REQUIRED_CRITICAL_COLUMNS = 28;
+    private static final int REQUIRED_CLAIM_CYCLE_TABLES = 2;
+    private static final int REQUIRED_CLAIM_CYCLE_COLUMNS = 32;
     private static final int MAX_PAGE_SIZE = 50;
+    private static final int MAX_FOLLOWER_PAGE_SIZE = 200;
     private static final int REPORT_DAILY_LIMIT = 20;
     private static final int APPEAL_DAILY_LIMIT = 5;
+    private static final long CLAIM_STALE_AFTER_DAYS = 14;
     private static final long OFFICE_HOUR_CONFIRMATION_GRACE_HOURS = 72;
     private static final long OFFICE_HOUR_FEEDBACK_BLIND_HOURS = 72;
-    private static final String MIGRATION = "db/migration/20260714_collaboration_stage2.sql";
+    private static final String EVENT_VISIBILITY_PUBLIC = "PUBLIC";
+    private static final String EVENT_VISIBILITY_PARTICIPANTS = "PARTICIPANTS";
+    private static final String MIGRATION = "db/migration/20260718_collab_need_lifecycle.sql";
+    private static final String CLAIM_CYCLE_MIGRATION =
+            "db/migration/20260719_collab_need_claim_cycle_revision.sql";
     private volatile boolean schemaReady;
 
     private final CollaborationMapper mapper;
@@ -58,7 +68,8 @@ public class CollaborationService {
     public PageResult<NeedDTO> listNeeds(Integer domain, String status, Long viewerUid, long cursor, int size) {
         requireSchema();
         Integer activeDomain = optionalDomain(domain);
-        String activeStatus = optionalStatus(status, "OPEN", "CLAIMED", "COMPLETED", "CLOSED", "MERGED");
+        String activeStatus = optionalStatus(status,
+                "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
         int pageSize = pageSize(size);
         List<NeedRow> rows = mapper.listNeeds(activeDomain, activeStatus, viewerUid, safeCursor(cursor), pageSize + 1);
         Map<Integer, Boolean> moderation = new HashMap<>();
@@ -68,9 +79,88 @@ public class CollaborationService {
                 NeedRow::getId);
     }
 
+    public PageResult<NeedDTO> listMyClaimedNeeds(Long uid, String status, long cursor, int size) {
+        requireSchema();
+        String activeStatus = optionalStatus(status,
+                "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
+        int pageSize = pageSize(size);
+        List<NeedRow> rows = mapper.listNeedsByClaimant(uid, activeStatus, safeCursor(cursor), pageSize + 1);
+        Map<Integer, Boolean> moderation = new HashMap<>();
+        return page(rows, pageSize,
+                row -> toNeed(row, uid,
+                        canManageCached(row.getCreatorUid(), uid, row.getDomain(), moderation)),
+                NeedRow::getId);
+    }
+
+    public PageResult<NeedDTO> listMyCreatedNeeds(Long uid, String status, long cursor, int size) {
+        requireSchema();
+        String activeStatus = optionalStatus(status,
+                "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
+        int pageSize = pageSize(size);
+        List<NeedRow> rows = mapper.listNeedsByCreator(uid, activeStatus, safeCursor(cursor), pageSize + 1);
+        return page(rows, pageSize, row -> toNeed(row, uid, true), NeedRow::getId);
+    }
+
+    public PageResult<NeedDTO> listMyFollowedNeeds(Long uid, String status, long cursor, int size) {
+        requireSchema();
+        String activeStatus = optionalStatus(status,
+                "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
+        int pageSize = pageSize(size);
+        List<NeedRow> rows = mapper.listFollowedNeeds(uid, activeStatus, safeCursor(cursor), pageSize + 1);
+        Map<Integer, Boolean> moderation = new HashMap<>();
+        return page(rows, pageSize,
+                row -> toNeed(row, uid,
+                        canManageCached(row.getCreatorUid(), uid, row.getDomain(), moderation)),
+                NeedRow::getFollowId);
+    }
+
+    @Override
+    public PageResult<Long> listActiveFollowerUids(Long needId, long cursor, int size) {
+        requireSchema();
+        int pageSize = followerPageSize(size);
+        List<NeedFollowRow> rows = mapper.listActiveNeedFollowers(
+                requireId(needId), safeCursor(cursor), pageSize + 1);
+        List<NeedFollowRow> safe = rows == null ? List.of() : rows;
+        boolean hasMore = safe.size() > pageSize;
+        List<NeedFollowRow> visible = safe.stream().limit(pageSize).toList();
+        List<Long> uids = visible.stream().map(NeedFollowRow::getUid).toList();
+        String next = hasMore && !visible.isEmpty()
+                ? String.valueOf(visible.get(visible.size() - 1).getId())
+                : null;
+        return PageResult.of(uids, next, hasMore);
+    }
+
+    public PageResult<NeedDTO> listNeedReviewQueue(Integer domain, Long uid, long cursor, int size) {
+        requireSchema();
+        Integer activeDomain = optionalDomain(domain);
+        if (activeDomain == null) {
+            adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR);
+        } else {
+            domainModeratorService.requireModerateDomain(uid, activeDomain);
+        }
+        int pageSize = pageSize(size);
+        List<NeedRow> rows = mapper.listNeedReviewQueue(
+                activeDomain, uid, safeCursor(cursor), pageSize + 1);
+        return page(rows, pageSize, row -> toNeed(row, uid, true), NeedRow::getId);
+    }
+
     public NeedDTO getNeed(Long id, Long viewerUid) {
         requireSchema();
         return toNeed(requireNeed(mapper.selectNeed(requireId(id), viewerUid)), viewerUid);
+    }
+
+    public PageResult<NeedEventDTO> listNeedEvents(Long id, Long viewerUid, long cursor, int size) {
+        requireSchema();
+        NeedRow need = requireNeed(mapper.selectNeed(requireId(id), viewerUid));
+        boolean canManage = Objects.equals(need.getCreatorUid(), viewerUid)
+                || canModerate(viewerUid, need.getDomain());
+        int pageSize = pageSize(size);
+        List<NeedEventRow> rows = mapper.listNeedEvents(
+                need.getId(), viewerUid, canManage ? 1 : 0,
+                safeCursor(cursor), pageSize + 1);
+        return page(rows, pageSize,
+                this::toNeedEvent,
+                NeedEventRow::getId);
     }
 
     @Transactional
@@ -88,6 +178,8 @@ public class CollaborationService {
         moderate(uid, "CONTENT_NEED", id, title, description, criteria);
         mapper.insertNeed(id, uid, domain, sourceType, positiveOrNull(cmd.getSourceRefId()),
                 contentFormat, title, description, criteria, flag(cmd.getRiskAcknowledged()));
+        appendNeedEvent(id, "CREATED", uid, uid, null, domain,
+                null, "OPEN", null, null, null, EVENT_VISIBILITY_PUBLIC, false);
         return getNeed(id, uid);
     }
 
@@ -125,6 +217,8 @@ public class CollaborationService {
         moderate(operatorUid, "SEARCH_GAP_NEED", needId, title, description, criteria);
         mapper.insertNeed(needId, operatorUid, domain, "SEARCH_GAP", sourceRefId, format,
                 title, description, criteria, flag(cmd.getRiskAcknowledged()));
+        appendNeedEvent(needId, "CREATED", operatorUid, operatorUid, null, domain,
+                null, "OPEN", null, null, null, EVENT_VISIBILITY_PUBLIC, false);
         return getNeed(needId, operatorUid);
     }
 
@@ -133,8 +227,12 @@ public class CollaborationService {
         requireSchema();
         NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
         requireOpenForParticipation(need.getStatus());
-        int changed = mapper.followNeed(idGenerator.nextId(), need.getId(), uid);
-        if (changed > 0) {
+        Long followId = idGenerator.nextId();
+        int changed = mapper.reactivateNeedFollow(followId, need.getId(), uid);
+        if (changed == 0) {
+            changed = mapper.insertNeedFollow(followId, need.getId(), uid);
+        }
+        if (changed == 1) {
             mapper.incrementNeedFollowerCount(need.getId(), 1);
         }
         return getNeed(need.getId(), uid);
@@ -162,6 +260,13 @@ public class CollaborationService {
         if (mapper.claimNeed(need.getId(), uid) != 1) {
             throw invalidState();
         }
+        Long cycleId = idGenerator.nextId();
+        if (mapper.insertNeedClaimCycle(cycleId, need.getId(), uid) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to record collaboration claim cycle");
+        }
+        appendNeedEvent(need.getId(), "CLAIMED", uid, need.getCreatorUid(), uid, need.getDomain(),
+                need.getStatus(), "CLAIMED", null, null, null, EVENT_VISIBILITY_PUBLIC, true);
         return getNeed(need.getId(), uid);
     }
 
@@ -187,6 +292,9 @@ public class CollaborationService {
         if (!"OPEN".equals(source.getStatus()) || mapper.mergeNeed(source.getId(), target.getId()) != 1) {
             throw invalidState();
         }
+        appendNeedEvent(source.getId(), "MERGED", uid, source.getCreatorUid(),
+                source.getClaimedByUid(), source.getDomain(), source.getStatus(), "MERGED",
+                "NEED", target.getId(), clean(cmd.getNote(), 500), EVENT_VISIBILITY_PUBLIC, true);
         return getNeed(source.getId(), uid);
     }
 
@@ -196,6 +304,9 @@ public class CollaborationService {
         NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
         if (!Objects.equals(need.getCreatorUid(), uid) && !canModerate(uid, need.getDomain())) {
             throw new BizException(ErrorCode.FORBIDDEN);
+        }
+        if (!"OPEN".equals(need.getStatus()) && !"CLAIMED".equals(need.getStatus())) {
+            throw invalidState();
         }
         NeedResolution resolution = resolveNeedResolution(need, cmd, uid);
         if (need.getClaimedByUid() != null
@@ -207,6 +318,13 @@ public class CollaborationService {
                 resolution.compatibilityPostId()) != 1) {
             throw invalidState();
         }
+        if (need.getClaimedByUid() != null) {
+            endCurrentClaimCycle(need, "COMPLETED", "FULFILLED");
+        }
+        appendNeedEvent(need.getId(), "COMPLETED", uid, need.getCreatorUid(),
+                need.getClaimedByUid(), need.getDomain(), need.getStatus(), "COMPLETED",
+                resolution.type(), resolution.id(), clean(cmd == null ? null : cmd.getNote(), 500),
+                EVENT_VISIBILITY_PUBLIC, true);
         if (!Objects.equals(resolution.contributorUid(), uid)
                 && !Objects.equals(resolution.contributorUid(), need.getCreatorUid())) {
             publishNeedFulfilled(resolution.contributorUid(), need, resolution, "NEED_FULFILLED",
@@ -225,10 +343,231 @@ public class CollaborationService {
         NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
         requireManage(need.getCreatorUid(), need.getDomain(), uid);
         String reason = required(cmd == null ? null : cmd.getNote(), 500);
+        NeedClaimCycleRow cycle = ensureCurrentClaimCycle(need);
+        NeedRevisionRow revision = currentSubmittedRevisionOrHandoff(cycle, need);
         if (mapper.closeNeed(need.getId(), reason) != 1) {
             throw invalidState();
         }
+        if (revision != null) {
+            decideRevision(revision, "CLOSED", uid, reason);
+        }
+        if (cycle != null) {
+            endClaimCycle(cycle, "CLOSED", reason);
+        }
+        appendNeedEvent(need.getId(), "CLOSED", uid, need.getCreatorUid(),
+                need.getClaimedByUid(), need.getDomain(), need.getStatus(), "CLOSED",
+                null, null, reason, EVENT_VISIBILITY_PUBLIC, true);
         return getNeed(need.getId(), uid);
+    }
+
+    /**
+     * Claimant submits their produced content for creator acceptance.
+     * CLAIMED -> SUBMITTED. Only the claimant may submit, and the resolution's contributor must be the claimant.
+     */
+    @Transactional
+    public NeedDTO submitNeed(Long id, NeedSubmitCmd cmd, Long uid) {
+        requireSchema();
+        requirePublisher(uid);
+        NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
+        if (!Objects.equals(need.getClaimedByUid(), uid)) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "only the claimant can submit content for this need");
+        }
+        if (!"CLAIMED".equals(need.getStatus())) {
+            throw invalidState();
+        }
+        NeedClaimCycleRow cycle = ensureCurrentClaimCycle(need);
+        NeedResolution resolution = resolveNeedResolution(need, toCompleteCmd(cmd), uid);
+        if (!Objects.equals(resolution.contributorUid(), uid)) {
+            throw new BizException(ErrorCode.INVALID_REQUEST.getCode(),
+                    "submitted content must be authored or owned by the claimant");
+        }
+        String submissionNote = clean(cmd == null ? null : cmd.getNote(), 1000);
+        if (mapper.submitNeed(need.getId(), uid, resolution.type(), resolution.id(), submissionNote) != 1) {
+            throw invalidState();
+        }
+        if (cycle != null) {
+            if (mapper.insertNeedRevision(idGenerator.nextId(), need.getId(), cycle.getId(),
+                    cycle.getCycleNo(), uid, resolution.type(), resolution.id(),
+                    resolution.compatibilityPostId(), submissionNote,
+                    EVENT_VISIBILITY_PARTICIPANTS, "SUBMISSION", null) != 1
+                    || mapper.touchNeedClaimCycle(cycle.getId()) != 1) {
+                throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                        "failed to record collaboration submission revision");
+            }
+        }
+        appendNeedEvent(need.getId(), "SUBMITTED", uid, need.getCreatorUid(),
+                need.getClaimedByUid(), need.getDomain(), need.getStatus(), "SUBMITTED",
+                resolution.type(), resolution.id(), submissionNote, EVENT_VISIBILITY_PARTICIPANTS, true);
+        return getNeed(need.getId(), uid);
+    }
+
+    /**
+     * Creator/moderator accepts the submitted content. SUBMITTED -> COMPLETED.
+     * Reuses the existing resolution + completion + reward path so acceptance is a
+     * third-party contribution (contributorUid = claimant, actor = creator) and rewards fire normally.
+     */
+    @Transactional
+    public NeedDTO acceptNeed(Long id, NeedAcceptCmd cmd, Long uid) {
+        requireSchema();
+        NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
+        requireManage(need.getCreatorUid(), need.getDomain(), uid);
+        if (!"SUBMITTED".equals(need.getStatus())) {
+            throw invalidState();
+        }
+        Long claimant = need.getClaimedByUid();
+        if (claimant == null || !Objects.equals(need.getSubmittedByUid(), claimant)
+                || need.getSubmissionResolutionType() == null
+                || need.getSubmissionResolutionId() == null) {
+            throw invalidState();
+        }
+        requireIndependentNeedReviewer(claimant, uid);
+        NeedClaimCycleRow cycle = ensureCurrentClaimCycle(need);
+        NeedRevisionRow revision = currentSubmittedRevisionOrHandoff(cycle, need);
+        // Re-resolve the claimant's stored submission with the claimant as the acting uid,
+        // so series-ownership checks resolve against the claimant, not the accepting creator.
+        NeedResolution resolution = resolveNeedResolution(need, toCompleteCmd(need), claimant);
+        if (!Objects.equals(resolution.contributorUid(), claimant)) {
+            throw new BizException(ErrorCode.INVALID_REQUEST.getCode(),
+                    "submitted content must still be authored or owned by the claimant");
+        }
+        if (mapper.completeNeed(need.getId(), resolution.type(), resolution.id(),
+                resolution.compatibilityPostId()) != 1) {
+            throw invalidState();
+        }
+        String acceptanceNote = clean(cmd == null ? null : cmd.getNote(), 500);
+        if (revision != null) {
+            decideRevision(revision, "ACCEPTED", uid, acceptanceNote);
+        }
+        if (cycle != null) {
+            endClaimCycle(cycle, "COMPLETED", acceptanceNote);
+        }
+        appendNeedEvent(need.getId(), "ACCEPTED", uid, need.getCreatorUid(), claimant,
+                need.getDomain(), need.getStatus(), "COMPLETED", resolution.type(), resolution.id(),
+                acceptanceNote, EVENT_VISIBILITY_PUBLIC, true);
+        if (!Objects.equals(resolution.contributorUid(), uid)
+                && !Objects.equals(resolution.contributorUid(), need.getCreatorUid())) {
+            publishNeedFulfilled(resolution.contributorUid(), need, resolution, "NEED_FULFILLED",
+                    "COLLAB:NEED:" + need.getId());
+        } else {
+            publishNeedFulfilled(null, need, resolution, "NEED_FULFILLED_SYNC",
+                    "COLLAB:NEED_SYNC:" + need.getId());
+        }
+        return getNeed(need.getId(), uid);
+    }
+
+    /**
+     * Creator/moderator sends the submission back for revision. SUBMITTED -> CLAIMED.
+     * The stored submission is kept so the claimant can see it and iterate.
+     */
+    @Transactional
+    public NeedDTO rejectNeed(Long id, NeedRejectCmd cmd, Long uid) {
+        requireSchema();
+        NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
+        requireManage(need.getCreatorUid(), need.getDomain(), uid);
+        if (!"SUBMITTED".equals(need.getStatus())) {
+            throw invalidState();
+        }
+        requireIndependentNeedReviewer(need.getClaimedByUid(), uid);
+        String reason = required(cmd == null ? null : cmd.getReason(), 500);
+        NeedClaimCycleRow cycle = ensureCurrentClaimCycle(need);
+        NeedRevisionRow revision = currentSubmittedRevisionOrHandoff(cycle, need);
+        if (mapper.revertSubmittedToClaimed(need.getId(), null, reason) != 1) {
+            throw invalidState();
+        }
+        if (revision != null) {
+            decideRevision(revision, "REJECTED", uid, reason);
+        }
+        if (cycle != null) {
+            touchClaimCycle(cycle);
+        }
+        appendNeedEvent(need.getId(), "REJECTED", uid, need.getCreatorUid(),
+                need.getClaimedByUid(), need.getDomain(), need.getStatus(), "CLAIMED",
+                need.getSubmissionResolutionType(), need.getSubmissionResolutionId(), reason,
+                EVENT_VISIBILITY_PARTICIPANTS, true);
+        return getNeed(need.getId(), uid);
+    }
+
+    /**
+     * Claimant withdraws their own not-yet-accepted submission. SUBMITTED -> CLAIMED.
+     * The stored submission is kept so the claimant can amend and resubmit; no reject reason is written.
+     */
+    @Transactional
+    public NeedDTO withdrawNeed(Long id, Long uid) {
+        requireSchema();
+        NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
+        if (!Objects.equals(need.getClaimedByUid(), uid)) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "only the claimant can withdraw this submission");
+        }
+        if (!"SUBMITTED".equals(need.getStatus())
+                || !Objects.equals(need.getSubmittedByUid(), uid)) {
+            throw invalidState();
+        }
+        NeedClaimCycleRow cycle = ensureCurrentClaimCycle(need);
+        NeedRevisionRow revision = currentSubmittedRevisionOrHandoff(cycle, need);
+        if (mapper.revertSubmittedToClaimed(need.getId(), uid, null) != 1) {
+            throw invalidState();
+        }
+        if (revision != null) {
+            decideRevision(revision, "WITHDRAWN", uid, null);
+        }
+        if (cycle != null) {
+            touchClaimCycle(cycle);
+        }
+        appendNeedEvent(need.getId(), "WITHDRAWN", uid, need.getCreatorUid(),
+                need.getClaimedByUid(), need.getDomain(), need.getStatus(), "CLAIMED",
+                need.getSubmissionResolutionType(), need.getSubmissionResolutionId(), null,
+                EVENT_VISIBILITY_PARTICIPANTS, true);
+        return getNeed(need.getId(), uid);
+    }
+
+    @Transactional
+    public NeedDTO releaseNeed(Long id, NeedReleaseCmd cmd, Long uid) {
+        requireSchema();
+        NeedRow need = requireNeed(mapper.lockNeed(requireId(id)));
+        if (!Objects.equals(need.getClaimedByUid(), uid)) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "only the current claimant can release this content need");
+        }
+        if (!"CLAIMED".equals(need.getStatus())) {
+            throw invalidState();
+        }
+        String note = clean(cmd == null ? null : cmd.getNote(), 500);
+        NeedClaimCycleRow cycle = ensureCurrentClaimCycle(need);
+        if (mapper.releaseNeed(need.getId(), uid) != 1) {
+            throw invalidState();
+        }
+        if (cycle != null) {
+            endClaimCycle(cycle, "RELEASED", note);
+        }
+        appendNeedEvent(need.getId(), "RELEASED", uid, need.getCreatorUid(),
+                need.getClaimedByUid(), need.getDomain(), need.getStatus(), "OPEN",
+                null, null, note, EVENT_VISIBILITY_PUBLIC, true);
+        return getNeed(need.getId(), uid);
+    }
+
+    private NeedCompleteCmd toCompleteCmd(NeedSubmitCmd cmd) {
+        if (cmd == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        NeedCompleteCmd complete = new NeedCompleteCmd();
+        complete.setResolutionType(cmd.getResolutionType());
+        complete.setResolutionId(cmd.getResolutionId());
+        complete.setResolutionPostId(cmd.getResolutionPostId());
+        complete.setNote(cmd.getNote());
+        return complete;
+    }
+
+    private NeedCompleteCmd toCompleteCmd(NeedRow need) {
+        NeedCompleteCmd complete = new NeedCompleteCmd();
+        complete.setResolutionType(need.getSubmissionResolutionType());
+        complete.setResolutionId(need.getSubmissionResolutionId());
+        if ("POST".equals(need.getSubmissionResolutionType())
+                || "QUESTION".equals(need.getSubmissionResolutionType())) {
+            complete.setResolutionPostId(need.getSubmissionResolutionId());
+        }
+        return complete;
     }
 
     public PageResult<SeriesDTO> listSeries(Integer domain, String status, Long viewerUid, long cursor, int size) {
@@ -1187,21 +1526,264 @@ public class CollaborationService {
 
     private NeedDTO toNeed(NeedRow row, Long viewerUid) {
         return toNeed(row, viewerUid,
-                Objects.equals(row.getCreatorUid(), viewerUid) || canModerate(viewerUid, row.getDomain()));
+                Objects.equals(row.getCreatorUid(), viewerUid) || canModerate(viewerUid, row.getDomain()),
+                true);
     }
 
     private NeedDTO toNeed(NeedRow row, Long viewerUid, boolean canManage) {
+        return toNeed(row, viewerUid, canManage, false);
+    }
+
+    private NeedDTO toNeed(NeedRow row, Long viewerUid, boolean canManage, boolean includeClaimHistory) {
+        boolean canViewParticipantDetails = canManage
+                || (viewerUid != null && Objects.equals(row.getClaimedByUid(), viewerUid));
+        List<NeedClaimCycleDTO> claimCycles = includeClaimHistory && canViewParticipantDetails
+                ? toNeedClaimCycles(row.getId(), viewerUid, canManage)
+                : List.of();
+        NeedClaimCycleDTO currentCycle = claimCycles.stream()
+                .filter(cycle -> "ACTIVE".equals(cycle.getStatus()))
+                .findFirst()
+                .orElse(null);
+        NeedRevisionDTO currentRevision = currentCycle == null || currentCycle.getRevisions() == null
+                ? null
+                : currentCycle.getRevisions().stream()
+                .filter(Objects::nonNull)
+                .max((left, right) -> Integer.compare(
+                        zero(left.getRevisionNo()), zero(right.getRevisionNo())))
+                .orElse(null);
         return NeedDTO.builder()
                 .id(row.getId()).creatorUid(row.getCreatorUid()).domain(row.getDomain())
                 .sourceType(row.getSourceType()).sourceRefId(row.getSourceRefId()).contentFormat(row.getContentFormat())
                 .title(row.getTitle()).description(row.getDescription())
                 .acceptanceCriteria(row.getAcceptanceCriteria()).status(row.getStatus())
-                .claimedByUid(row.getClaimedByUid()).mergedIntoNeedId(row.getMergedIntoNeedId())
+                .claimedByUid(row.getClaimedByUid())
+                .claimedAt(canViewParticipantDetails ? row.getClaimedAt() : null)
+                .lastProgressAt(canViewParticipantDetails ? effectiveNeedLastProgressAt(row) : null)
+                .stalled(canViewParticipantDetails ? isNeedStalled(row) : null)
+                .mergedIntoNeedId(row.getMergedIntoNeedId())
                 .resolutionType(row.getResolutionType()).resolutionId(row.getResolutionId())
-                .resolutionPostId(row.getResolutionPostId()).closedReason(row.getClosedReason())
+                .resolutionPostId(row.getResolutionPostId())
+                .closedReason(canViewParticipantDetails ? row.getClosedReason() : null)
+                .submittedByUid(canViewParticipantDetails ? row.getSubmittedByUid() : null)
+                .submittedAt(canViewParticipantDetails ? row.getSubmittedAt() : null)
+                .submissionResolutionType(canViewParticipantDetails ? row.getSubmissionResolutionType() : null)
+                .submissionResolutionId(canViewParticipantDetails ? row.getSubmissionResolutionId() : null)
+                .submissionNote(canViewParticipantDetails ? row.getSubmissionNote() : null)
+                .rejectReason(canViewParticipantDetails ? row.getRejectReason() : null)
+                .currentClaimCycleNo(canViewParticipantDetails && currentCycle != null
+                        ? currentCycle.getCycleNo() : null)
+                .currentClaimCycleOrigin(canViewParticipantDetails && currentCycle != null
+                        ? currentCycle.getCycleOrigin() : null)
+                .currentRevisionNo(canViewParticipantDetails && currentRevision != null
+                        ? currentRevision.getRevisionNo() : null)
+                .currentRevisionOrigin(canViewParticipantDetails && currentRevision != null
+                        ? currentRevision.getRevisionOrigin() : null)
+                .claimCycles(canViewParticipantDetails ? claimCycles : List.of())
                 .followerCount(zero(row.getFollowerCount())).followed(Objects.equals(row.getFollowed(), 1))
                 .canManage(canManage)
                 .createTime(row.getCreateTime()).updateTime(row.getUpdateTime()).build();
+    }
+
+    private NeedRevisionRow currentSubmittedRevision(NeedClaimCycleRow cycle, NeedRow need) {
+        if (cycle == null || need == null || !"SUBMITTED".equals(need.getStatus())) {
+            return null;
+        }
+        return mapper.selectCurrentNeedRevision(need.getId(), cycle.getId());
+    }
+
+    private NeedClaimCycleRow ensureCurrentClaimCycle(NeedRow need) {
+        if (need == null || need.getClaimedByUid() == null
+                || (!"CLAIMED".equals(need.getStatus()) && !"SUBMITTED".equals(need.getStatus()))) {
+            return null;
+        }
+        NeedClaimCycleRow cycle = mapper.selectCurrentNeedClaimCycle(need.getId());
+        if (cycle != null) {
+            if (!Objects.equals(cycle.getClaimantUid(), need.getClaimedByUid())) {
+                throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                        "current collaboration claim cycle does not match the claimant");
+            }
+            return cycle;
+        }
+        if (mapper.insertLegacyCurrentNeedClaimCycle(
+                idGenerator.nextId(),
+                need.getId(),
+                need.getClaimedByUid(),
+                need.getClaimedAt(),
+                effectiveNeedLastProgressAt(need)) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to hand off current collaboration claim cycle");
+        }
+        cycle = mapper.selectCurrentNeedClaimCycle(need.getId());
+        if (cycle == null) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "current collaboration claim cycle is unavailable");
+        }
+        return cycle;
+    }
+
+    private NeedRevisionRow currentSubmittedRevisionOrHandoff(
+            NeedClaimCycleRow cycle, NeedRow need) {
+        NeedRevisionRow revision = currentSubmittedRevision(cycle, need);
+        if (revision != null || cycle == null || need == null
+                || !"SUBMITTED".equals(need.getStatus())
+                || need.getSubmissionResolutionType() == null
+                || need.getSubmissionResolutionId() == null
+                || !Objects.equals(need.getSubmittedByUid(), need.getClaimedByUid())) {
+            return revision;
+        }
+        String note = clean(need.getSubmissionNote(), 1000);
+        if (mapper.insertNeedRevision(
+                idGenerator.nextId(),
+                need.getId(),
+                cycle.getId(),
+                cycle.getCycleNo(),
+                need.getClaimedByUid(),
+                need.getSubmissionResolutionType(),
+                need.getSubmissionResolutionId(),
+                "POST".equals(need.getSubmissionResolutionType())
+                        || "QUESTION".equals(need.getSubmissionResolutionType())
+                        ? need.getSubmissionResolutionId() : null,
+                note,
+                EVENT_VISIBILITY_PARTICIPANTS,
+                "LEGACY_CURRENT_SUBMISSION",
+                need.getSubmittedAt()) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to hand off current collaboration submission");
+        }
+        revision = mapper.selectCurrentNeedRevision(need.getId(), cycle.getId());
+        if (revision == null) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "current collaboration submission is unavailable");
+        }
+        return revision;
+    }
+
+    private void endCurrentClaimCycle(NeedRow need, String status, String reason) {
+        NeedClaimCycleRow cycle = mapper.selectCurrentNeedClaimCycle(need.getId());
+        if (cycle != null) {
+            endClaimCycle(cycle, status, reason);
+        }
+    }
+
+    private void endClaimCycle(NeedClaimCycleRow cycle, String status, String reason) {
+        if (mapper.endNeedClaimCycle(cycle.getId(), status, clean(reason, 500)) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to close collaboration claim cycle");
+        }
+    }
+
+    private void touchClaimCycle(NeedClaimCycleRow cycle) {
+        if (mapper.touchNeedClaimCycle(cycle.getId()) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to update collaboration claim cycle");
+        }
+    }
+
+    private void decideRevision(NeedRevisionRow revision, String status, Long decidedBy, String note) {
+        if (mapper.decideNeedRevision(revision.getId(), status, decidedBy, clean(note, 1000)) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to decide collaboration submission revision");
+        }
+    }
+
+    private List<NeedClaimCycleDTO> toNeedClaimCycles(Long needId, Long viewerUid, boolean canManage) {
+        List<NeedRevisionRow> revisionRows = mapper.listNeedRevisions(
+                needId, viewerUid, canManage ? 1 : 0);
+        Map<Long, List<NeedRevisionDTO>> revisionsByCycle = (revisionRows == null ? List.<NeedRevisionRow>of() : revisionRows)
+                .stream()
+                .collect(Collectors.groupingBy(
+                        NeedRevisionRow::getCycleId,
+                        Collectors.mapping(this::toNeedRevision, Collectors.toList())));
+        List<NeedClaimCycleRow> cycleRows = mapper.listNeedClaimCycles(
+                needId, viewerUid, canManage ? 1 : 0);
+        return (cycleRows == null ? List.<NeedClaimCycleRow>of() : cycleRows)
+                .stream()
+                .map(row -> NeedClaimCycleDTO.builder()
+                        .id(row.getId())
+                        .needId(row.getNeedId())
+                        .cycleNo(row.getCycleNo())
+                        .claimantUid(row.getClaimantUid())
+                        .status(row.getStatus())
+                        .cycleOrigin(row.getCycleOrigin())
+                        .claimedAt(row.getClaimedAt())
+                        .lastProgressAt(row.getLastProgressAt())
+                        .endedAt(row.getEndedAt())
+                        .endReason(row.getEndReason())
+                        .revisions(revisionsByCycle.getOrDefault(row.getId(), List.of()))
+                        .createTime(row.getCreateTime())
+                        .updateTime(row.getUpdateTime())
+                        .build())
+                .toList();
+    }
+
+    private NeedRevisionDTO toNeedRevision(NeedRevisionRow row) {
+        return NeedRevisionDTO.builder()
+                .id(row.getId())
+                .needId(row.getNeedId())
+                .cycleId(row.getCycleId())
+                .cycleNo(row.getCycleNo())
+                .revisionNo(row.getRevisionNo())
+                .submitterUid(row.getSubmitterUid())
+                .resolutionType(row.getResolutionType())
+                .resolutionId(row.getResolutionId())
+                .resolutionPostId(row.getResolutionPostId())
+                .note(row.getNote())
+                .status(row.getStatus())
+                .revisionOrigin(row.getRevisionOrigin())
+                .submittedAt(row.getSubmittedAt())
+                .decidedBy(row.getDecidedBy())
+                .decidedAt(row.getDecidedAt())
+                .decisionNote(row.getDecisionNote())
+                .visibilityScope(row.getVisibilityScope())
+                .createTime(row.getCreateTime())
+                .updateTime(row.getUpdateTime())
+                .build();
+    }
+
+    private NeedEventDTO toNeedEvent(NeedEventRow row) {
+        return NeedEventDTO.builder()
+                .id(row.getId())
+                .needId(row.getNeedId())
+                .eventType(row.getEventType())
+                .actorUid(row.getActorUid())
+                .fromStatus(row.getFromStatus())
+                .toStatus(row.getToStatus())
+                .targetType(row.getTargetType())
+                .targetId(row.getTargetId())
+                .note(row.getNote())
+                .visibilityScope(row.getVisibilityScope())
+                .createTime(row.getCreateTime())
+                .build();
+    }
+
+    private static boolean isNeedStalled(NeedRow row) {
+        LocalDateTime lastProgressAt = effectiveNeedLastProgressAt(row);
+        return "CLAIMED".equals(row.getStatus())
+                && lastProgressAt != null
+                && lastProgressAt.isBefore(LocalDateTime.now().minusDays(CLAIM_STALE_AFTER_DAYS));
+    }
+
+    private static LocalDateTime effectiveNeedLastProgressAt(NeedRow row) {
+        if (row.getLastProgressAt() != null) {
+            return row.getLastProgressAt();
+        }
+        if (!"CLAIMED".equals(row.getStatus()) && !"SUBMITTED".equals(row.getStatus())) {
+            return null;
+        }
+        if (row.getClaimedAt() != null) {
+            return row.getClaimedAt();
+        }
+        if (row.getUpdateTime() != null) {
+            return row.getUpdateTime();
+        }
+        return row.getCreateTime();
+    }
+
+    private static void requireIndependentNeedReviewer(Long claimantUid, Long reviewerUid) {
+        if (Objects.equals(claimantUid, reviewerUid)) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(),
+                    "claimants cannot review their own submission");
+        }
     }
 
     private SeriesDTO toSeries(SeriesRow row, Long viewerUid) {
@@ -1780,8 +2362,9 @@ public class CollaborationService {
             return;
         }
         try {
-            if (mapper.existingTableCount() == REQUIRED_TABLES
-                    && mapper.existingCriticalColumnCount() == REQUIRED_CRITICAL_COLUMNS) {
+            if (mapper.existingTableCount() == REQUIRED_TABLES + REQUIRED_CLAIM_CYCLE_TABLES
+                    && mapper.existingCriticalColumnCount()
+                    == REQUIRED_CRITICAL_COLUMNS + REQUIRED_CLAIM_CYCLE_COLUMNS) {
                 schemaReady = true;
                 return;
             }
@@ -1789,7 +2372,7 @@ public class CollaborationService {
             // Convert database metadata failures into the same dependency contract.
         }
         throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
-                "Collaboration migration is required: " + MIGRATION);
+                "Collaboration migrations are required: " + MIGRATION + ", " + CLAIM_CYCLE_MIGRATION);
     }
 
     private static <R, D> PageResult<D> page(List<R> rows, int size,
@@ -1806,6 +2389,10 @@ public class CollaborationService {
 
     private static int pageSize(int size) {
         return Math.max(1, Math.min(size <= 0 ? 20 : size, MAX_PAGE_SIZE));
+    }
+
+    private static int followerPageSize(int size) {
+        return Math.max(1, Math.min(size <= 0 ? 100 : size, MAX_FOLLOWER_PAGE_SIZE));
     }
 
     private static long safeCursor(long cursor) {
@@ -1855,6 +2442,42 @@ public class CollaborationService {
 
     private static int zero(Integer value) {
         return value == null ? 0 : Math.max(value, 0);
+    }
+
+    private Long appendNeedEvent(Long needId, String eventType, Long actorUid,
+                                 Long creatorUid, Long claimantUid, Integer domain,
+                                 String fromStatus, String toStatus,
+                                 String targetType, Long targetId, String note,
+                                 String visibilityScope, boolean publishStateChange) {
+        Long eventId = idGenerator.nextId();
+        long occurredAt = System.currentTimeMillis();
+        LocalDateTime createTime = LocalDateTime.now();
+        if (mapper.insertNeedEvent(eventId, needId, eventType, actorUid, claimantUid,
+                fromStatus, toStatus, targetType, targetId, clean(note, 1000),
+                visibilityScope, createTime) != 1) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "failed to append collaboration need timeline event");
+        }
+        if (publishStateChange) {
+            eventPublisher.publish(CollaborationNeedStateChangedEvent.builder()
+                    .eventId(eventId)
+                    .needId(needId)
+                    .eventType(eventType)
+                    .actorUid(actorUid)
+                    .creatorUid(creatorUid)
+                    .claimantUid(claimantUid)
+                    .domain(domain)
+                    .targetNeedId("MERGED".equals(eventType) ? targetId : null)
+                    .targetType(targetType)
+                    .targetId(targetId)
+                    .note(clean(note, 1000))
+                    .fromStatus(fromStatus)
+                    .toStatus(toStatus)
+                    .occurredAt(occurredAt)
+                    .dedupKey("collaboration_need_event:" + eventId)
+                    .build());
+        }
+        return eventId;
     }
 
     private void publishContribution(Long contributorUid, Integer domain, String contributionType,

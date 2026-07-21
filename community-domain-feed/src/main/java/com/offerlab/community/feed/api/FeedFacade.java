@@ -2,6 +2,7 @@ package com.offerlab.community.feed.api;
 
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
+import com.offerlab.community.feed.api.dto.FeedFeedbackPreferenceVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
 
 public interface FeedFacade {
@@ -17,4 +18,8 @@ public interface FeedFacade {
     PageResult<FeedItemVO> getHotFeed(Long viewerUid, String cursor, int size, Integer domain);
 
     void recordFeedback(Long uid, Long postId, String action, String reason);
+
+    PageResult<FeedFeedbackPreferenceVO> listFeedbackPreferences(Long uid, String cursor, int size);
+
+    FeedFeedbackPreferenceVO getFeedbackPreference(Long uid, Long postId);
 }

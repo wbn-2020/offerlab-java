@@ -9,10 +9,16 @@ import com.offerlab.community.incentive.api.IncentiveDtos.RoleApplicationCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleApplicationDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleDefinitionCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleDefinitionDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleEvidenceDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleEvidenceItemDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleEligibilityDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleGrantDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleGrantHistoryDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleMetricCmd;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleReviewContextDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleWorkspaceCardDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleWorkspaceDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleWorkspaceV8DTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ReviewCmd;
 import com.offerlab.community.incentive.domain.IncentiveTypes;
 import com.offerlab.community.incentive.infrastructure.IncentiveMapper;
@@ -22,6 +28,7 @@ import com.offerlab.community.incentive.infrastructure.IncentivePersistence.Role
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.security.AdminPermissionService;
+import com.offerlab.community.infra.security.CommunityRoleAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -29,10 +36,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -46,6 +56,7 @@ public class CommunityRoleService {
     private final IncentiveMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
     private final AdminPermissionService adminPermissionService;
+    private final CommunityRoleAccessService communityRoleAccessService;
     private final AdminAuditService adminAuditService;
     private final ObjectMapper objectMapper;
 
@@ -72,6 +83,99 @@ public class CommunityRoleService {
         requireUser(userId);
         RoleDefinitionPO definition = requireDefinition(roleCode, domainCode);
         return evaluate(userId, definition);
+    }
+
+    public RoleWorkspaceV8DTO workspaceV8(Long userId) {
+        requireUser(userId);
+        List<RoleDefinitionPO> definitions = mapper.selectRoleDefinitions(IncentiveTypes.MAX_LIST_LIMIT);
+        Map<String, RoleApplicationPO> applications = mapper.selectLatestUserRoleApplications(
+                        userId, IncentiveTypes.MAX_LIST_LIMIT).stream()
+                .collect(Collectors.toMap(
+                        item -> scopeKey(item.getRoleCode(), item.getDomainCode()),
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new));
+        Map<String, RoleGrantPO> grants = mapper.selectLatestUserRoleGrants(
+                        userId, IncentiveTypes.MAX_LIST_LIMIT).stream()
+                .collect(Collectors.toMap(
+                        item -> scopeKey(item.getRoleCode(), item.getDomainCode()),
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new));
+        List<RoleWorkspaceCardDTO> cards = definitions.stream()
+                .map(definition -> {
+                    String key = scopeKey(definition.getRoleCode(), definition.getDomainCode());
+                    RoleApplicationPO application = applications.get(key);
+                    RoleGrantPO grant = grants.get(key);
+                    RoleEligibilityDTO eligibility = evaluate(userId, definition);
+                    return RoleWorkspaceCardDTO.builder()
+                            .definition(toDefinitionDto(definition))
+                            .evidence(toEvidenceDto(userId, definition, eligibility, application, grant))
+                            .application(application == null ? null : toApplicationDto(application))
+                            .grant(grant == null ? null : toGrantDto(grant))
+                            .build();
+                })
+                .toList();
+        return RoleWorkspaceV8DTO.builder()
+                .generatedAt(LocalDateTime.now())
+                .roles(cards)
+                .build();
+    }
+
+    public RoleEvidenceDTO evidence(Long userId, String roleCode, String domainCode) {
+        requireUser(userId);
+        RoleDefinitionPO definition = requireDefinition(roleCode, domainCode);
+        RoleEligibilityDTO eligibility = evaluate(userId, definition);
+        RoleApplicationPO application = mapper.selectLatestUserRoleApplication(
+                userId, definition.getRoleCode(), definition.getDomainCode());
+        RoleGrantPO grant = mapper.selectLatestUserRoleGrant(
+                userId, definition.getRoleCode(), definition.getDomainCode());
+        return toEvidenceDto(userId, definition, eligibility, application, grant);
+    }
+
+    public RoleReviewContextDTO reviewContext(Long applicationId, String rawReason, Long operatorUid) {
+        requireAdmin(operatorUid);
+        String reason = IncentiveTypes.requireReason(rawReason);
+        RoleApplicationPO application = mapper.selectRoleApplication(requirePositive(applicationId));
+        if (application == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        RoleDefinitionPO definition = mapper.selectRoleDefinition(
+                application.getRoleCode(), application.getDomainCode());
+        if (definition == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        RoleEligibilityDTO eligibility = evaluate(application.getApplicantUid(), definition);
+        RoleGrantPO grant = mapper.selectLatestUserRoleGrant(
+                application.getApplicantUid(), application.getRoleCode(), application.getDomainCode());
+        Map<String, Object> summary = mapper.selectRoleReviewContributionSummary(
+                application.getApplicantUid(), domainNumber(application.getDomainCode()));
+        List<RoleGrantHistoryDTO> history = grant == null
+                ? List.of()
+                : mapper.selectRoleGrantHistory(grant.getId(), 50).stream()
+                .map(CommunityRoleService::toRoleGrantHistory)
+                .toList();
+        RoleReviewContextDTO context = RoleReviewContextDTO.builder()
+                .application(toApplicationDto(application))
+                .definition(toDefinitionDto(definition))
+                .evidence(toEvidenceDto(application.getApplicantUid(), definition, eligibility, application, grant))
+                .currentGrant(grant == null ? null : toGrantDto(grant))
+                .recentTrustedContributionCount(longNumber(summary.get("recentTrustedContributionCount")))
+                .completedMaintenanceTaskCount(longNumber(summary.get("completedMaintenanceTaskCount")))
+                .returnedMaintenanceTaskCount(longNumber(summary.get("returnedMaintenanceTaskCount")))
+                .activeViolationCount((long) eligibility.getViolationCount())
+                .riskFrozen(eligibility.getRiskFrozen())
+                .grantHistory(history)
+                .build();
+        adminAuditService.recordRequired(operatorUid, "COMMUNITY_ROLE_REVIEW_CONTEXT_VIEW",
+                "COMMUNITY_ROLE_APPLICATION", applicationId, null,
+                Map.of(
+                        "applicantUid", application.getApplicantUid(),
+                        "roleCode", application.getRoleCode(),
+                        "domainCode", application.getDomainCode()
+                ),
+                reason);
+        return context;
     }
 
     public PageResult<RoleApplicationDTO> adminApplications(String status, Integer page, Integer size,
@@ -286,6 +390,11 @@ public class CommunityRoleService {
         return count;
     }
 
+    public int countExpireDue(Long operatorUid, Integer limit) {
+        requireAdmin(operatorUid);
+        return mapper.selectExpiredGrantIds(IncentiveTypes.safeLimit(limit)).size();
+    }
+
     private RoleGrantDTO transitionGrantExplicit(Long grantId, RoleActionCmd cmd, Long operatorUid, String target) {
         return transitionGrantExplicit(grantId, cmd, operatorUid, target,
                 IncentiveTypes.requireReason(cmd == null ? null : cmd.getReason()));
@@ -336,6 +445,93 @@ public class CommunityRoleService {
                 .activityCount(activity).violationCount(violations).curationAccuracyBps(curation)
                 .riskFrozen(riskFrozen).failedChecks(failed).manualApprovalRequired(true)
                 .automaticallyGrantsAuthority(false).build();
+    }
+
+    private RoleEvidenceDTO toEvidenceDto(Long userId,
+                                          RoleDefinitionPO definition,
+                                          RoleEligibilityDTO eligibility,
+                                          RoleApplicationPO application,
+                                          RoleGrantPO grant) {
+        boolean canApply = Boolean.TRUE.equals(eligibility.getEligible())
+                && (application == null || !"SUBMITTED".equals(application.getApplicationStatus()))
+                && (grant == null || !Set.of("ACTIVE", "SUSPENDED").contains(grant.getGrantStatus()));
+        boolean canUseMaintenanceWorkspace = "CHANNEL_RESOURCE_MAINTAINER".equals(definition.getRoleCode())
+                && communityRoleAccessService.hasActiveGrant(
+                userId, definition.getRoleCode(), definition.getDomainCode());
+        List<String> actions = new ArrayList<>();
+        if (canApply) actions.add("APPLY");
+        if (application != null) actions.add("VIEW_APPLICATION");
+        if (grant != null) actions.add("VIEW_GRANT");
+        if (canUseMaintenanceWorkspace) actions.add("OPEN_MAINTENANCE_CANDIDATES");
+        return RoleEvidenceDTO.builder()
+                .roleCode(definition.getRoleCode())
+                .roleName(definition.getRoleName())
+                .domainCode(definition.getDomainCode())
+                .eligible(eligibility.getEligible())
+                .failedChecks(eligibility.getFailedChecks())
+                .evidence(List.of(
+                        evidence("ACCOUNT_AGE", "账号时长",
+                                eligibility.getAccountAgeDays(), definition.getMinAccountAgeDays(),
+                                eligibility.getAccountAgeDays() >= definition.getMinAccountAgeDays()),
+                        evidence("DOMAIN_REPUTATION", "领域声望",
+                                eligibility.getDomainReputation(), definition.getMinDomainReputation(),
+                                eligibility.getDomainReputation() >= definition.getMinDomainReputation()),
+                        evidence("ACTIVITY", "近期可信贡献",
+                                eligibility.getActivityCount(), definition.getMinActivityCount(),
+                                eligibility.getActivityCount() >= definition.getMinActivityCount()),
+                        evidence("VIOLATIONS", "有效违规数量",
+                                eligibility.getViolationCount(), definition.getMaxViolationCount(),
+                                eligibility.getViolationCount() <= definition.getMaxViolationCount()),
+                        evidence("CURATION_ACCURACY", "策展准确率基点",
+                                eligibility.getCurationAccuracyBps(), definition.getMinCurationAccuracyBps(),
+                                eligibility.getCurationAccuracyBps() >= definition.getMinCurationAccuracyBps()),
+                        evidence("RISK_FREEZE", "风险冻结",
+                                Boolean.TRUE.equals(eligibility.getRiskFrozen()) ? 1 : 0,
+                                definition.getRequiresNoRiskFreeze() == 1 ? 0 : 1,
+                                definition.getRequiresNoRiskFreeze() != 1
+                                        || !Boolean.TRUE.equals(eligibility.getRiskFrozen()))
+                ))
+                .manualApprovalRequired(true)
+                .riskFrozen(eligibility.getRiskFrozen())
+                .applicationStatus(application == null ? null : application.getApplicationStatus())
+                .grantStatus(grant == null ? null : effectiveGrantStatus(grant))
+                .expiresAt(grant == null ? null : grant.getExpiresAt())
+                .canApply(canApply)
+                .canUseMaintenanceWorkspace(canUseMaintenanceWorkspace)
+                .availableActions(actions)
+                .build();
+    }
+
+    private static RoleEvidenceItemDTO evidence(String code, String label,
+                                                Object current, Object required, boolean passed) {
+        return RoleEvidenceItemDTO.builder()
+                .evidenceCode(code)
+                .label(label)
+                .currentValue(String.valueOf(current))
+                .requiredValue(String.valueOf(required))
+                .passed(passed)
+                .build();
+    }
+
+    private static String effectiveGrantStatus(RoleGrantPO grant) {
+        if ("ACTIVE".equals(grant.getGrantStatus())
+                && grant.getExpiresAt() != null
+                && !grant.getExpiresAt().isAfter(LocalDateTime.now())) {
+            return "EXPIRED_PENDING_RECONCILIATION";
+        }
+        return grant.getGrantStatus();
+    }
+
+    private static RoleGrantHistoryDTO toRoleGrantHistory(Map<String, Object> row) {
+        return RoleGrantHistoryDTO.builder()
+                .id(nullableLong(row.get("id")))
+                .grantId(nullableLong(row.get("grantId")))
+                .fromStatus(text(row.get("fromStatus")))
+                .toStatus(text(row.get("toStatus")))
+                .operatorUid(nullableLong(row.get("operatorUid")))
+                .actionReason(text(row.get("actionReason")))
+                .createTime(row.get("createTime") instanceof LocalDateTime value ? value : null)
+                .build();
     }
 
     private RoleDefinitionPO requireDefinition(String roleCode, String domainCode) {
@@ -411,6 +607,14 @@ public class CommunityRoleService {
         return value instanceof Number n ? n.longValue() : 0L;
     }
 
+    private static Long nullableLong(Object value) {
+        return value instanceof Number n ? n.longValue() : null;
+    }
+
+    private static String text(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
     private static long nonNegative(Long value) {
         return value == null ? 0 : Math.max(0, value);
     }
@@ -435,6 +639,29 @@ public class CommunityRoleService {
 
     private static int safePage(Integer page) {
         return page == null || page <= 0 ? 1 : Math.min(page, 1000);
+    }
+
+    private static Long requirePositive(Long value) {
+        if (value == null || value <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return value;
+    }
+
+    private static String scopeKey(String roleCode, String domainCode) {
+        return roleCode + ":" + domainCode;
+    }
+
+    private static int domainNumber(String domainCode) {
+        return switch (domainCode == null ? "" : domainCode.toUpperCase(Locale.ROOT)) {
+            case "TECH" -> 1;
+            case "CAREER" -> 2;
+            case "READING" -> 3;
+            case "LIFESTYLE" -> 4;
+            case "INVESTMENT" -> 5;
+            default -> throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                    "unsupported community role domain");
+        };
     }
 
     private static <T> PageResult<T> page(List<T> items, long total, int page, int size) {

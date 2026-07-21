@@ -19,8 +19,14 @@ public class ContentSuggestionPO {
     private String detail;
     private String normalizedContentHash;
     private String sourceUrl;
+    private Integer baseVersion;
+    private String targetScope;
+    private String targetLocator;
+    private String expectedChange;
     private Integer allowPublicAttribution;
     private String decision;
+    private String resolution;
+    private String deliveryStatus;
     private String authorReply;
     private String publicNote;
     private Integer resultVersion;

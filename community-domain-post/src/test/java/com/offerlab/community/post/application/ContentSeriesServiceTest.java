@@ -331,6 +331,8 @@ class ContentSeriesServiceTest {
                 (proxy, method, args) -> switch (method.getName()) {
                     case "tableExists" -> seriesState.tableExists;
                     case "selectMine" -> seriesState.selectMine((Long) args[0]);
+                    case "lockCreator" -> args[0];
+                    case "countActiveByCreator" -> (long) seriesState.selectMine((Long) args[0]).size();
                     case "selectPublicById" -> seriesState.selectPublicById((Long) args[0]);
                     case "selectPublicByCreatorUid" -> seriesState.selectPublicByCreatorUid((Long) args[0], (Long) args[1], (Integer) args[2]);
                     case "selectProgressBySeriesIds" -> progressRows((Collection<Long>) args[0], relationState, posts);

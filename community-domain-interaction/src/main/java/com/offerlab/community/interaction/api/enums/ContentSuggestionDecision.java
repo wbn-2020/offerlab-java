@@ -4,5 +4,6 @@ public enum ContentSuggestionDecision {
     ACCEPTED,
     PARTIAL_ACCEPTED,
     REJECTED,
-    MERGED
+    MERGED,
+    PLANNED
 }

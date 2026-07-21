@@ -2,10 +2,12 @@ package com.offerlab.community.search.application;
 
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRebuildTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRetryTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRetryTaskPO;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -19,7 +21,6 @@ import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SearchIndexRetryService {
 
     static final String OP_INDEX = "INDEX";
@@ -31,7 +32,25 @@ public class SearchIndexRetryService {
     private final SearchIndexRetryTaskMapper taskMapper;
     private final SnowflakeIdGenerator idGen;
     private final PostSearchIndexer indexer;
+    private final SearchIndexRebuildTaskMapper rebuildTaskMapper;
     private final String owner = buildOwner();
+
+    public SearchIndexRetryService(SearchIndexRetryTaskMapper taskMapper,
+                                   SnowflakeIdGenerator idGen,
+                                   PostSearchIndexer indexer) {
+        this(taskMapper, idGen, indexer, null);
+    }
+
+    @Autowired
+    public SearchIndexRetryService(SearchIndexRetryTaskMapper taskMapper,
+                                   SnowflakeIdGenerator idGen,
+                                   PostSearchIndexer indexer,
+                                   @Nullable SearchIndexRebuildTaskMapper rebuildTaskMapper) {
+        this.taskMapper = taskMapper;
+        this.idGen = idGen;
+        this.indexer = indexer;
+        this.rebuildTaskMapper = rebuildTaskMapper;
+    }
 
     public void enqueueIndex(Long postId, Throwable cause) {
         enqueue(OP_INDEX, postId, cause);
@@ -100,6 +119,7 @@ public class SearchIndexRetryService {
         status.put("available", true);
         status.put("byStatus", byStatus);
         status.put("duePending", duePending);
+        status.put("pausedForRebuild", rebuildActive());
         status.put("attentionRequired", attentionRequired);
         if (attentionRequired) {
             status.put("message", "Search index retry queue has failed or due tasks");
@@ -131,6 +151,10 @@ public class SearchIndexRetryService {
     @Scheduled(fixedDelay = 5000)
     public void retryDueTasks() {
         if (!tableReady()) {
+            return;
+        }
+        if (rebuildActive()) {
+            log.debug("search index retry claim paused while rebuild is active");
             return;
         }
         LocalDateTime lockUntil = LocalDateTime.now().plusSeconds(CLAIM_LEASE_SECONDS);
@@ -221,6 +245,21 @@ public class SearchIndexRetryService {
         }
     }
 
+    private boolean rebuildActive() {
+        if (rebuildTaskMapper == null) {
+            return false;
+        }
+        try {
+            if (rebuildTaskMapper.tableExists() <= 0) {
+                return true;
+            }
+            return rebuildTaskMapper.countActive() > 0;
+        } catch (RuntimeException e) {
+            log.warn("search index retry rebuild gate failed closed: {}", e.getMessage());
+            return true;
+        }
+    }
+
     private static Map<String, Object> emptyStatus() {
         Map<String, Long> byStatus = new LinkedHashMap<>();
         byStatus.put("pending", 0L);
@@ -235,6 +274,7 @@ public class SearchIndexRetryService {
         status.put("action", "Apply the search index retry migration before relying on async index repair.");
         status.put("byStatus", byStatus);
         status.put("duePending", 0L);
+        status.put("pausedForRebuild", false);
         return status;
     }
 

@@ -10,6 +10,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 @Mapper
@@ -139,6 +140,44 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
             """)
     int upsertCandidate(@Param("item") UserRevisitItemPO item);
 
+    @Insert("""
+            INSERT INTO t_int_user_revisit_item (
+                id, uid, source_type, source_id, reason_type, activity_cursor,
+                title, description, target_path, due_at, revisit_status, dedup_key,
+                create_time, update_time
+            ) VALUES (
+                #{item.id}, #{item.uid}, 'POST_OUTCOME', #{item.sourceId}, 'OUTCOME_FOLLOW_UP',
+                #{item.activityCursor}, #{item.title}, #{item.description}, #{item.targetPath},
+                #{item.dueAt}, 'OPEN', #{item.dedupKey},
+                CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
+            )
+            ON DUPLICATE KEY UPDATE
+                reason_type = 'OUTCOME_FOLLOW_UP',
+                activity_cursor = GREATEST(COALESCE(activity_cursor, 0), VALUES(activity_cursor)),
+                title = VALUES(title),
+                description = VALUES(description),
+                target_path = VALUES(target_path),
+                due_at = VALUES(due_at),
+                revisit_status = 'OPEN',
+                completed_at = NULL,
+                snoozed_until = NULL,
+                update_time = CURRENT_TIMESTAMP(3)
+            """)
+    int upsertPostOutcome(@Param("item") UserRevisitItemPO item);
+
+    @Update("""
+            UPDATE t_int_user_revisit_item
+            SET revisit_status = 'COMPLETED',
+                completed_at = CURRENT_TIMESTAMP(3),
+                snoozed_until = NULL,
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE uid = #{uid}
+              AND source_type = 'POST_OUTCOME'
+              AND source_id = #{outcomeId}
+              AND revisit_status IN ('OPEN', 'SNOOZED')
+            """)
+    int completePostOutcome(@Param("uid") Long uid, @Param("outcomeId") String outcomeId);
+
     @Update("""
             UPDATE t_int_user_revisit_item
             SET revisit_status = 'OPEN',
@@ -152,18 +191,24 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
 
     @Select("""
             <script>
-            SELECT id, uid, source_type, source_id, reason_type, activity_cursor,
-                   title, description, target_path, due_at, revisit_status, dedup_key,
-                   completed_at, snoozed_until, last_notified_at, create_time, update_time
-            FROM t_int_user_revisit_item
-            WHERE uid = #{uid}
+            SELECT r.id, r.uid, r.source_type, r.source_id, r.reason_type, r.activity_cursor,
+                   r.title, r.description, r.target_path, r.due_at, r.revisit_status, r.dedup_key,
+                   r.completed_at, r.snoozed_until, r.last_notified_at, r.create_time, r.update_time
+            FROM t_int_user_revisit_item r
+            JOIN t_post_main p
+              ON p.id = CAST(SUBSTRING(r.target_path, 7) AS UNSIGNED)
+             AND r.target_path = CONCAT('/post/', p.id)
+            WHERE r.uid = #{uid}
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
               <if test="status != null and status != ''">
-              AND revisit_status = #{status}
+              AND r.revisit_status = #{status}
               </if>
               <if test="cursor != null and cursor &gt; 0">
-              AND id &lt; #{cursor}
+              AND r.id &lt; #{cursor}
               </if>
-            ORDER BY id DESC
+            ORDER BY r.id DESC
             LIMIT #{limit}
             </script>
             """)
@@ -173,12 +218,56 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
                                        @Param("limit") int limit);
 
     @Select("""
-            SELECT id, uid, source_type, source_id, reason_type, activity_cursor,
-                   title, description, target_path, due_at, revisit_status, dedup_key,
-                   completed_at, snoozed_until, last_notified_at, create_time, update_time
-            FROM t_int_user_revisit_item
-            WHERE id = #{id}
-              AND uid = #{uid}
+            <script>
+            SELECT r.id, r.uid, r.source_type, r.source_id, r.reason_type, r.activity_cursor,
+                   r.title, r.description, r.target_path, r.due_at, r.revisit_status, r.dedup_key,
+                   r.completed_at, r.snoozed_until, r.last_notified_at, r.create_time, r.update_time
+            FROM t_int_user_revisit_item r
+            JOIN t_post_main p
+              ON p.id = CAST(SUBSTRING(r.target_path, 7) AS UNSIGNED)
+             AND r.target_path = CONCAT('/post/', p.id)
+            WHERE r.uid = #{uid}
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND (
+                    CONCAT(r.source_type, ':', r.source_id) IN
+                    <foreach collection="resourceKeys" item="resourceKey" open="(" separator="," close=")">
+                      #{resourceKey}
+                    </foreach>
+                    OR CONCAT('POST:', p.id) IN
+                    <foreach collection="resourceKeys" item="resourceKey" open="(" separator="," close=")">
+                      #{resourceKey}
+                    </foreach>
+                  )
+            ORDER BY CASE
+                       WHEN CONCAT(r.source_type, ':', r.source_id) IN
+                         <foreach collection="resourceKeys" item="resourceKey" open="(" separator="," close=")">
+                           #{resourceKey}
+                         </foreach>
+                       THEN 0 ELSE 1
+                     END,
+                     r.update_time DESC,
+                     r.id DESC
+            LIMIT 200
+            </script>
+            """)
+    List<UserRevisitItemPO> listVisibleByResourceKeys(@Param("uid") Long uid,
+                                                       @Param("resourceKeys") Collection<String> resourceKeys);
+
+    @Select("""
+            SELECT r.id, r.uid, r.source_type, r.source_id, r.reason_type, r.activity_cursor,
+                   r.title, r.description, r.target_path, r.due_at, r.revisit_status, r.dedup_key,
+                   r.completed_at, r.snoozed_until, r.last_notified_at, r.create_time, r.update_time
+            FROM t_int_user_revisit_item r
+            JOIN t_post_main p
+              ON p.id = CAST(SUBSTRING(r.target_path, 7) AS UNSIGNED)
+             AND r.target_path = CONCAT('/post/', p.id)
+            WHERE r.id = #{id}
+              AND r.uid = #{uid}
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
             LIMIT 1
             """)
     UserRevisitItemPO selectOwned(@Param("id") Long id, @Param("uid") Long uid);

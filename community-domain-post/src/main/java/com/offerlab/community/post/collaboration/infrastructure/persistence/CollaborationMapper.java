@@ -19,6 +19,9 @@ public interface CollaborationMapper {
               AND table_name IN (
                 't_collab_content_need',
                 't_collab_content_need_follow',
+                't_collab_content_need_event',
+                't_collab_content_need_claim_cycle',
+                't_collab_content_need_revision',
                 't_collab_series',
                 't_collab_series_member',
                 't_collab_series_submission',
@@ -46,6 +49,48 @@ public interface CollaborationMapper {
                 (table_name = 't_collab_content_need' AND column_name = 'moderation_hidden')
                 OR (table_name = 't_collab_content_need' AND column_name = 'resolution_type')
                 OR (table_name = 't_collab_content_need' AND column_name = 'resolution_id')
+                OR (table_name = 't_collab_content_need' AND column_name = 'submitted_by_uid')
+                OR (table_name = 't_collab_content_need' AND column_name = 'submitted_at')
+                OR (table_name = 't_collab_content_need' AND column_name = 'submission_resolution_type')
+                OR (table_name = 't_collab_content_need' AND column_name = 'submission_resolution_id')
+                OR (table_name = 't_collab_content_need' AND column_name = 'submission_note')
+                OR (table_name = 't_collab_content_need' AND column_name = 'reject_reason')
+                OR (table_name = 't_collab_content_need' AND column_name = 'claimed_at')
+                OR (table_name = 't_collab_content_need' AND column_name = 'last_progress_at')
+                OR (table_name = 't_collab_content_need_event' AND column_name = 'claimant_uid')
+                OR (table_name = 't_collab_content_need_event' AND column_name = 'visibility_scope')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'id')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'need_id')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'cycle_no')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'claimant_uid')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'cycle_status')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'cycle_origin')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'claimed_at')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'last_progress_at')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'ended_at')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'end_reason')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'create_time')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'update_time')
+                OR (table_name = 't_collab_content_need_claim_cycle' AND column_name = 'active_need_guard')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'id')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'need_id')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'cycle_id')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'cycle_no')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'revision_no')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'submitter_uid')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'resolution_type')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'resolution_id')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'resolution_post_id')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'revision_note')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'revision_status')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'revision_origin')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'submitted_at')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'decided_by')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'decided_at')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'decision_note')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'visibility_scope')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'create_time')
+                OR (table_name = 't_collab_content_need_revision' AND column_name = 'update_time')
                 OR (table_name = 't_collab_series' AND column_name = 'moderation_hidden')
                 OR (table_name = 't_collab_activity' AND column_name = 'moderation_hidden')
                 OR (table_name = 't_collab_discussion' AND column_name = 'moderation_hidden')
@@ -85,11 +130,19 @@ public interface CollaborationMapper {
                    n.acceptance_criteria AS acceptanceCriteria,
                    n.need_status AS status,
                    n.claimed_by_uid AS claimedByUid,
+                   n.claimed_at AS claimedAt,
+                   n.last_progress_at AS lastProgressAt,
                    n.merged_into_need_id AS mergedIntoNeedId,
                    n.resolution_type AS resolutionType,
                    n.resolution_id AS resolutionId,
                    n.resolution_post_id AS resolutionPostId,
                    n.closed_reason AS closedReason,
+                   n.submitted_by_uid AS submittedByUid,
+                   n.submitted_at AS submittedAt,
+                   n.submission_resolution_type AS submissionResolutionType,
+                   n.submission_resolution_id AS submissionResolutionId,
+                   n.submission_note AS submissionNote,
+                   n.reject_reason AS rejectReason,
                    n.follower_count AS followerCount,
                    n.moderation_hidden AS hidden,
                    CASE WHEN #{viewerUid} IS NULL THEN 0 ELSE EXISTS(
@@ -118,6 +171,7 @@ public interface CollaborationMapper {
                                                @Param("limit") int limit);
 
     @Select("""
+            <script>
             SELECT n.id,
                    n.creator_uid AS creatorUid,
                    n.domain,
@@ -129,11 +183,218 @@ public interface CollaborationMapper {
                    n.acceptance_criteria AS acceptanceCriteria,
                    n.need_status AS status,
                    n.claimed_by_uid AS claimedByUid,
+                   n.claimed_at AS claimedAt,
+                   n.last_progress_at AS lastProgressAt,
                    n.merged_into_need_id AS mergedIntoNeedId,
                    n.resolution_type AS resolutionType,
                    n.resolution_id AS resolutionId,
                    n.resolution_post_id AS resolutionPostId,
                    n.closed_reason AS closedReason,
+                   n.submitted_by_uid AS submittedByUid,
+                   n.submitted_at AS submittedAt,
+                   n.submission_resolution_type AS submissionResolutionType,
+                   n.submission_resolution_id AS submissionResolutionId,
+                   n.submission_note AS submissionNote,
+                   n.reject_reason AS rejectReason,
+                   n.follower_count AS followerCount,
+                   n.moderation_hidden AS hidden,
+                   EXISTS(
+                       SELECT 1 FROM t_collab_content_need_follow f
+                       WHERE f.need_id = n.id AND f.uid = #{uid} AND f.active = 1
+                   ) AS followed,
+                   n.create_time AS createTime,
+                   n.update_time AS updateTime
+            FROM t_collab_content_need n
+            WHERE n.claimed_by_uid = #{uid}
+              AND n.moderation_hidden = 0
+              AND (#{cursor} = 0 OR n.id &lt; #{cursor})
+              <if test="status != null and status != ''">
+              AND n.need_status = #{status}
+              </if>
+            ORDER BY n.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CollaborationRows.NeedRow> listNeedsByClaimant(@Param("uid") Long uid,
+                                                         @Param("status") String status,
+                                                         @Param("cursor") long cursor,
+                                                         @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT n.id,
+                   n.creator_uid AS creatorUid,
+                   n.domain,
+                   n.source_type AS sourceType,
+                   n.source_ref_id AS sourceRefId,
+                   n.content_format AS contentFormat,
+                   n.title,
+                   n.description,
+                   n.acceptance_criteria AS acceptanceCriteria,
+                   n.need_status AS status,
+                   n.claimed_by_uid AS claimedByUid,
+                   n.claimed_at AS claimedAt,
+                   n.last_progress_at AS lastProgressAt,
+                   n.merged_into_need_id AS mergedIntoNeedId,
+                   n.resolution_type AS resolutionType,
+                   n.resolution_id AS resolutionId,
+                   n.resolution_post_id AS resolutionPostId,
+                   n.closed_reason AS closedReason,
+                   n.submitted_by_uid AS submittedByUid,
+                   n.submitted_at AS submittedAt,
+                   n.submission_resolution_type AS submissionResolutionType,
+                   n.submission_resolution_id AS submissionResolutionId,
+                   n.submission_note AS submissionNote,
+                   n.reject_reason AS rejectReason,
+                   n.follower_count AS followerCount,
+                   n.moderation_hidden AS hidden,
+                   EXISTS(
+                       SELECT 1 FROM t_collab_content_need_follow f
+                       WHERE f.need_id = n.id AND f.uid = #{uid} AND f.active = 1
+                   ) AS followed,
+                   n.create_time AS createTime,
+                   n.update_time AS updateTime
+            FROM t_collab_content_need n
+            WHERE n.creator_uid = #{uid}
+              AND n.moderation_hidden = 0
+              AND (#{cursor} = 0 OR n.id &lt; #{cursor})
+              <if test="status != null and status != ''">
+              AND n.need_status = #{status}
+              </if>
+            ORDER BY n.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CollaborationRows.NeedRow> listNeedsByCreator(@Param("uid") Long uid,
+                                                        @Param("status") String status,
+                                                        @Param("cursor") long cursor,
+                                                        @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT n.id,
+                   f.id AS followId,
+                   n.creator_uid AS creatorUid,
+                   n.domain,
+                   n.source_type AS sourceType,
+                   n.source_ref_id AS sourceRefId,
+                   n.content_format AS contentFormat,
+                   n.title,
+                   n.description,
+                   n.acceptance_criteria AS acceptanceCriteria,
+                   n.need_status AS status,
+                   n.claimed_by_uid AS claimedByUid,
+                   n.claimed_at AS claimedAt,
+                   n.last_progress_at AS lastProgressAt,
+                   n.merged_into_need_id AS mergedIntoNeedId,
+                   n.resolution_type AS resolutionType,
+                   n.resolution_id AS resolutionId,
+                   n.resolution_post_id AS resolutionPostId,
+                   n.closed_reason AS closedReason,
+                   n.submitted_by_uid AS submittedByUid,
+                   n.submitted_at AS submittedAt,
+                   n.submission_resolution_type AS submissionResolutionType,
+                   n.submission_resolution_id AS submissionResolutionId,
+                   n.submission_note AS submissionNote,
+                   n.reject_reason AS rejectReason,
+                   n.follower_count AS followerCount,
+                   n.moderation_hidden AS hidden,
+                   1 AS followed,
+                   n.create_time AS createTime,
+                   n.update_time AS updateTime
+            FROM t_collab_content_need_follow f
+            JOIN t_collab_content_need n ON n.id = f.need_id
+            WHERE f.uid = #{uid}
+              AND f.active = 1
+              AND n.moderation_hidden = 0
+              AND (#{cursor} = 0 OR f.id &lt; #{cursor})
+              <if test="status != null and status != ''">
+              AND n.need_status = #{status}
+              </if>
+            ORDER BY f.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CollaborationRows.NeedRow> listFollowedNeeds(@Param("uid") Long uid,
+                                                       @Param("status") String status,
+                                                       @Param("cursor") long cursor,
+                                                       @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT n.id,
+                   n.creator_uid AS creatorUid,
+                   n.domain,
+                   n.source_type AS sourceType,
+                   n.source_ref_id AS sourceRefId,
+                   n.content_format AS contentFormat,
+                   n.title,
+                   n.description,
+                   n.acceptance_criteria AS acceptanceCriteria,
+                   n.need_status AS status,
+                   n.claimed_by_uid AS claimedByUid,
+                   n.claimed_at AS claimedAt,
+                   n.last_progress_at AS lastProgressAt,
+                   n.merged_into_need_id AS mergedIntoNeedId,
+                   n.resolution_type AS resolutionType,
+                   n.resolution_id AS resolutionId,
+                   n.resolution_post_id AS resolutionPostId,
+                   n.closed_reason AS closedReason,
+                   n.submitted_by_uid AS submittedByUid,
+                   n.submitted_at AS submittedAt,
+                   n.submission_resolution_type AS submissionResolutionType,
+                   n.submission_resolution_id AS submissionResolutionId,
+                   n.submission_note AS submissionNote,
+                   n.reject_reason AS rejectReason,
+                   n.follower_count AS followerCount,
+                   n.moderation_hidden AS hidden,
+                   EXISTS(
+                       SELECT 1 FROM t_collab_content_need_follow f
+                       WHERE f.need_id = n.id AND f.uid = #{viewerUid} AND f.active = 1
+                   ) AS followed,
+                   n.create_time AS createTime,
+                   n.update_time AS updateTime
+            FROM t_collab_content_need n
+            WHERE n.moderation_hidden = 0
+              AND n.need_status = 'SUBMITTED'
+              AND (#{cursor} = 0 OR n.id &lt; #{cursor})
+              <if test="domain != null">
+              AND n.domain = #{domain}
+              </if>
+            ORDER BY n.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CollaborationRows.NeedRow> listNeedReviewQueue(@Param("domain") Integer domain,
+                                                        @Param("viewerUid") Long viewerUid,
+                                                        @Param("cursor") long cursor,
+                                                        @Param("limit") int limit);
+
+    @Select("""
+            SELECT n.id,
+                   n.creator_uid AS creatorUid,
+                   n.domain,
+                   n.source_type AS sourceType,
+                   n.source_ref_id AS sourceRefId,
+                   n.content_format AS contentFormat,
+                   n.title,
+                   n.description,
+                   n.acceptance_criteria AS acceptanceCriteria,
+                   n.need_status AS status,
+                   n.claimed_by_uid AS claimedByUid,
+                   n.claimed_at AS claimedAt,
+                   n.last_progress_at AS lastProgressAt,
+                   n.merged_into_need_id AS mergedIntoNeedId,
+                   n.resolution_type AS resolutionType,
+                   n.resolution_id AS resolutionId,
+                   n.resolution_post_id AS resolutionPostId,
+                   n.closed_reason AS closedReason,
+                   n.submitted_by_uid AS submittedByUid,
+                   n.submitted_at AS submittedAt,
+                   n.submission_resolution_type AS submissionResolutionType,
+                   n.submission_resolution_id AS submissionResolutionId,
+                   n.submission_note AS submissionNote,
+                   n.reject_reason AS rejectReason,
                    n.follower_count AS followerCount,
                    n.moderation_hidden AS hidden,
                    CASE WHEN #{viewerUid} IS NULL THEN 0 ELSE EXISTS(
@@ -161,11 +422,19 @@ public interface CollaborationMapper {
                    acceptance_criteria AS acceptanceCriteria,
                    need_status AS status,
                    claimed_by_uid AS claimedByUid,
+                   claimed_at AS claimedAt,
+                   last_progress_at AS lastProgressAt,
                    merged_into_need_id AS mergedIntoNeedId,
                    resolution_type AS resolutionType,
                    resolution_id AS resolutionId,
                    resolution_post_id AS resolutionPostId,
                    closed_reason AS closedReason,
+                   submitted_by_uid AS submittedByUid,
+                   submitted_at AS submittedAt,
+                   submission_resolution_type AS submissionResolutionType,
+                   submission_resolution_id AS submissionResolutionId,
+                   submission_note AS submissionNote,
+                   reject_reason AS rejectReason,
                    follower_count AS followerCount,
                    0 AS followed,
                    moderation_hidden AS hidden,
@@ -192,11 +461,19 @@ public interface CollaborationMapper {
                    acceptance_criteria AS acceptanceCriteria,
                    need_status AS status,
                    claimed_by_uid AS claimedByUid,
+                   claimed_at AS claimedAt,
+                   last_progress_at AS lastProgressAt,
                    merged_into_need_id AS mergedIntoNeedId,
                    resolution_type AS resolutionType,
                    resolution_id AS resolutionId,
                    resolution_post_id AS resolutionPostId,
                    closed_reason AS closedReason,
+                   submitted_by_uid AS submittedByUid,
+                   submitted_at AS submittedAt,
+                   submission_resolution_type AS submissionResolutionType,
+                   submission_resolution_id AS submissionResolutionId,
+                   submission_note AS submissionNote,
+                   reject_reason AS rejectReason,
                    follower_count AS followerCount,
                    0 AS followed,
                    moderation_hidden AS hidden,
@@ -207,6 +484,224 @@ public interface CollaborationMapper {
             FOR UPDATE
             """)
     CollaborationRows.NeedRow lockNeed(@Param("id") Long id);
+
+    @Select("""
+            SELECT e.id,
+                   e.need_id AS needId,
+                   e.event_type AS eventType,
+                   e.actor_uid AS actorUid,
+                   e.from_status AS fromStatus,
+                   e.to_status AS toStatus,
+                   e.target_type AS targetType,
+                   e.target_id AS targetId,
+                   CASE
+                       WHEN #{includeManagers} = 1
+                            OR (
+                                #{viewerUid} IS NOT NULL
+                                AND n.claimed_by_uid = #{viewerUid}
+                                AND e.claimant_uid = #{viewerUid}
+                            )
+                       THEN e.note
+                       ELSE NULL
+                   END AS note,
+                   CASE
+                       WHEN #{includeManagers} = 1
+                            OR (
+                                #{viewerUid} IS NOT NULL
+                                AND n.claimed_by_uid = #{viewerUid}
+                                AND e.claimant_uid = #{viewerUid}
+                            )
+                       THEN e.visibility_scope
+                       ELSE NULL
+                   END AS visibilityScope,
+                   e.create_time AS createTime
+            FROM t_collab_content_need_event e
+            INNER JOIN t_collab_content_need n ON n.id = e.need_id
+            WHERE e.need_id = #{needId}
+              AND (#{cursor} = 0 OR e.id &lt; #{cursor})
+              AND (
+                    e.visibility_scope = 'PUBLIC'
+                    OR (
+                        e.visibility_scope = 'PARTICIPANTS'
+                        AND (
+                            #{includeManagers} = 1
+                            OR (
+                                #{viewerUid} IS NOT NULL
+                                AND n.claimed_by_uid = #{viewerUid}
+                                AND e.claimant_uid = #{viewerUid}
+                            )
+                        )
+                    )
+                    OR (#{includeManagers} = 1 AND e.visibility_scope = 'MANAGERS')
+              )
+            ORDER BY e.id DESC
+            LIMIT #{limit}
+            """)
+    List<CollaborationRows.NeedEventRow> listNeedEvents(
+            @Param("needId") Long needId,
+            @Param("viewerUid") Long viewerUid,
+            @Param("includeManagers") int includeManagers,
+            @Param("cursor") long cursor,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT c.id,
+                   c.need_id AS needId,
+                   c.cycle_no AS cycleNo,
+                   c.claimant_uid AS claimantUid,
+                   c.cycle_status AS status,
+                   c.cycle_origin AS cycleOrigin,
+                   c.claimed_at AS claimedAt,
+                   c.last_progress_at AS lastProgressAt,
+                   c.ended_at AS endedAt,
+                   c.end_reason AS endReason,
+                   c.create_time AS createTime,
+                   c.update_time AS updateTime
+            FROM t_collab_content_need_claim_cycle c
+            INNER JOIN t_collab_content_need n ON n.id = c.need_id
+            WHERE c.need_id = #{needId}
+              AND (
+                    #{includeManagers} = 1
+                    OR (
+                        #{viewerUid} IS NOT NULL
+                        AND n.claimed_by_uid = #{viewerUid}
+                        AND c.claimant_uid = #{viewerUid}
+                    )
+              )
+            ORDER BY c.cycle_no DESC
+            """)
+    List<CollaborationRows.NeedClaimCycleRow> listNeedClaimCycles(
+            @Param("needId") Long needId,
+            @Param("viewerUid") Long viewerUid,
+            @Param("includeManagers") int includeManagers);
+
+    @Select("""
+            SELECT r.id,
+                   r.need_id AS needId,
+                   r.cycle_id AS cycleId,
+                   r.cycle_no AS cycleNo,
+                   r.revision_no AS revisionNo,
+                   r.submitter_uid AS submitterUid,
+                   r.resolution_type AS resolutionType,
+                   r.resolution_id AS resolutionId,
+                   r.resolution_post_id AS resolutionPostId,
+                   r.revision_note AS note,
+                   r.revision_status AS status,
+                   r.revision_origin AS revisionOrigin,
+                   r.submitted_at AS submittedAt,
+                   r.decided_by AS decidedBy,
+                   r.decided_at AS decidedAt,
+                   r.decision_note AS decisionNote,
+                   r.visibility_scope AS visibilityScope,
+                   r.create_time AS createTime,
+                   r.update_time AS updateTime
+            FROM t_collab_content_need_revision r
+            INNER JOIN t_collab_content_need_claim_cycle c ON c.id = r.cycle_id
+            INNER JOIN t_collab_content_need n ON n.id = r.need_id
+            WHERE r.need_id = #{needId}
+              AND (
+                    r.visibility_scope = 'PUBLIC'
+                    OR #{includeManagers} = 1
+                    OR (
+                        #{viewerUid} IS NOT NULL
+                        AND n.claimed_by_uid = #{viewerUid}
+                        AND c.claimant_uid = #{viewerUid}
+                    )
+              )
+            ORDER BY r.cycle_no DESC, r.revision_no DESC
+            """)
+    List<CollaborationRows.NeedRevisionRow> listNeedRevisions(
+            @Param("needId") Long needId,
+            @Param("viewerUid") Long viewerUid,
+            @Param("includeManagers") int includeManagers);
+
+    @Select("""
+            SELECT id,
+                   need_id AS needId,
+                   cycle_no AS cycleNo,
+                   claimant_uid AS claimantUid,
+                   cycle_status AS status,
+                   cycle_origin AS cycleOrigin,
+                   claimed_at AS claimedAt,
+                   last_progress_at AS lastProgressAt,
+                   ended_at AS endedAt,
+                   end_reason AS endReason,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_collab_content_need_claim_cycle
+            WHERE need_id = #{needId}
+              AND cycle_status = 'ACTIVE'
+            ORDER BY cycle_no DESC
+            LIMIT 1
+            """)
+    CollaborationRows.NeedClaimCycleRow selectCurrentNeedClaimCycle(@Param("needId") Long needId);
+
+    @Select("""
+            SELECT id,
+                   need_id AS needId,
+                   cycle_id AS cycleId,
+                   cycle_no AS cycleNo,
+                   revision_no AS revisionNo,
+                   submitter_uid AS submitterUid,
+                   resolution_type AS resolutionType,
+                   resolution_id AS resolutionId,
+                   resolution_post_id AS resolutionPostId,
+                   revision_note AS note,
+                   revision_status AS status,
+                   revision_origin AS revisionOrigin,
+                   submitted_at AS submittedAt,
+                   decided_by AS decidedBy,
+                   decided_at AS decidedAt,
+                   decision_note AS decisionNote,
+                   visibility_scope AS visibilityScope,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_collab_content_need_revision
+            WHERE need_id = #{needId}
+              AND cycle_id = #{cycleId}
+              AND revision_status = 'SUBMITTED'
+            ORDER BY revision_no DESC
+            LIMIT 1
+            """)
+    CollaborationRows.NeedRevisionRow selectCurrentNeedRevision(
+            @Param("needId") Long needId,
+            @Param("cycleId") Long cycleId);
+
+    @Select("""
+            SELECT id, uid
+            FROM t_collab_content_need_follow
+            WHERE need_id = #{needId}
+              AND active = 1
+              AND (#{cursor} = 0 OR id &lt; #{cursor})
+            ORDER BY id DESC
+            LIMIT #{limit}
+            """)
+    List<CollaborationRows.NeedFollowRow> listActiveNeedFollowers(
+            @Param("needId") Long needId,
+            @Param("cursor") long cursor,
+            @Param("limit") int limit);
+
+    @Insert("""
+            INSERT INTO t_collab_content_need_event(
+                id, need_id, event_type, actor_uid, claimant_uid, from_status, to_status,
+                target_type, target_id, note, visibility_scope, create_time
+            ) VALUES (
+                #{id}, #{needId}, #{eventType}, #{actorUid}, #{claimantUid}, #{fromStatus}, #{toStatus},
+                #{targetType}, #{targetId}, #{note}, #{visibilityScope}, #{createTime}
+            )
+            """)
+    int insertNeedEvent(@Param("id") Long id,
+                        @Param("needId") Long needId,
+                        @Param("eventType") String eventType,
+                        @Param("actorUid") Long actorUid,
+                        @Param("claimantUid") Long claimantUid,
+                        @Param("fromStatus") String fromStatus,
+                        @Param("toStatus") String toStatus,
+                        @Param("targetType") String targetType,
+                        @Param("targetId") Long targetId,
+                        @Param("note") String note,
+                        @Param("visibilityScope") String visibilityScope,
+                        @Param("createTime") LocalDateTime createTime);
 
     @Insert("""
             INSERT INTO t_collab_content_need(
@@ -230,12 +725,26 @@ public interface CollaborationMapper {
                    @Param("acceptanceCriteria") String acceptanceCriteria,
                    @Param("riskAcknowledged") int riskAcknowledged);
 
-    @Insert("""
-            INSERT INTO t_collab_content_need_follow(id, need_id, uid, active)
-            VALUES (#{id}, #{needId}, #{uid}, 1)
-            ON DUPLICATE KEY UPDATE active = 1, update_time = CURRENT_TIMESTAMP(3)
+    @Update("""
+            UPDATE t_collab_content_need_follow
+            SET id = #{id},
+                active = 1,
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE need_id = #{needId}
+              AND uid = #{uid}
+              AND active = 0
             """)
-    int followNeed(@Param("id") Long id, @Param("needId") Long needId, @Param("uid") Long uid);
+    int reactivateNeedFollow(@Param("id") Long id,
+                             @Param("needId") Long needId,
+                             @Param("uid") Long uid);
+
+    @Insert("""
+            INSERT IGNORE INTO t_collab_content_need_follow(id, need_id, uid, active)
+            VALUES (#{id}, #{needId}, #{uid}, 1)
+            """)
+    int insertNeedFollow(@Param("id") Long id,
+                         @Param("needId") Long needId,
+                         @Param("uid") Long uid);
 
     @Update("""
             UPDATE t_collab_content_need_follow
@@ -268,6 +777,8 @@ public interface CollaborationMapper {
             UPDATE t_collab_content_need
             SET need_status = 'CLAIMED',
                 claimed_by_uid = #{uid},
+                claimed_at = CURRENT_TIMESTAMP(3),
+                last_progress_at = CURRENT_TIMESTAMP(3),
                 update_time = CURRENT_TIMESTAMP(3)
             WHERE id = #{needId}
               AND need_status = 'OPEN'
@@ -275,10 +786,108 @@ public interface CollaborationMapper {
             """)
     int claimNeed(@Param("needId") Long needId, @Param("uid") Long uid);
 
+    @Insert("""
+            INSERT INTO t_collab_content_need_claim_cycle(
+                id, need_id, cycle_no, claimant_uid, cycle_status, cycle_origin,
+                claimed_at, last_progress_at
+            )
+            SELECT #{id}, #{needId}, COALESCE(MAX(cycle_no), 0) + 1, #{claimantUid}, 'ACTIVE', 'CLAIM',
+                   CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
+            FROM t_collab_content_need_claim_cycle
+            WHERE need_id = #{needId}
+            """)
+    int insertNeedClaimCycle(@Param("id") Long id,
+                             @Param("needId") Long needId,
+                             @Param("claimantUid") Long claimantUid);
+
+    @Insert("""
+            INSERT INTO t_collab_content_need_claim_cycle(
+                id, need_id, cycle_no, claimant_uid, cycle_status, cycle_origin,
+                claimed_at, last_progress_at
+            )
+            SELECT #{id}, #{needId}, COALESCE(MAX(cycle_no), 0) + 1, #{claimantUid},
+                   'ACTIVE', 'LEGACY_CURRENT',
+                   COALESCE(#{claimedAt}, CURRENT_TIMESTAMP(3)),
+                   COALESCE(#{lastProgressAt}, #{claimedAt}, CURRENT_TIMESTAMP(3))
+            FROM t_collab_content_need_claim_cycle
+            WHERE need_id = #{needId}
+            """)
+    int insertLegacyCurrentNeedClaimCycle(@Param("id") Long id,
+                                          @Param("needId") Long needId,
+                                          @Param("claimantUid") Long claimantUid,
+                                          @Param("claimedAt") LocalDateTime claimedAt,
+                                          @Param("lastProgressAt") LocalDateTime lastProgressAt);
+
+    @Update("""
+            UPDATE t_collab_content_need_claim_cycle
+            SET cycle_status = #{status},
+                ended_at = CURRENT_TIMESTAMP(3),
+                end_reason = #{reason},
+                last_progress_at = CURRENT_TIMESTAMP(3),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{cycleId}
+              AND cycle_status = 'ACTIVE'
+            """)
+    int endNeedClaimCycle(@Param("cycleId") Long cycleId,
+                          @Param("status") String status,
+                          @Param("reason") String reason);
+
+    @Update("""
+            UPDATE t_collab_content_need_claim_cycle
+            SET last_progress_at = CURRENT_TIMESTAMP(3),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{cycleId}
+              AND cycle_status = 'ACTIVE'
+            """)
+    int touchNeedClaimCycle(@Param("cycleId") Long cycleId);
+
+    @Insert("""
+            INSERT INTO t_collab_content_need_revision(
+                id, need_id, cycle_id, cycle_no, revision_no, submitter_uid,
+                resolution_type, resolution_id, resolution_post_id, revision_note,
+                revision_status, revision_origin, submitted_at, visibility_scope
+            )
+            SELECT #{id}, #{needId}, #{cycleId}, #{cycleNo},
+                   COALESCE(MAX(revision_no), 0) + 1, #{submitterUid},
+                   #{resolutionType}, #{resolutionId}, #{resolutionPostId}, #{note},
+                   'SUBMITTED', #{revisionOrigin},
+                   COALESCE(#{submittedAt}, CURRENT_TIMESTAMP(3)), #{visibilityScope}
+            FROM t_collab_content_need_revision
+            WHERE cycle_id = #{cycleId}
+            """)
+    int insertNeedRevision(@Param("id") Long id,
+                           @Param("needId") Long needId,
+                           @Param("cycleId") Long cycleId,
+                           @Param("cycleNo") Integer cycleNo,
+                           @Param("submitterUid") Long submitterUid,
+                           @Param("resolutionType") String resolutionType,
+                           @Param("resolutionId") Long resolutionId,
+                           @Param("resolutionPostId") Long resolutionPostId,
+                           @Param("note") String note,
+                           @Param("visibilityScope") String visibilityScope,
+                           @Param("revisionOrigin") String revisionOrigin,
+                           @Param("submittedAt") LocalDateTime submittedAt);
+
+    @Update("""
+            UPDATE t_collab_content_need_revision
+            SET revision_status = #{status},
+                decided_by = #{decidedBy},
+                decided_at = CURRENT_TIMESTAMP(3),
+                decision_note = #{decisionNote},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{revisionId}
+              AND revision_status = 'SUBMITTED'
+            """)
+    int decideNeedRevision(@Param("revisionId") Long revisionId,
+                           @Param("status") String status,
+                           @Param("decidedBy") Long decidedBy,
+                           @Param("decisionNote") String decisionNote);
+
     @Update("""
             UPDATE t_collab_content_need
             SET need_status = 'MERGED',
                 merged_into_need_id = #{targetNeedId},
+                last_progress_at = CURRENT_TIMESTAMP(3),
                 update_time = CURRENT_TIMESTAMP(3)
             WHERE id = #{needId}
               AND need_status = 'OPEN'
@@ -291,9 +900,10 @@ public interface CollaborationMapper {
                 resolution_type = #{resolutionType},
                 resolution_id = #{resolutionId},
                 resolution_post_id = #{resolutionPostId},
+                last_progress_at = CURRENT_TIMESTAMP(3),
                 update_time = CURRENT_TIMESTAMP(3)
             WHERE id = #{needId}
-              AND need_status IN ('OPEN', 'CLAIMED')
+              AND need_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
             """)
     int completeNeed(@Param("needId") Long needId,
                      @Param("resolutionType") String resolutionType,
@@ -304,11 +914,72 @@ public interface CollaborationMapper {
             UPDATE t_collab_content_need
             SET need_status = 'CLOSED',
                 closed_reason = #{reason},
+                last_progress_at = CURRENT_TIMESTAMP(3),
                 update_time = CURRENT_TIMESTAMP(3)
             WHERE id = #{needId}
-              AND need_status IN ('OPEN', 'CLAIMED')
+              AND need_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
             """)
     int closeNeed(@Param("needId") Long needId, @Param("reason") String reason);
+
+    @Update("""
+            UPDATE t_collab_content_need
+            SET need_status = 'SUBMITTED',
+                submitted_by_uid = #{uid},
+                submitted_at = CURRENT_TIMESTAMP(3),
+                submission_resolution_type = #{resolutionType},
+                submission_resolution_id = #{resolutionId},
+                submission_note = #{note},
+                reject_reason = NULL,
+                last_progress_at = CURRENT_TIMESTAMP(3),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{needId}
+              AND need_status = 'CLAIMED'
+              AND claimed_by_uid = #{uid}
+            """)
+    int submitNeed(@Param("needId") Long needId,
+                   @Param("uid") Long uid,
+                   @Param("resolutionType") String resolutionType,
+                   @Param("resolutionId") Long resolutionId,
+                   @Param("note") String note);
+
+    @Update("""
+            <script>
+            UPDATE t_collab_content_need
+            SET need_status = 'CLAIMED',
+                <if test="rejectReason != null">
+                reject_reason = #{rejectReason},
+                </if>
+                last_progress_at = CURRENT_TIMESTAMP(3),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{needId}
+              AND need_status = 'SUBMITTED'
+              <if test="submittedByUid != null">
+              AND submitted_by_uid = #{submittedByUid}
+              </if>
+            </script>
+            """)
+    int revertSubmittedToClaimed(@Param("needId") Long needId,
+                                 @Param("submittedByUid") Long submittedByUid,
+                                 @Param("rejectReason") String rejectReason);
+
+    @Update("""
+            UPDATE t_collab_content_need
+            SET need_status = 'OPEN',
+                claimed_by_uid = NULL,
+                claimed_at = NULL,
+                last_progress_at = NULL,
+                submitted_by_uid = NULL,
+                submitted_at = NULL,
+                submission_resolution_type = NULL,
+                submission_resolution_id = NULL,
+                submission_note = NULL,
+                reject_reason = NULL,
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{needId}
+              AND need_status = 'CLAIMED'
+              AND claimed_by_uid = #{uid}
+            """)
+    int releaseNeed(@Param("needId") Long needId, @Param("uid") Long uid);
 
     @Select("""
             <script>

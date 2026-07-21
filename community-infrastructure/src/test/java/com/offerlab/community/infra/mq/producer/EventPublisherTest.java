@@ -1,6 +1,7 @@
 package com.offerlab.community.infra.mq.producer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.infra.mq.EventEnvelope;
 import com.offerlab.community.infra.mq.outbox.OutboxMessage;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EventPublisherTest {
 
@@ -34,17 +36,24 @@ class EventPublisherTest {
     }
 
     @Test
-    void kafkaEnabledPersistsOutboxBeforePublishingLocalEvent() {
+    void kafkaEnabledPersistsOutboxBeforePublishingLocalEvent() throws Exception {
         AtomicReference<OutboxMessage> inserted = new AtomicReference<>();
         List<Object> localEvents = new ArrayList<>();
         EventPublisher publisher = publisher(true, inserted, localEvents);
-        PostPublishedEvent event = new PostPublishedEvent(42L);
+        PostPublishedEvent event = new PostPublishedEvent(42L, 7L);
 
         publisher.publish(event);
 
         assertEquals("post.published", inserted.get().getTopic());
         assertEquals(42L, inserted.get().getAggregateId());
         assertEquals(OutboxMessageMapper.STATUS_PENDING, inserted.get().getMsgStatus());
+        EventEnvelope<?> envelope = new ObjectMapper().readValue(inserted.get().getPayload(), EventEnvelope.class);
+        assertEquals(envelope.getMessageId(), envelope.getIdempotencyKey());
+        assertEquals("1", envelope.getSchemaVersion());
+        assertEquals("post", envelope.getSourceType());
+        assertEquals("42", envelope.getSourceId());
+        assertEquals(7L, envelope.getActorUid());
+        assertTrue(envelope.getOccurredAt() > 0);
         assertEquals(1, localEvents.size());
         assertSame(event, localEvents.get(0));
     }
@@ -93,13 +102,23 @@ class EventPublisherTest {
 
     private static final class PostPublishedEvent {
         private final Long postId;
+        private final Long actorUid;
 
         private PostPublishedEvent(Long postId) {
+            this(postId, null);
+        }
+
+        private PostPublishedEvent(Long postId, Long actorUid) {
             this.postId = postId;
+            this.actorUid = actorUid;
         }
 
         public Long getPostId() {
             return postId;
+        }
+
+        public Long getActorUid() {
+            return actorUid;
         }
     }
 }

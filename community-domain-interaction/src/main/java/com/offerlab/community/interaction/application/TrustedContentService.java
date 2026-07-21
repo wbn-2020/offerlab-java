@@ -16,7 +16,10 @@ import com.offerlab.community.interaction.api.dto.TrustedContentDTO;
 import com.offerlab.community.interaction.api.dto.UsefulFeedbackCmd;
 import com.offerlab.community.interaction.api.dto.UsefulFeedbackSummaryDTO;
 import com.offerlab.community.interaction.api.enums.ContentSuggestionDecision;
+import com.offerlab.community.interaction.api.enums.ContentSuggestionDeliveryStatus;
+import com.offerlab.community.interaction.api.enums.ContentSuggestionResolution;
 import com.offerlab.community.interaction.api.enums.ContentSuggestionStatus;
+import com.offerlab.community.interaction.api.enums.ContentSuggestionTargetScope;
 import com.offerlab.community.interaction.api.enums.ContentSuggestionType;
 import com.offerlab.community.interaction.api.enums.FreshnessStatus;
 import com.offerlab.community.interaction.api.enums.QuestionStatus;
@@ -81,6 +84,8 @@ public class TrustedContentService {
     private static final int PUBLIC_SUGGESTION_LIMIT = 20;
     private static final int MAX_DETAIL_LENGTH = 2000;
     private static final int MAX_SOURCE_URL_LENGTH = 1000;
+    private static final int MAX_TARGET_LOCATOR_LENGTH = 255;
+    private static final int MAX_EXPECTED_CHANGE_LENGTH = 2000;
     private static final int MAX_AUTHOR_REPLY_LENGTH = 1000;
     private static final int MAX_PUBLIC_NOTE_LENGTH = 500;
     private static final String FOLDED_SIGNAL = "LOW_QUALITY_FOLDED";
@@ -115,7 +120,8 @@ public class TrustedContentService {
             ContentSuggestionDecision.ACCEPTED,
             ContentSuggestionDecision.PARTIAL_ACCEPTED,
             ContentSuggestionDecision.REJECTED,
-            ContentSuggestionDecision.MERGED);
+            ContentSuggestionDecision.MERGED,
+            ContentSuggestionDecision.PLANNED);
 
     private final PostTrustStateMapper trustStateMapper;
     private final PostUsefulFeedbackMapper usefulFeedbackMapper;
@@ -192,6 +198,15 @@ public class TrustedContentService {
         }
         String detail = normalizeRequired(cmd.getDetail(), MAX_DETAIL_LENGTH, "suggestion detail");
         String sourceUrl = normalizeSourceUrl(cmd.getSourceUrl());
+        String targetLocator = normalizeOptional(
+                cmd.getTargetLocator(), MAX_TARGET_LOCATOR_LENGTH, "target locator");
+        String expectedChange = normalizeOptional(
+                cmd.getExpectedChange(), MAX_EXPECTED_CHANGE_LENGTH, "expected change");
+        ContentSuggestionTargetScope targetScope = cmd.getTargetScope() == null
+                ? ContentSuggestionTargetScope.OTHER
+                : cmd.getTargetScope();
+        Post currentPost = postRepository.findById(postId)
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         PostTrustStatePO state = lockState(post);
         if (!Objects.equals(state.getSuggestionsOpen(), 1)) {
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "content suggestions are closed");
@@ -215,7 +230,13 @@ public class TrustedContentService {
         suggestion.setDetail(detail);
         suggestion.setNormalizedContentHash(contentHash);
         suggestion.setSourceUrl(sourceUrl);
+        suggestion.setBaseVersion(currentPost.getVersion());
+        suggestion.setTargetScope(targetScope.name());
+        suggestion.setTargetLocator(targetLocator);
+        suggestion.setExpectedChange(expectedChange == null ? detail : expectedChange);
         suggestion.setAllowPublicAttribution(Boolean.TRUE.equals(cmd.getAllowPublicAttribution()) ? 1 : 0);
+        suggestion.setResolution(ContentSuggestionResolution.PENDING.name());
+        suggestion.setDeliveryStatus(ContentSuggestionDeliveryStatus.UNLINKED.name());
         suggestion.setPendingDedupKey(pendingKey);
         try {
             suggestionMapper.insertSuggestion(suggestion);
@@ -286,8 +307,10 @@ public class TrustedContentService {
                                                   ContentSuggestionDecisionCmd cmd) {
         requirePositive(suggestionId);
         requirePositive(actorUid);
-        ContentSuggestionDecision decision = cmd == null ? null : cmd.getDecision();
-        if (decision == null || !SUGGESTION_DECISIONS.contains(decision)) {
+        ContentSuggestionDecision decision = requestedDecision(cmd);
+        ContentSuggestionResolution resolution = requestedResolution(cmd, decision);
+        if (decision == null || !SUGGESTION_DECISIONS.contains(decision)
+                || resolution == ContentSuggestionResolution.PENDING) {
             throw parameterError("unsupported content suggestion decision");
         }
         if (decision == ContentSuggestionDecision.MERGED) {
@@ -311,20 +334,23 @@ public class TrustedContentService {
         }
         String authorReply = normalizeOptional(cmd.getAuthorReply(), MAX_AUTHOR_REPLY_LENGTH, "author reply");
         String publicNote = normalizeOptional(cmd.getPublicNote(), MAX_PUBLIC_NOTE_LENGTH, "public note");
-        if (suggestion.getDecision() != null) {
-            if (decision.name().equals(suggestion.getDecision())
+        ContentSuggestionResolution currentResolution = effectiveResolution(suggestion);
+        if (currentResolution != ContentSuggestionResolution.PENDING) {
+            if (resolution == currentResolution
                     && Objects.equals(authorReply, suggestion.getAuthorReply())
                     && Objects.equals(publicNote, suggestion.getPublicNote())) {
                 return toSuggestionDTO(suggestion, loadUsers(List.of(suggestion)));
             }
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
-        if (suggestionMapper.decide(
-                suggestionId, decision.name(), authorReply, publicNote, null) <= 0) {
+        if (suggestionMapper.resolve(
+                suggestionId, decision.name(), resolution.name(), authorReply, publicNote) <= 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
 
         suggestion.setDecision(decision.name());
+        suggestion.setResolution(resolution.name());
+        suggestion.setDeliveryStatus(ContentSuggestionDeliveryStatus.UNLINKED.name());
         suggestion.setAuthorReply(authorReply);
         suggestion.setPublicNote(publicNote);
         suggestion.setPendingDedupKey(null);
@@ -575,6 +601,13 @@ public class TrustedContentService {
     public void mergeSuggestionsFromPostUpdate(Long postId, Long authorId,
                                                Collection<Long> respondedSuggestionIds,
                                                Integer resultVersion) {
+        linkSuggestionsFromPostUpdate(postId, authorId, respondedSuggestionIds, resultVersion);
+    }
+
+    @Transactional
+    public void linkSuggestionsFromPostUpdate(Long postId, Long authorId,
+                                              Collection<Long> respondedSuggestionIds,
+                                              Integer resultVersion) {
         if (postId == null || postId <= 0
                 || authorId == null || authorId <= 0
                 || resultVersion == null || resultVersion <= 0
@@ -618,29 +651,45 @@ public class TrustedContentService {
             if (!Objects.equals(suggestion.getPostAuthorId(), authorId)) {
                 throw new BizException(ErrorCode.FORBIDDEN);
             }
-            if (suggestion.getDecision() != null) {
-                if (ContentSuggestionDecision.MERGED.name().equals(suggestion.getDecision())
-                        && Objects.equals(suggestion.getResultVersion(), resultVersion)) {
+            ContentSuggestionResolution resolution = effectiveResolution(suggestion);
+            ContentSuggestionDeliveryStatus deliveryStatus = effectiveDeliveryStatus(suggestion);
+            if (deliveryStatus == ContentSuggestionDeliveryStatus.LINKED) {
+                if (Objects.equals(suggestion.getResultVersion(), resultVersion)) {
                     continue;
                 }
                 throw new BizException(ErrorCode.INVALID_STATUS);
             }
-            if (suggestionMapper.decide(
+            if (resolution == ContentSuggestionResolution.REJECTED
+                    || (!resolution.canLinkToVersion()
+                    && resolution != ContentSuggestionResolution.PENDING)) {
+                throw new BizException(ErrorCode.INVALID_STATUS);
+            }
+            boolean firstLink = resolution == ContentSuggestionResolution.PENDING;
+            ContentSuggestionResolution linkedResolution = firstLink
+                    ? ContentSuggestionResolution.ACCEPTED
+                    : resolution;
+            ContentSuggestionDecision linkedDecision = firstLink
+                    ? ContentSuggestionDecision.MERGED
+                    : compatibleDecision(suggestion, linkedResolution);
+            if (suggestionMapper.linkToVersion(
                     suggestion.getId(),
-                    ContentSuggestionDecision.MERGED.name(),
-                    suggestion.getAuthorReply(),
-                    suggestion.getPublicNote(),
+                    linkedDecision.name(),
+                    linkedResolution.name(),
                     resultVersion) <= 0) {
                 throw new BizException(ErrorCode.INVALID_STATUS);
             }
-            suggestion.setDecision(ContentSuggestionDecision.MERGED.name());
+            suggestion.setDecision(linkedDecision.name());
+            suggestion.setResolution(linkedResolution.name());
+            suggestion.setDeliveryStatus(ContentSuggestionDeliveryStatus.LINKED.name());
             suggestion.setResultVersion(resultVersion);
             suggestion.setPendingDedupKey(null);
-            suggestion.setDecidedAt(LocalDateTime.now());
+            if (suggestion.getDecidedAt() == null) {
+                suggestion.setDecidedAt(LocalDateTime.now());
+            }
             freshnessMerged = freshnessMerged
                     || ContentSuggestionType.FRESHNESS_UPDATE.name().equals(suggestion.getSuggestionType());
             publishSuggestionDecision(
-                    suggestion, authorId, ContentSuggestionDecision.MERGED, resultVersion);
+                    suggestion, authorId, linkedDecision, resultVersion);
         }
         if (freshnessMerged) {
             FreshnessStatus previous = freshnessStatus(state);
@@ -927,8 +976,13 @@ public class TrustedContentService {
 
     private static ContentSuggestionDTO toSuggestionDTO(
             ContentSuggestionPO suggestion, Map<Long, UserBriefDTO> users) {
+        ContentSuggestionResolution resolution = effectiveResolution(suggestion);
+        ContentSuggestionDeliveryStatus deliveryStatus = effectiveDeliveryStatus(suggestion);
         ContentSuggestionDecision decision = enumValue(
                 ContentSuggestionDecision.class, suggestion.getDecision());
+        if (decision == null) {
+            decision = resolution.toCompatibleDecision();
+        }
         return ContentSuggestionDTO.builder()
                 .id(suggestion.getId())
                 .postId(suggestion.getPostId())
@@ -938,9 +992,17 @@ public class TrustedContentService {
                 .type(enumValue(ContentSuggestionType.class, suggestion.getSuggestionType()))
                 .detail(suggestion.getDetail())
                 .sourceUrl(suggestion.getSourceUrl())
+                .baseVersion(suggestion.getBaseVersion())
+                .targetScope(enumValue(ContentSuggestionTargetScope.class, suggestion.getTargetScope()))
+                .targetLocator(suggestion.getTargetLocator())
+                .expectedChange(suggestion.getExpectedChange())
                 .allowPublicAttribution(Objects.equals(suggestion.getAllowPublicAttribution(), 1))
-                .status(decision == null ? ContentSuggestionStatus.PENDING : ContentSuggestionStatus.DECIDED)
+                .status(resolution == ContentSuggestionResolution.PENDING
+                        ? ContentSuggestionStatus.PENDING
+                        : ContentSuggestionStatus.DECIDED)
                 .decision(decision)
+                .resolution(resolution)
+                .deliveryStatus(deliveryStatus)
                 .authorReply(suggestion.getAuthorReply())
                 .publicNote(suggestion.getPublicNote())
                 .resultVersion(suggestion.getResultVersion())
@@ -1039,6 +1101,56 @@ public class TrustedContentService {
 
     private static int clampSuggestionLimit(int limit) {
         return Math.max(1, Math.min(limit <= 0 ? 20 : limit, MAX_SUGGESTION_LIST_LIMIT));
+    }
+
+    private static ContentSuggestionDecision requestedDecision(ContentSuggestionDecisionCmd cmd) {
+        if (cmd == null) {
+            return null;
+        }
+        if (cmd.getDecision() != null) {
+            return cmd.getDecision();
+        }
+        return cmd.getResolution() == null ? null : cmd.getResolution().toCompatibleDecision();
+    }
+
+    private static ContentSuggestionResolution requestedResolution(
+            ContentSuggestionDecisionCmd cmd, ContentSuggestionDecision decision) {
+        ContentSuggestionResolution fromDecision = ContentSuggestionResolution.fromDecision(decision);
+        if (cmd == null || cmd.getResolution() == null) {
+            return fromDecision;
+        }
+        if (decision != null && cmd.getResolution() != fromDecision) {
+            throw parameterError("content suggestion decision and resolution conflict");
+        }
+        return cmd.getResolution();
+    }
+
+    private static ContentSuggestionResolution effectiveResolution(ContentSuggestionPO suggestion) {
+        ContentSuggestionResolution persisted = enumValue(
+                ContentSuggestionResolution.class, suggestion.getResolution());
+        if (persisted != null && persisted != ContentSuggestionResolution.PENDING) {
+            return persisted;
+        }
+        ContentSuggestionDecision legacyDecision = enumValue(
+                ContentSuggestionDecision.class, suggestion.getDecision());
+        return ContentSuggestionResolution.fromDecision(legacyDecision);
+    }
+
+    private static ContentSuggestionDeliveryStatus effectiveDeliveryStatus(ContentSuggestionPO suggestion) {
+        ContentSuggestionDeliveryStatus persisted = enumValue(
+                ContentSuggestionDeliveryStatus.class, suggestion.getDeliveryStatus());
+        if (persisted == ContentSuggestionDeliveryStatus.LINKED
+                || suggestion.getResultVersion() != null) {
+            return ContentSuggestionDeliveryStatus.LINKED;
+        }
+        return ContentSuggestionDeliveryStatus.UNLINKED;
+    }
+
+    private static ContentSuggestionDecision compatibleDecision(
+            ContentSuggestionPO suggestion, ContentSuggestionResolution resolution) {
+        ContentSuggestionDecision persisted = enumValue(
+                ContentSuggestionDecision.class, suggestion.getDecision());
+        return persisted == null ? resolution.toCompatibleDecision() : persisted;
     }
 
     private static String normalizeSourceUrl(String value) {

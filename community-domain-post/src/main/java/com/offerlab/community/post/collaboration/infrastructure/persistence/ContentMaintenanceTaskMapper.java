@@ -117,6 +117,38 @@ public interface ContentMaintenanceTaskMapper {
                                              @Param("limit") int limit);
 
     @Select("""
+            SELECT id,
+                   domain,
+                   source_type AS sourceType,
+                   source_ref_id AS sourceRefId,
+                   source_post_id AS sourcePostId,
+                   created_by_uid AS createdByUid,
+                   assignee_uid AS assigneeUid,
+                   title,
+                   detail,
+                   task_status AS status,
+                   delivery_type AS deliveryType,
+                   delivery_ref_id AS deliveryRefId,
+                   delivery_post_id AS deliveryPostId,
+                   delivery_note AS deliveryNote,
+                   review_note AS reviewNote,
+                   claimed_at AS claimedAt,
+                   submitted_at AS submittedAt,
+                   reviewed_by_uid AS reviewedByUid,
+                   reviewed_at AS reviewedAt,
+                   closed_by_uid AS closedByUid,
+                   closed_at AS closedAt,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_collab_content_maintenance_task
+            WHERE assignee_uid = #{uid}
+              AND task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
+            ORDER BY update_time DESC, id DESC
+            """)
+    List<ContentMaintenanceTaskRow> listKnowledgeActions(@Param("uid") Long uid,
+                                                         @Param("limit") int limit);
+
+    @Select("""
             <script>
             SELECT id,
                    domain,
@@ -159,6 +191,51 @@ public interface ContentMaintenanceTaskMapper {
                                               @Param("cursor") long cursor,
                                               @Param("limit") int limit);
 
+    @Select("""
+            <script>
+            SELECT task.id,
+                   task.domain,
+                   task.source_type AS sourceType,
+                   task.source_ref_id AS sourceRefId,
+                   task.source_post_id AS sourcePostId,
+                   source_post.post_type AS sourcePostType,
+                   task.assignee_uid AS assigneeUid,
+                   task.title,
+                   task.task_status AS status,
+                   task.create_time AS createTime,
+                   task.update_time AS updateTime
+            FROM t_collab_content_maintenance_task task
+            LEFT JOIN t_post_main source_post
+              ON source_post.id = task.source_post_id
+            WHERE task.domain = #{domain}
+              AND task.task_status = 'OPEN'
+              AND (task.assignee_uid IS NULL OR task.assignee_uid = #{uid})
+              AND (
+                    task.source_post_id IS NULL
+                    OR (
+                        source_post.is_deleted = 0
+                        AND source_post.post_status = 1
+                        AND source_post.visibility = 1
+                    )
+                  )
+              <if test="sourceType != null and sourceType != ''">
+                AND task.source_type = #{sourceType}
+              </if>
+              <if test="contentType != null">
+                AND source_post.post_type = #{contentType}
+              </if>
+              AND (#{cursor} = 0 OR task.id &lt; #{cursor})
+            ORDER BY task.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<ContentMaintenanceTaskRow> listCandidates(@Param("uid") Long uid,
+                                                   @Param("domain") Integer domain,
+                                                   @Param("sourceType") String sourceType,
+                                                   @Param("contentType") Integer contentType,
+                                                   @Param("cursor") long cursor,
+                                                   @Param("limit") int limit);
+
     @Update("""
             UPDATE t_collab_content_maintenance_task
             SET assignee_uid = #{uid},
@@ -170,6 +247,17 @@ public interface ContentMaintenanceTaskMapper {
               AND (assignee_uid IS NULL OR assignee_uid = #{uid})
             """)
     int claim(@Param("id") Long id, @Param("uid") Long uid);
+
+    @Update("""
+            UPDATE t_collab_content_maintenance_task
+            SET assignee_uid = #{replacementUid},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE id = #{id}
+              AND task_status IN ('OPEN', 'CLAIMED')
+              AND (assignee_uid IS NULL OR assignee_uid <> #{replacementUid})
+            """)
+    int reassign(@Param("id") Long id,
+                 @Param("replacementUid") Long replacementUid);
 
     @Update("""
             UPDATE t_collab_content_maintenance_task

@@ -55,12 +55,20 @@ public class EventPublisher {
 
     private void persistOutbox(Object event) throws Exception {
         EventTopicResolver.TopicMapping mapping = topicResolver.resolve(event);
+        String messageId = IdUtil.getSnowflakeNextIdStr();
         EventEnvelope<?> envelope = EventEnvelope.builder()
-                .messageId(IdUtil.getSnowflakeNextIdStr())
+                .messageId(messageId)
                 .eventType(mapping.eventType)
                 .timestamp(System.currentTimeMillis())
                 .traceId(getTraceId())
                 .version("v1")
+                .schemaVersion("1")
+                .sourceType(mapping.sourceType)
+                .sourceId(mapping.sourceId)
+                .actorUid(mapping.actorUid)
+                .occurredAt(System.currentTimeMillis())
+                .visibilityScope("INTERNAL")
+                .idempotencyKey(messageId)
                 .retryCount(0)
                 .payload(event)
                 .build();
@@ -79,8 +87,8 @@ public class EventPublisher {
                 .build();
 
         outboxMapper.insert(outbox);
-        log.debug("outbox message saved: topic={} aggregateId={} messageId={}",
-                mapping.topic, mapping.aggregateId, envelope.getMessageId());
+        log.debug("outbox message saved: topic={} aggregateId={} messageId={} registered={}",
+                mapping.topic, mapping.aggregateId, envelope.getMessageId(), mapping.registered);
     }
 
     private boolean isKafkaEnabled() {

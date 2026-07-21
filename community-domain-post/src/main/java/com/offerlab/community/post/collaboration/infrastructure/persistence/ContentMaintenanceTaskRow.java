@@ -11,6 +11,7 @@ public class ContentMaintenanceTaskRow {
     private String sourceType;
     private Long sourceRefId;
     private Long sourcePostId;
+    private Integer sourcePostType;
     private Long createdByUid;
     private Long assigneeUid;
     private String title;

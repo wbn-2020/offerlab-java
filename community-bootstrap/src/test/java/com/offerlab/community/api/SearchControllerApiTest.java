@@ -10,6 +10,7 @@ import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.api.dto.SearchStatusDTO;
+import com.offerlab.community.search.api.dto.SearchTrustFilter;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
 import com.offerlab.community.search.application.SearchIndexRetryService;
@@ -162,7 +163,8 @@ class SearchControllerApiTest {
                 eq("latest"),
                 isNull(),
                 eq(20),
-                eq(false)))
+                eq(false),
+                eq(SearchTrustFilter.empty())))
                 .thenReturn(PageResult.empty());
 
         mvc.perform(get("/api/v1/search/posts")
@@ -173,7 +175,7 @@ class SearchControllerApiTest {
                 .andExpect(jsonPath("$.code").value(0));
 
         verify(searchFacade).searchPosts(
-                "租房", null, null, null, 4, "latest", null, 20, false);
+                "租房", null, null, null, 4, "latest", null, 20, false, SearchTrustFilter.empty());
     }
 
     @Test

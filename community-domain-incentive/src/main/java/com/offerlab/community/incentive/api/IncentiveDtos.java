@@ -227,6 +227,15 @@ public final class IncentiveDtos {
         private LocalDateTime finishTime;
     }
 
+    @Data @Builder
+    public static class RewardInboxReconcileDTO {
+        private Integer slaMinutes;
+        private Integer processedCount;
+        private Integer appliedCount;
+        private Integer rejectedCount;
+        private Boolean coverageComplete;
+    }
+
     @Data
     public static class BenefitCatalogCmd {
         @NotBlank @Size(max = 64) private String benefitCode;
@@ -545,5 +554,71 @@ public final class IncentiveDtos {
         private List<RoleDefinitionDTO> definitions;
         private com.offerlab.community.common.result.PageResult<RoleApplicationDTO> applications;
         private com.offerlab.community.common.result.PageResult<RoleGrantDTO> grants;
+    }
+
+    @Data @Builder
+    public static class RoleEvidenceItemDTO {
+        private String evidenceCode;
+        private String label;
+        private String currentValue;
+        private String requiredValue;
+        private Boolean passed;
+    }
+
+    @Data @Builder
+    public static class RoleEvidenceDTO {
+        private String roleCode;
+        private String roleName;
+        private String domainCode;
+        private Boolean eligible;
+        private List<String> failedChecks;
+        private List<RoleEvidenceItemDTO> evidence;
+        private Boolean manualApprovalRequired;
+        private Boolean riskFrozen;
+        private String applicationStatus;
+        private String grantStatus;
+        private LocalDateTime expiresAt;
+        private Boolean canApply;
+        private Boolean canUseMaintenanceWorkspace;
+        private List<String> availableActions;
+    }
+
+    @Data @Builder
+    public static class RoleWorkspaceCardDTO {
+        private RoleDefinitionDTO definition;
+        private RoleEvidenceDTO evidence;
+        private RoleApplicationDTO application;
+        private RoleGrantDTO grant;
+    }
+
+    @Data @Builder
+    public static class RoleWorkspaceV8DTO {
+        private LocalDateTime generatedAt;
+        private List<RoleWorkspaceCardDTO> roles;
+    }
+
+    @Data @Builder
+    public static class RoleGrantHistoryDTO {
+        private Long id;
+        private Long grantId;
+        private String fromStatus;
+        private String toStatus;
+        private Long operatorUid;
+        private String actionReason;
+        private LocalDateTime createTime;
+    }
+
+    @Data @Builder
+    public static class RoleReviewContextDTO {
+        private RoleApplicationDTO application;
+        private RoleDefinitionDTO definition;
+        private RoleEvidenceDTO evidence;
+        private RoleGrantDTO currentGrant;
+        private Long recentTrustedContributionCount;
+        private Long completedMaintenanceTaskCount;
+        private Long returnedMaintenanceTaskCount;
+        private Long activeViolationCount;
+        private Boolean riskFrozen;
+        private List<RoleGrantHistoryDTO> grantHistory;
     }
 }

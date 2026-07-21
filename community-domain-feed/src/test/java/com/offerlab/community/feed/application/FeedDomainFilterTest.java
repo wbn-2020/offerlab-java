@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FeedDomainFilterTest {
 
@@ -55,6 +56,8 @@ class FeedDomainFilterTest {
 
         assertEquals(List.of(), postIds(techPage));
         assertEquals(List.of(702L), postIds(careerPage));
+        assertEquals("LATEST", careerPage.getItems().get(0).getSourceType());
+        assertEquals("RECENT_PUBLISHED", careerPage.getItems().get(0).getReasonCode());
     }
 
     @Test
@@ -180,6 +183,46 @@ class FeedDomainFilterTest {
         assertEquals(List.of(922L), postIds(page));
     }
 
+    @Test
+    void recommendFeedDemotesDomainsMarkedLessLikeThis() {
+        PostBriefDTO tech = post(931L, 1931L, Post.DOMAIN_TECH);
+        PostBriefDTO career = post(932L, 1932L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of(Post.DOMAIN_TECH)),
+                new FakePostFacade(PageResult.of(List.of(tech, career), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 2, null);
+
+        assertEquals(List.of(932L, 931L), postIds(page));
+        assertEquals("RECOMMEND", page.getItems().get(0).getSourceType());
+        assertEquals("RULE_MATCH", page.getItems().get(0).getReasonCode());
+    }
+
+    @Test
+    void followingFeedFallsBackToDatabaseWithoutCrossAccountState() {
+        PostBriefDTO followed = post(941L, 1941L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new FailingFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(941L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
+        assertTrue(page.getDegraded());
+        assertEquals("FOLLOWING", page.getItems().get(0).getSourceType());
+    }
+
     private static PostBriefDTO post(Long id, Long authorId, Integer domain) {
         return PostBriefDTO.builder()
                 .id(id)
@@ -236,17 +279,35 @@ class FeedDomainFilterTest {
         }
     }
 
+    private static class FailingFeedInboxRedis extends EmptyFeedInboxRedis {
+        @Override
+        public Set<ZSetOperations.TypedTuple<String>> readInboxWithScore(Long uid, double maxScoreExclusive, int size) {
+            throw new IllegalStateException("redis unavailable");
+        }
+    }
+
     private static class FixedHiddenFeedFeedbackStore extends FeedFeedbackStore {
         private final Set<Long> hiddenPostIds;
+        private final Set<Integer> lessLikedDomains;
 
         FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds) {
+            this(hiddenPostIds, Set.of());
+        }
+
+        FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds, Set<Integer> lessLikedDomains) {
             super(null);
             this.hiddenPostIds = hiddenPostIds;
+            this.lessLikedDomains = lessLikedDomains;
         }
 
         @Override
         public Set<Long> hiddenPostIds(Long uid) {
             return hiddenPostIds;
+        }
+
+        @Override
+        public Set<Integer> lessLikedDomains(Long uid) {
+            return lessLikedDomains;
         }
     }
 
@@ -324,14 +385,17 @@ class FeedDomainFilterTest {
         @Override public UserBriefDTO getUserBrief(Long uid) { throw unsupported(); }
         @Override public Map<String, Long> findUserIdsByNicknames(Collection<String> nicknames) { throw unsupported(); }
         @Override public boolean isFollowing(Long fromUid, Long toUid) { return false; }
-        @Override public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) { throw unsupported(); }
+        @Override
+        public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) {
+            return toUids.stream().collect(java.util.stream.Collectors.toMap(uid -> uid, uid -> true));
+        }
         @Override public List<Long> getFollowerIds(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<FollowCursorDTO> getFollowerPage(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<Long> getFollowingIds(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<FollowCursorDTO> getFollowingPage(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public long getFollowerCount(Long uid) { throw unsupported(); }
         @Override public boolean isBigV(Long uid) { throw unsupported(); }
-        @Override public UserIntentDTO getUserIntent(Long uid) { throw unsupported(); }
+        @Override public UserIntentDTO getUserIntent(Long uid) { return null; }
         @Override public boolean isProfileVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
         @Override public boolean isIntentVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
         @Override public boolean isSearchable(Long uid) { throw unsupported(); }

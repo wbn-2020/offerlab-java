@@ -8,13 +8,30 @@ for (const arg of process.argv.slice(2)) {
   if (match) args.set(match[1], match[2])
 }
 
+const jdbc = parseJdbcUrl(process.env.DB_URL)
 const config = {
-  host: args.get('host') || process.env.OFFERLAB_DB_HOST || '127.0.0.1',
-  port: args.get('port') || process.env.OFFERLAB_DB_PORT || '3306',
-  user: args.get('user') || process.env.OFFERLAB_DB_USER || 'offerlab',
-  password: args.get('password') || process.env.OFFERLAB_DB_PASSWORD || 'offerlab123',
-  database: args.get('database') || process.env.OFFERLAB_DB_NAME || 'offerlab',
+  host: args.get('host') || process.env.OFFERLAB_DB_HOST || jdbc.host || '127.0.0.1',
+  port: args.get('port') || process.env.OFFERLAB_DB_PORT || jdbc.port || '3306',
+  user: args.get('user') || process.env.OFFERLAB_DB_USER || process.env.DB_USERNAME || jdbc.user || 'offerlab',
+  password: args.get('password') || process.env.OFFERLAB_DB_PASSWORD || process.env.DB_PASSWORD || jdbc.password || 'offerlab123',
+  database: args.get('database') || process.env.OFFERLAB_DB_NAME || jdbc.database || 'offerlab',
   json: process.argv.includes('--json'),
+}
+
+function parseJdbcUrl(value) {
+  if (!value || !value.startsWith('jdbc:mysql://')) return {}
+  try {
+    const parsed = new URL(value.slice('jdbc:'.length))
+    return {
+      host: parsed.hostname,
+      port: parsed.port || '3306',
+      user: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+      database: parsed.pathname.replace(/^\/+/, '') || undefined,
+    }
+  } catch {
+    return {}
+  }
 }
 
 const mysqlCandidates = [
@@ -96,6 +113,61 @@ const columnDefinitions = [
     characterSet: 'ascii',
     collation: 'ascii_bin',
   }),
+  columnDefinition('t_collab_content_need', 'submitted_by_uid', 'bigint', true),
+  columnDefinition('t_collab_content_need', 'submitted_at', 'datetime(3)', true),
+  columnDefinition('t_collab_content_need', 'submission_resolution_type', 'varchar(24)', true),
+  columnDefinition('t_collab_content_need', 'submission_resolution_id', 'bigint', true),
+  columnDefinition('t_collab_content_need', 'submission_note', 'varchar(1000)', true),
+  columnDefinition('t_collab_content_need', 'reject_reason', 'varchar(500)', true),
+  columnDefinition('t_collab_content_need', 'claimed_at', 'datetime(3)', true),
+  columnDefinition('t_collab_content_need', 'last_progress_at', 'datetime(3)', true),
+  columnDefinition('t_collab_content_need_event', 'id', 'bigint', false),
+  columnDefinition('t_collab_content_need_event', 'need_id', 'bigint', false),
+  columnDefinition('t_collab_content_need_event', 'event_type', 'varchar(24)', false),
+  columnDefinition('t_collab_content_need_event', 'actor_uid', 'bigint', true),
+  columnDefinition('t_collab_content_need_event', 'claimant_uid', 'bigint', true),
+  columnDefinition('t_collab_content_need_event', 'from_status', 'varchar(24)', true),
+  columnDefinition('t_collab_content_need_event', 'to_status', 'varchar(24)', true),
+  columnDefinition('t_collab_content_need_event', 'target_type', 'varchar(32)', true),
+  columnDefinition('t_collab_content_need_event', 'target_id', 'bigint', true),
+  columnDefinition('t_collab_content_need_event', 'note', 'varchar(1000)', true),
+  columnDefinition('t_collab_content_need_event', 'visibility_scope', 'varchar(24)', false),
+  columnDefinition('t_collab_content_need_event', 'create_time', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'id', 'bigint', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'need_id', 'bigint', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'cycle_no', 'int', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'claimant_uid', 'bigint', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'cycle_status', 'varchar(24)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'cycle_origin', 'varchar(32)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'claimed_at', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'last_progress_at', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'ended_at', 'datetime(3)', true),
+  columnDefinition('t_collab_content_need_claim_cycle', 'end_reason', 'varchar(500)', true),
+  columnDefinition('t_collab_content_need_claim_cycle', 'create_time', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'update_time', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_claim_cycle', 'active_need_guard', 'bigint', true, {
+    extra: 'STORED GENERATED',
+    generationExpression: "casewhencycle_status='active'thenneed_idelsenullend",
+  }),
+  columnDefinition('t_collab_content_need_revision', 'id', 'bigint', false),
+  columnDefinition('t_collab_content_need_revision', 'need_id', 'bigint', false),
+  columnDefinition('t_collab_content_need_revision', 'cycle_id', 'bigint', false),
+  columnDefinition('t_collab_content_need_revision', 'cycle_no', 'int', false),
+  columnDefinition('t_collab_content_need_revision', 'revision_no', 'int', false),
+  columnDefinition('t_collab_content_need_revision', 'submitter_uid', 'bigint', false),
+  columnDefinition('t_collab_content_need_revision', 'resolution_type', 'varchar(24)', false),
+  columnDefinition('t_collab_content_need_revision', 'resolution_id', 'bigint', false),
+  columnDefinition('t_collab_content_need_revision', 'resolution_post_id', 'bigint', true),
+  columnDefinition('t_collab_content_need_revision', 'revision_note', 'varchar(1000)', true),
+  columnDefinition('t_collab_content_need_revision', 'revision_status', 'varchar(24)', false),
+  columnDefinition('t_collab_content_need_revision', 'revision_origin', 'varchar(32)', false),
+  columnDefinition('t_collab_content_need_revision', 'submitted_at', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_revision', 'decided_by', 'bigint', true),
+  columnDefinition('t_collab_content_need_revision', 'decided_at', 'datetime(3)', true),
+  columnDefinition('t_collab_content_need_revision', 'decision_note', 'varchar(1000)', true),
+  columnDefinition('t_collab_content_need_revision', 'visibility_scope', 'varchar(24)', false),
+  columnDefinition('t_collab_content_need_revision', 'create_time', 'datetime(3)', false),
+  columnDefinition('t_collab_content_need_revision', 'update_time', 'datetime(3)', false),
   columnDefinition('t_collab_curation_suggestion', 'pending_guard', 'tinyint', true, {
     extra: 'STORED GENERATED',
     generationExpression: "casewhenreview_status='pending'then1elsenullend",
@@ -155,6 +227,34 @@ const indexDefinitions = [
   indexDefinition('t_growth_event', 'uk_growth_event_key', true, 'event_key'),
   indexDefinition('t_collab_content_need_follow', 'uk_collab_need_follow', true,
     'need_id,uid'),
+  indexDefinition('t_collab_content_need_follow', 'idx_collab_need_follow_uid_active_id', false,
+    'uid,active,id'),
+  indexDefinition('t_collab_content_need_follow', 'idx_collab_need_follow_need_active_id', false,
+    'need_id,active,id'),
+  indexDefinition('t_collab_content_need_event', 'idx_collab_need_event_need', false,
+    'need_id,id'),
+  indexDefinition('t_collab_content_need_event', 'idx_collab_need_event_visibility', false,
+    'need_id,visibility_scope,id'),
+  indexDefinition('t_collab_content_need_claim_cycle', 'uk_collab_need_claim_cycle_no', true,
+    'need_id,cycle_no'),
+  indexDefinition('t_collab_content_need_claim_cycle', 'uk_collab_need_claim_cycle_active', true,
+    'active_need_guard'),
+  indexDefinition('t_collab_content_need_claim_cycle', 'idx_collab_need_claim_cycle_need', false,
+    'need_id,cycle_no,id'),
+  indexDefinition('t_collab_content_need_claim_cycle', 'idx_collab_need_claim_cycle_status', false,
+    'need_id,cycle_status,id'),
+  indexDefinition('t_collab_content_need_claim_cycle', 'idx_collab_need_claim_cycle_claimant', false,
+    'claimant_uid,cycle_status,update_time,id'),
+  indexDefinition('t_collab_content_need_revision', 'uk_collab_need_revision_no', true,
+    'cycle_id,revision_no'),
+  indexDefinition('t_collab_content_need_revision', 'idx_collab_need_revision_need', false,
+    'need_id,cycle_no,revision_no,id'),
+  indexDefinition('t_collab_content_need_revision', 'idx_collab_need_revision_cycle_status', false,
+    'cycle_id,revision_status,id'),
+  indexDefinition('t_collab_content_need_revision', 'idx_collab_need_revision_submitter', false,
+    'submitter_uid,create_time,id'),
+  indexDefinition('t_collab_content_need_revision', 'idx_collab_need_revision_visibility', false,
+    'need_id,visibility_scope,id'),
   indexDefinition('t_collab_series_member', 'uk_collab_series_member', true,
     'series_id,uid'),
   indexDefinition('t_collab_series_submission', 'uk_collab_series_submission', true,
@@ -233,6 +333,25 @@ const foreignKeyDefinitions = [
 ]
 
 const checkConstraintDefinitions = [
+  checkConstraintDefinition('t_search_index_rebuild_task',
+    'chk_search_index_rebuild_status',
+    "task_statusin'pending''running''succeeded''failed'"),
+  checkConstraintDefinition('t_projection_reconcile_request',
+    'chk_projection_reconcile_status',
+    "request_statusin'pending''completed'"),
+  checkConstraintDefinition('t_user_subscription_preference',
+    'chk_user_subscription_preference_source_type',
+    "source_typein'user''topic''discussion''need''series''activity'"),
+  checkConstraintDefinition('t_user_subscription_preference',
+    'chk_user_subscription_preference_delivery_mode',
+    "delivery_modein'immediate''digest''muted'"),
+  checkConstraintDefinition('t_user_subscription_preference',
+    'chk_user_subscription_preference_deleted',
+    'is_deletedin01'),
+  checkConstraintDefinition('t_feed_feedback_preference', 'chk_feed_feedback_action',
+    "actionin'hide''less_like_this'"),
+  checkConstraintDefinition('t_feed_feedback_preference', 'chk_feed_feedback_target_type',
+    "target_typein'post''domain'"),
   checkConstraintDefinition('t_incentive_account', 'chk_incentive_account_balances',
     'total_balance>=0andavailable_balance>=0andfrozen_balance>=0andrecovery_debt>=0andtotal_balance=available_balance+frozen_balance'),
   checkConstraintDefinition('t_virtual_benefit_catalog', 'chk_virtual_benefit_stock',
@@ -266,6 +385,11 @@ const expectations = [
   ...tables([
     'flyway_schema_history',
     't_admin_audit_log',
+    't_search_index_rebuild_task',
+    't_post_reference',
+    't_post_knowledge_relation',
+    't_int_post_outcome',
+    't_projection_reconcile_request',
     't_moderation_keyword',
     't_moderation_keyword_hit',
     't_user_moderation_state',
@@ -290,9 +414,11 @@ const expectations = [
     't_content_series',
     't_content_series_post',
     't_feed_recommend_support_stat',
+    't_feed_feedback_preference',
     't_expert_cert_application',
     't_int_contact_request',
     't_user_privacy_setting',
+    't_user_subscription_preference',
     't_int_discussion_follow',
     't_int_favorite',
     't_int_favorite_folder',
@@ -303,6 +429,9 @@ const expectations = [
     't_int_content_suggestion',
     't_collab_content_need',
     't_collab_content_need_follow',
+    't_collab_content_need_event',
+    't_collab_content_need_claim_cycle',
+    't_collab_content_need_revision',
     't_collab_series',
     't_collab_series_member',
     't_collab_series_submission',
@@ -486,6 +615,18 @@ const expectations = [
     'create_time',
     'update_time',
   ]),
+  ...columns('t_feed_feedback_preference', [
+    'id',
+    'uid',
+    'post_id',
+    'action',
+    'target_type',
+    'target_id',
+    'reason',
+    'expires_at',
+    'create_time',
+    'update_time',
+  ]),
   ...columns('t_expert_cert_application', [
     'id',
     'applicant_uid',
@@ -525,6 +666,75 @@ const expectations = [
     'accept_contact_request',
     'contact_request_policy',
     'contact_request_daily_limit',
+  ]),
+  ...columns('t_user_subscription_preference', [
+    'id',
+    'uid',
+    'source_type',
+    'source_id',
+    'delivery_mode',
+    'expires_at',
+    'create_time',
+    'update_time',
+    'is_deleted',
+  ]),
+  ...columns('t_projection_reconcile_request', [
+    'id',
+    'resource_id',
+    'operator_uid',
+    'projection_type',
+    'idempotency_key',
+    'request_fingerprint',
+    'request_status',
+    'result_json',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_search_index_rebuild_task', [
+    'task_id',
+    'task_type',
+    'task_status',
+    'operator_uid',
+    'checkpoint_id',
+    'indexed_count',
+    'failed_count',
+    'total_count',
+    'index_name',
+    'last_error',
+    'lock_owner',
+    'lock_until',
+    'heartbeat_time',
+    'started_at',
+    'finished_at',
+    'active_key',
+    'create_time',
+    'update_time',
+  ]),
+  ...columns('t_int_content_suggestion', [
+    'base_version',
+    'target_scope',
+    'target_locator',
+    'expected_change',
+    'resolution',
+    'delivery_status',
+  ]),
+  ...columns('t_post_reference', [
+    'id', 'post_id', 'owner_uid', 'reference_type', 'title', 'url',
+    'normalized_url', 'source_domain', 'note', 'broken_reason',
+    'reference_status', 'sort_order', 'revision', 'last_confirmed_at',
+    'create_time', 'update_time', 'is_deleted', 'active_guard',
+  ]),
+  ...columns('t_post_knowledge_relation', [
+    'id', 'source_post_id', 'target_post_id', 'relation_type', 'reason_text',
+    'proposer_uid', 'review_status', 'visibility_status', 'reviewer_uid',
+    'review_note', 'reviewed_at', 'risk_level', 'create_time', 'update_time',
+    'is_deleted', 'effective_guard',
+  ]),
+  ...columns('t_int_post_outcome', [
+    'id', 'post_id', 'uid', 'outcome_type', 'context_note', 'result_note',
+    'visibility', 'publication_status', 'consented_at', 'reviewer_uid',
+    'review_note', 'reviewed_at', 'follow_up_at', 'outcome_status', 'revision',
+    'create_time', 'update_time', 'is_deleted', 'effective_guard',
   ]),
   ...columns('t_int_discussion_follow', [
     'id',
@@ -680,6 +890,12 @@ const expectations = [
     'idx_feed_recommend_support_stat_domain_create_time',
     'idx_feed_recommend_support_stat_viewer_create_time',
   ]),
+  ...indexes('t_feed_feedback_preference', [
+    'uk_feed_feedback_uid_post',
+    'idx_feed_feedback_uid_action_active',
+    'idx_feed_feedback_uid_target_active',
+    'idx_feed_feedback_uid_cursor',
+  ]),
   ...indexes('t_expert_cert_application', [
     'uk_expert_cert_active_guard',
     'idx_expert_cert_applicant_domain',
@@ -703,6 +919,38 @@ const expectations = [
     'idx_contact_request_requester_page',
   ]),
   ...indexes('t_user_privacy_setting', ['idx_contact_request_policy']),
+  ...indexes('t_user_subscription_preference', [
+    'uk_user_subscription_preference_source',
+    'idx_user_subscription_preference_mode',
+    'idx_user_subscription_preference_expiry',
+  ]),
+  ...indexes('t_projection_reconcile_request', [
+    'uk_projection_reconcile_resource',
+    'idx_projection_reconcile_operator_time',
+    'idx_projection_reconcile_type_time',
+  ]),
+  ...indexes('t_search_index_rebuild_task', [
+    'uk_search_index_rebuild_active',
+    'idx_search_index_rebuild_status_time',
+    'idx_search_index_rebuild_lease',
+  ]),
+  ...indexes('t_post_reference', [
+    'uk_post_reference_active_url',
+    'idx_post_reference_public',
+    'idx_post_reference_owner',
+  ]),
+  ...indexes('t_post_knowledge_relation', [
+    'uk_post_knowledge_relation_effective',
+    'idx_post_knowledge_relation_source',
+    'idx_post_knowledge_relation_target',
+    'idx_post_knowledge_relation_review',
+    'idx_post_knowledge_relation_proposer',
+  ]),
+  ...indexes('t_int_post_outcome', [
+    'uk_int_post_outcome_current',
+    'idx_int_post_outcome_public',
+    'idx_int_post_outcome_follow_up',
+  ]),
   ...indexes('t_int_discussion_follow', [
     'uk_discussion_follow_user_post',
     'idx_discussion_follow_post_status',
@@ -768,9 +1016,16 @@ const expectations = [
   ...primaryKeys('t_content_series', ['id']),
   ...primaryKeys('t_content_series_post', ['id']),
   ...primaryKeys('t_feed_recommend_support_stat', ['id']),
+  ...primaryKeys('t_feed_feedback_preference', ['id']),
   ...primaryKeys('t_expert_cert_application', ['id']),
   ...primaryKeys('t_int_contact_request', ['id']),
   ...primaryKeys('t_user_privacy_setting', ['user_id']),
+  ...primaryKeys('t_user_subscription_preference', ['id']),
+  ...primaryKeys('t_projection_reconcile_request', ['id']),
+  ...primaryKeys('t_search_index_rebuild_task', ['task_id']),
+  ...primaryKeys('t_post_reference', ['id']),
+  ...primaryKeys('t_post_knowledge_relation', ['id']),
+  ...primaryKeys('t_int_post_outcome', ['id']),
   ...primaryKeys('t_int_discussion_follow', ['id']),
   ...primaryKeys('t_int_favorite', ['id']),
   ...primaryKeys('t_int_favorite_folder', ['id']),
@@ -779,6 +1034,8 @@ const expectations = [
   ...primaryKeys('t_int_post_trust_state', ['post_id']),
   ...primaryKeys('t_int_post_useful_feedback', ['id']),
   ...primaryKeys('t_int_content_suggestion', ['id']),
+  ...primaryKeys('t_collab_content_need_claim_cycle', ['id']),
+  ...primaryKeys('t_collab_content_need_revision', ['id']),
   ...foreignKeys('t_int_post_trust_state', [
     'fk_trust_state_post',
     'fk_trust_state_accepted_comment',
@@ -1376,6 +1633,16 @@ WHERE table_schema = DATABASE()
 
 function migrationForTable(table) {
   if (table === 'flyway_schema_history') return 'Flyway lifecycle metadata'
+  if (['t_post_reference', 't_post_knowledge_relation', 't_int_post_outcome'].includes(table)) {
+    return 'db/migration/20260720_knowledge_lifecycle.sql'
+  }
+  if (table === 't_collab_content_need_event') {
+    return 'db/migration/20260718_collab_need_lifecycle.sql'
+  }
+  if (table === 't_collab_content_need_claim_cycle'
+    || table === 't_collab_content_need_revision') {
+    return 'db/migration/20260719_collab_need_claim_cycle_revision.sql'
+  }
   if (table.startsWith('t_collab_')) {
     return 'db/migration/20260714_collaboration_stage2.sql'
   }
@@ -1406,9 +1673,21 @@ function migrationForTable(table) {
   if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_feed_feedback_preference') {
+    return 'db/migration/20260719_feed_feedback_control.sql'
+  }
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
   if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_user_subscription_preference') {
+    return 'db/migration/20260719_user_subscription_preference.sql'
+  }
+  if (table === 't_projection_reconcile_request') {
+    return 'db/migration/20260719_projection_reconcile_request.sql'
+  }
+  if (table === 't_search_index_rebuild_task') {
+    return 'db/migration/20260720_search_index_rebuild_task.sql'
+  }
   if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
   if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
   if (table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
@@ -1416,8 +1695,34 @@ function migrationForTable(table) {
 }
 
 function migrationForColumn(table, name) {
+  if (['t_post_reference', 't_post_knowledge_relation', 't_int_post_outcome'].includes(table)
+    || (table === 't_int_content_suggestion' && [
+      'base_version', 'target_scope', 'target_locator', 'expected_change',
+      'resolution', 'delivery_status',
+    ].includes(name))) {
+    return 'db/migration/20260720_knowledge_lifecycle.sql'
+  }
   if (table === 't_post_extension' && name === 'domain') {
     return 'db/migration/20260712_unclassified_domain.sql'
+  }
+  if (table === 't_collab_content_need' && [
+    'submitted_by_uid',
+    'submitted_at',
+    'submission_resolution_type',
+    'submission_resolution_id',
+    'submission_note',
+    'reject_reason',
+  ].includes(name)) {
+    return 'db/migration/20260717_collab_need_submission.sql'
+  }
+  if ((table === 't_collab_content_need'
+      && ['claimed_at', 'last_progress_at'].includes(name))
+    || table === 't_collab_content_need_event') {
+    return 'db/migration/20260718_collab_need_lifecycle.sql'
+  }
+  if (table === 't_collab_content_need_claim_cycle'
+    || table === 't_collab_content_need_revision') {
+    return 'db/migration/20260719_collab_need_claim_cycle_revision.sql'
   }
   if (table === 't_community_topic' && ['domain', 'allowed_domains'].includes(name)) {
     return 'db/migration/20260714_collaboration_stage2.sql'
@@ -1452,10 +1757,22 @@ function migrationForColumn(table, name) {
   if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_feed_feedback_preference') {
+    return 'db/migration/20260719_feed_feedback_control.sql'
+  }
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   if ((table === 't_operation_curation_item' || table === 't_operation_slot_item') && name === 'active_guard') return 'db/migration/20260708_operation_soft_delete_unique_guard.sql'
   if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
   if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_user_subscription_preference') {
+    return 'db/migration/20260719_user_subscription_preference.sql'
+  }
+  if (table === 't_projection_reconcile_request') {
+    return 'db/migration/20260719_projection_reconcile_request.sql'
+  }
+  if (table === 't_search_index_rebuild_task') {
+    return 'db/migration/20260720_search_index_rebuild_task.sql'
+  }
   if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
   if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
   if (table === 't_int_comment' || table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
@@ -1463,6 +1780,32 @@ function migrationForColumn(table, name) {
 }
 
 function migrationForIndex(table, name) {
+  if (['t_post_reference', 't_post_knowledge_relation', 't_int_post_outcome'].includes(table)) {
+    return 'db/migration/20260720_knowledge_lifecycle.sql'
+  }
+  if ([
+    'idx_collab_need_follow_uid_active_id',
+    'idx_collab_need_follow_need_active_id',
+    'idx_collab_need_event_need',
+    'idx_collab_need_event_visibility',
+    'uk_collab_need_claim_cycle_no',
+    'uk_collab_need_claim_cycle_active',
+    'idx_collab_need_claim_cycle_need',
+    'idx_collab_need_claim_cycle_status',
+    'idx_collab_need_claim_cycle_claimant',
+    'uk_collab_need_revision_no',
+    'idx_collab_need_revision_need',
+    'idx_collab_need_revision_cycle_status',
+    'idx_collab_need_revision_submitter',
+    'idx_collab_need_revision_visibility',
+  ].includes(name)) {
+    return name.startsWith('uk_collab_need_claim_cycle')
+      || name.startsWith('idx_collab_need_claim_cycle')
+      || name.startsWith('uk_collab_need_revision')
+      || name.startsWith('idx_collab_need_revision')
+      ? 'db/migration/20260719_collab_need_claim_cycle_revision.sql'
+      : 'db/migration/20260718_collab_need_lifecycle.sql'
+  }
   if ([
     'idx_incentive_freeze_account_status',
     'idx_incentive_invalidation_reference',
@@ -1513,9 +1856,21 @@ function migrationForIndex(table, name) {
   if (table === 't_content_assist_record') return 'db/migration/20260624_content_assist_ai.sql'
   if (table === 't_content_series' || table === 't_content_series_post') return 'db/migration/20260624_content_series.sql'
   if (table === 't_feed_recommend_support_stat') return 'db/migration/20260624_new_creator_support_stats.sql'
+  if (table === 't_feed_feedback_preference') {
+    return 'db/migration/20260719_feed_feedback_control.sql'
+  }
   if (table === 't_expert_cert_application') return 'db/migration/20260624_expert_certification.sql'
   if (table === 't_int_contact_request') return 'db/migration/20260707_contact_request.sql'
   if (table === 't_user_privacy_setting') return 'db/migration/20260707_contact_request_settings.sql'
+  if (table === 't_user_subscription_preference') {
+    return 'db/migration/20260719_user_subscription_preference.sql'
+  }
+  if (table === 't_projection_reconcile_request') {
+    return 'db/migration/20260719_projection_reconcile_request.sql'
+  }
+  if (table === 't_search_index_rebuild_task') {
+    return 'db/migration/20260720_search_index_rebuild_task.sql'
+  }
   if (table === 't_int_discussion_follow') return 'db/migration/20260707_discussion_follow.sql'
   if (table === 't_int_favorite' || table === 't_int_favorite_folder') return 'db/migration/20260707_favorite_folder.sql'
   if (table === 't_int_comment_quality_signal' || table === 't_int_comment_helpful') return 'db/migration/20260707_comment_quality_schema.sql'
@@ -1523,6 +1878,26 @@ function migrationForIndex(table, name) {
 }
 
 function migrationForConstraint(table, name) {
+  if (['t_post_reference', 't_post_knowledge_relation', 't_int_post_outcome'].includes(table)
+    || (table === 't_int_content_suggestion' && name.startsWith('chk_int_content_suggestion_'))) {
+    return 'db/migration/20260720_knowledge_lifecycle.sql'
+  }
+  if (table === 't_feed_feedback_preference') {
+    return 'db/migration/20260719_feed_feedback_control.sql'
+  }
+  if (table === 't_user_subscription_preference') {
+    return 'db/migration/20260719_user_subscription_preference.sql'
+  }
+  if (table === 't_projection_reconcile_request') {
+    return 'db/migration/20260719_projection_reconcile_request.sql'
+  }
+  if (table === 't_search_index_rebuild_task') {
+    return 'db/migration/20260720_search_index_rebuild_task.sql'
+  }
+  if (table === 't_collab_content_need_claim_cycle'
+    || table === 't_collab_content_need_revision') {
+    return 'db/migration/20260719_collab_need_claim_cycle_revision.sql'
+  }
   if ([
     'chk_virtual_benefit_stock_null_pair',
     'chk_virtual_benefit_order_cost',

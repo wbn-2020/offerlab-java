@@ -34,6 +34,42 @@ $initMirrorMappings = @(
     Source = Join-Path $sourceDir "20260715_content_maintenance_stage8.sql"
     Destination = Join-Path $repoRoot "db\init\18_content_maintenance_stage8.sql"
   }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260717_collab_need_submission.sql"
+    Destination = Join-Path $repoRoot "db\init\19_collab_need_submission.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260718_collab_need_lifecycle.sql"
+    Destination = Join-Path $repoRoot "db\init\20_collab_need_lifecycle.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260719_collab_need_claim_cycle_revision.sql"
+    Destination = Join-Path $repoRoot "db\init\21_collab_need_claim_cycle_revision.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260719_feed_feedback_control.sql"
+    Destination = Join-Path $repoRoot "db\init\22_feed_feedback_control.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260719_user_subscription_preference.sql"
+    Destination = Join-Path $repoRoot "db\init\23_user_subscription_preference.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260719_projection_reconcile_request.sql"
+    Destination = Join-Path $repoRoot "db\init\24_projection_reconcile_request.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260720_search_index_rebuild_task.sql"
+    Destination = Join-Path $repoRoot "db\init\25_search_index_rebuild_task.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260720_knowledge_lifecycle.sql"
+    Destination = Join-Path $repoRoot "db\init\26_knowledge_lifecycle.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260720_knowledge_lifecycle_backfill.sql"
+    Destination = Join-Path $repoRoot "db\init\27_knowledge_lifecycle_backfill.sql"
+  }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"
 $generatedSeedEnd = "-- END GENERATED FROM db/migration/20260712_demo_community_seed.sql"

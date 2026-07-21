@@ -99,6 +99,14 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
+    public PostDTO getPostMetadata(Long postId) {
+        if (postId == null || postId <= 0) {
+            return null;
+        }
+        return postRepo.findById(postId).map(this::toFullDto).orElse(null);
+    }
+
+    @Override
     public PostDTO getPostForAuthor(Long postId, Long authorUid) {
         if (postId == null || postId <= 0 || authorUid == null || authorUid <= 0) {
             return null;

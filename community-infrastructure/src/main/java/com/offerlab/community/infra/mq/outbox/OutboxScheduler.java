@@ -62,7 +62,7 @@ public class OutboxScheduler {
                     continue;
                 }
                 try {
-                    EventEnvelope envelope = objectMapper.readValue(msg.getPayload(), EventEnvelope.class);
+                    EventEnvelope envelope = parseEnvelope(msg);
                     Message<EventEnvelope> kafkaMsg = MessageBuilder
                             .withPayload(envelope)
                             .setHeader(KafkaHeaders.TOPIC, msg.getTopic())
@@ -77,6 +77,11 @@ public class OutboxScheduler {
                     } else {
                         log.debug("outbox message sent: id={} topic={} owner={}", msg.getId(), msg.getTopic(), owner);
                     }
+                } catch (PoisonMessageException e) {
+                    int retryCount = msg.getRetryCount() == null ? 0 : msg.getRetryCount();
+                    int updated = outboxMapper.markPoisonFailed(msg.getId(), owner, retryCount);
+                    log.error("outbox poison message moved directly to failed: id={} topic={} owner={} updated={} reason={}",
+                            msg.getId(), msg.getTopic(), owner, updated, e.getMessage());
                 } catch (Exception e) {
                     handleSendFailure(msg, e);
                 }
@@ -119,6 +124,28 @@ public class OutboxScheduler {
         }
     }
 
+    private EventEnvelope<?> parseEnvelope(OutboxMessage msg) {
+        final EventEnvelope<?> envelope;
+        try {
+            envelope = objectMapper.readValue(msg.getPayload(), EventEnvelope.class);
+        } catch (Exception e) {
+            throw new PoisonMessageException("malformed envelope", e);
+        }
+        if (envelope.getMessageId() == null || envelope.getMessageId().isBlank()
+                || envelope.getEventType() == null || envelope.getEventType().isBlank()
+                || envelope.getPayload() == null) {
+            throw new PoisonMessageException("required envelope field is missing");
+        }
+        String schemaVersion = envelope.getSchemaVersion();
+        if (schemaVersion != null && !schemaVersion.isBlank() && !"1".equals(schemaVersion)) {
+            throw new PoisonMessageException("unsupported schemaVersion=" + schemaVersion);
+        }
+        if (envelope.getIdempotencyKey() == null || envelope.getIdempotencyKey().isBlank()) {
+            envelope.setIdempotencyKey(envelope.getMessageId());
+        }
+        return envelope;
+    }
+
     private int deleteInBatches(int status, LocalDateTime before) {
         int total = 0;
         for (int batch = 0; batch < MAX_RETENTION_BATCHES; batch++) {
@@ -139,5 +166,15 @@ public class OutboxScheduler {
             // best-effort identifier only
         }
         return host + ":" + ManagementFactory.getRuntimeMXBean().getName() + ":" + UUID.randomUUID();
+    }
+
+    private static final class PoisonMessageException extends RuntimeException {
+        private PoisonMessageException(String message) {
+            super(message);
+        }
+
+        private PoisonMessageException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }

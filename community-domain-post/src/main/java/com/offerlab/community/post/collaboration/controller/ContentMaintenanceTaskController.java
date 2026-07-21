@@ -5,7 +5,9 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskCreateCmd;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceCandidateDTO;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskDTO;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReassignCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReviewCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskSubmitCmd;
 import com.offerlab.community.post.collaboration.application.ContentMaintenanceTaskService;
@@ -57,10 +59,30 @@ public class ContentMaintenanceTaskController {
         return Result.ok(service.listQueue(domain, status, UserContext.require(), cursor, size));
     }
 
+    @GetMapping("/candidates")
+    @RateLimit(key = "'maintenance:candidates:' + #uid", rate = 60, per = 60, failOpen = false)
+    public Result<PageResult<ContentMaintenanceCandidateDTO>> candidates(
+            @RequestParam(required = false) @Min(1) @Max(5) Integer domain,
+            @RequestParam(required = false) @Size(max = 24) String sourceType,
+            @RequestParam(required = false) @Min(1) @Max(100) Integer contentType,
+            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
+        return Result.ok(service.listCandidates(
+                UserContext.require(), domain, sourceType, contentType, cursor, size));
+    }
+
     @PostMapping("/{taskId}/claim")
     @RateLimit(key = "'maintenance:claim:' + #uid", rate = 30, per = 300, failOpen = false)
     public Result<ContentMaintenanceTaskDTO> claim(@PathVariable @Positive Long taskId) {
         return Result.ok(service.claim(taskId, UserContext.require()));
+    }
+
+    @PostMapping("/{taskId}/reassign")
+    @RateLimit(key = "'maintenance:reassign:' + #uid", rate = 20, per = 300, failOpen = false)
+    public Result<ContentMaintenanceTaskDTO> reassign(
+            @PathVariable @Positive Long taskId,
+            @Valid @RequestBody ContentMaintenanceTaskReassignCmd cmd) {
+        return Result.ok(service.reassign(taskId, cmd, UserContext.require()));
     }
 
     @PostMapping("/{taskId}/submit")

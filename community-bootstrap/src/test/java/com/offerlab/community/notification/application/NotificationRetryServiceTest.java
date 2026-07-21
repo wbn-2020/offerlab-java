@@ -20,6 +20,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -54,8 +55,8 @@ class NotificationRetryServiceTest {
     void enqueuePersistsRetryTaskWithDedupKeyAndErrorSummary() {
         when(idGen.nextId()).thenReturn(900L);
 
-        service.enqueue("comment", 42L, 7L, 2, 2, 888L,
-                Map.of("action", "comment", "postId", 888L), new IllegalStateException("provider timeout"));
+        assertTrue(service.enqueue("comment", 42L, 7L, 2, 2, 888L,
+                Map.of("action", "comment", "postId", 888L), new IllegalStateException("provider timeout")));
 
         ArgumentCaptor<NotificationRetryTaskPO> captor = ArgumentCaptor.forClass(NotificationRetryTaskPO.class);
         verify(taskMapper).upsertPending(captor.capture());

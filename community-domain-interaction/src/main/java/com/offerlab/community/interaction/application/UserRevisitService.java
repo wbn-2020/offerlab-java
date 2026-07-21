@@ -4,7 +4,9 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.interaction.api.RevisitReadFacade;
 import com.offerlab.community.interaction.api.dto.RevisitItemDTO;
+import com.offerlab.community.interaction.api.dto.RevisitReadStateDTO;
 import com.offerlab.community.interaction.api.dto.RevisitSnoozeCmd;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.UserRevisitItemMapper;
 import com.offerlab.community.interaction.infrastructure.persistence.po.UserRevisitItemPO;
@@ -17,12 +19,16 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
-public class UserRevisitService {
+public class UserRevisitService implements RevisitReadFacade {
 
     private static final int MAX_PAGE_SIZE = 50;
     private static final int SOURCE_SCAN_LIMIT = 50;
@@ -30,6 +36,84 @@ public class UserRevisitService {
 
     private final UserRevisitItemMapper revisitMapper;
     private final SnowflakeIdGenerator idGenerator;
+
+    @Transactional
+    public void schedulePostOutcome(Long uid, Long outcomeId, Long postId, Integer revision,
+                                    String postTitle, LocalDateTime followUpAt) {
+        requireUid(uid);
+        requireId(outcomeId);
+        requireId(postId);
+        if (revision == null || revision <= 0 || followUpAt == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (!revisitTableReady()) {
+            return;
+        }
+        UserRevisitItemPO item = new UserRevisitItemPO();
+        item.setId(idGenerator.nextId());
+        item.setUid(uid);
+        item.setSourceType("POST_OUTCOME");
+        item.setSourceId(String.valueOf(outcomeId));
+        item.setReasonType("OUTCOME_FOLLOW_UP");
+        item.setActivityCursor(revision.longValue());
+        item.setTitle(cleanRequired(postTitle, 160));
+        item.setDescription("Revisit your recorded practice outcome");
+        item.setTargetPath("/post/" + postId);
+        item.setDueAt(followUpAt);
+        item.setDedupKey(sha256(uid + "|POST_OUTCOME|" + outcomeId));
+        revisitMapper.upsertPostOutcome(item);
+    }
+
+    @Transactional
+    public void cancelPostOutcome(Long uid, Long outcomeId) {
+        requireUid(uid);
+        requireId(outcomeId);
+        if (!revisitTableReady()) {
+            return;
+        }
+        revisitMapper.completePostOutcome(uid, String.valueOf(outcomeId));
+    }
+
+    @Override
+    public Map<String, RevisitReadStateDTO> findVisibleStates(Long uid, Collection<String> resourceKeys) {
+        if (uid == null || uid <= 0 || resourceKeys == null || resourceKeys.isEmpty() || !revisitTableReady()) {
+            return Map.of();
+        }
+        List<String> keys = resourceKeys.stream()
+                .map(UserRevisitService::cleanResourceKey)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.collectingAndThen(
+                        java.util.stream.Collectors.toCollection(LinkedHashSet::new),
+                        values -> values.stream().limit(100).toList()));
+        if (keys.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            List<UserRevisitItemPO> rows = revisitMapper.listVisibleByResourceKeys(uid, keys);
+            Map<String, RevisitReadStateDTO> result = new LinkedHashMap<>();
+            for (UserRevisitItemPO row : rows == null ? List.<UserRevisitItemPO>of() : rows) {
+                if (row == null || row.getId() == null) {
+                    continue;
+                }
+                String nativeKey = resourceKey(row);
+                if (nativeKey != null && keys.contains(nativeKey)) {
+                    result.putIfAbsent(nativeKey, toReadState(row, nativeKey));
+                }
+            }
+            for (UserRevisitItemPO row : rows == null ? List.<UserRevisitItemPO>of() : rows) {
+                if (row == null || row.getId() == null) {
+                    continue;
+                }
+                String postKey = postResourceKey(row.getTargetPath());
+                if (postKey != null && keys.contains(postKey) && !result.containsKey(postKey)) {
+                    result.put(postKey, toReadState(row, postKey));
+                }
+            }
+            return Map.copyOf(result);
+        } catch (RuntimeException ignored) {
+            return Map.of();
+        }
+    }
 
     @Transactional
     public PageResult<RevisitItemDTO> list(Long uid, String requestedStatus, String cursor, int size) {
@@ -239,6 +323,46 @@ public class UserRevisitService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);
         }
+    }
+
+    private static String cleanResourceKey(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim().toUpperCase(java.util.Locale.ROOT);
+        if (normalized.isEmpty() || normalized.length() > 128 || !normalized.matches("[A-Z0-9_:-]+")) {
+            return null;
+        }
+        return normalized;
+    }
+
+    private static String resourceKey(UserRevisitItemPO item) {
+        if (item == null || item.getSourceType() == null || item.getSourceId() == null) {
+            return null;
+        }
+        return cleanResourceKey(item.getSourceType() + ":" + item.getSourceId());
+    }
+
+    private static String postResourceKey(String targetPath) {
+        if (targetPath == null || !targetPath.startsWith("/post/")) {
+            return null;
+        }
+        String value = targetPath.substring("/post/".length()).split("[?#]", 2)[0];
+        if (!value.matches("[1-9][0-9]*")) {
+            return null;
+        }
+        return "POST:" + value;
+    }
+
+    private static RevisitReadStateDTO toReadState(UserRevisitItemPO item, String resourceKey) {
+        return RevisitReadStateDTO.builder()
+                .itemId(item.getId())
+                .resourceKey(resourceKey)
+                .status(item.getRevisitStatus())
+                .targetPath(item.getTargetPath())
+                .dueAt(item.getDueAt())
+                .updateTime(item.getUpdateTime())
+                .build();
     }
 
     private static void requireUid(Long uid) {

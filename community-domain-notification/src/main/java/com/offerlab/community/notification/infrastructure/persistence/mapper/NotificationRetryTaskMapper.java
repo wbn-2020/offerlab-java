@@ -201,8 +201,8 @@ public interface NotificationRetryTaskMapper extends BaseMapper<NotificationRetr
             DELETE FROM t_notif_retry_task
             WHERE task_status = #{status}
               AND next_retry_time IS NULL
-              AND create_time < #{before}
-            ORDER BY create_time ASC
+              AND update_time < #{before}
+            ORDER BY update_time ASC
             LIMIT #{limit}
             """)
     int deleteTerminalBefore(@Param("status") Integer status,

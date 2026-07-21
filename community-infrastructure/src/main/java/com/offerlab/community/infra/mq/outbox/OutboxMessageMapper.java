@@ -100,6 +100,22 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
                     @Param("retryCount") Integer retryCount,
                     @Param("nextRetryTime") LocalDateTime nextRetryTime);
 
+    @Update("""
+            UPDATE t_outbox_message
+            SET msg_status = 2,
+                retry_count = #{retryCount},
+                next_retry_time = NULL,
+                lock_owner = NULL,
+                lock_until = NULL,
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND msg_status = 3
+              AND lock_owner = #{owner}
+            """)
+    int markPoisonFailed(@Param("id") Long id,
+                         @Param("owner") String owner,
+                         @Param("retryCount") Integer retryCount);
+
     @Select("SELECT msg_status AS status, COUNT(*) AS count FROM t_outbox_message GROUP BY msg_status")
     List<Map<String, Object>> countByStatus();
 
@@ -203,8 +219,8 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
             DELETE FROM t_outbox_message
             WHERE msg_status = #{status}
               AND next_retry_time IS NULL
-              AND create_time < #{before}
-            ORDER BY create_time ASC
+              AND update_time < #{before}
+            ORDER BY update_time ASC
             LIMIT #{limit}
             """)
     int deleteTerminalBefore(@Param("status") Integer status,

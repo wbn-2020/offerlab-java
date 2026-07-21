@@ -135,6 +135,15 @@ public class ReviewQueueService implements ReviewQueuePublisher {
 
     @Override
     @Transactional
+    public void reopen(ReviewQueueItemCommand command) {
+        ReviewQueueItemPO item = upsertInternal(command);
+        if (item.getSourceId() != null) {
+            mapper.reopenBySource(item.getSourceType(), item.getSourceId());
+        }
+    }
+
+    @Override
+    @Transactional
     public void resolve(String sourceType, Long sourceId, String status, String result, String note, Long operatorUid) {
         if (operatorUid != null) {
             resolveSourceRequired(sourceType, sourceId, status, result, note, operatorUid);

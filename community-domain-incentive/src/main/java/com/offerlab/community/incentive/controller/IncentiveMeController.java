@@ -16,8 +16,10 @@ import com.offerlab.community.incentive.api.IncentiveDtos.BountyWorkspaceDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.LedgerEntryDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleApplicationCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleApplicationDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleEvidenceDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleEligibilityDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.RoleWorkspaceDTO;
+import com.offerlab.community.incentive.api.IncentiveDtos.RoleWorkspaceV8DTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ThankCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.ThankTicketDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ThankWorkspaceDTO;
@@ -133,15 +135,30 @@ public class IncentiveMeController {
     }
 
     @GetMapping("/roles")
+    @RateLimit(key = "'incentive:roles:workspace-legacy:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<RoleWorkspaceDTO> roles(@RequestParam(defaultValue = "1") Integer page,
                                            @RequestParam(defaultValue = "20") Integer size) {
         return Result.ok(communityRoleService.workspace(UserContext.require(), page, size));
     }
 
+    @GetMapping("/roles/workspace")
+    @RateLimit(key = "'incentive:roles:workspace:' + #uid", rate = 60, per = 60, failOpen = false)
+    public Result<RoleWorkspaceV8DTO> roleWorkspace() {
+        return Result.ok(communityRoleService.workspaceV8(UserContext.require()));
+    }
+
     @GetMapping("/roles/eligibility")
+    @RateLimit(key = "'incentive:roles:eligibility:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<RoleEligibilityDTO> roleEligibility(@RequestParam String roleCode,
                                                        @RequestParam String domainCode) {
         return Result.ok(communityRoleService.eligibility(UserContext.require(), roleCode, domainCode));
+    }
+
+    @GetMapping("/roles/{roleCode}/evidence")
+    @RateLimit(key = "'incentive:roles:evidence:' + #uid", rate = 60, per = 60, failOpen = false)
+    public Result<RoleEvidenceDTO> roleEvidence(@PathVariable String roleCode,
+                                                 @RequestParam String domainCode) {
+        return Result.ok(communityRoleService.evidence(UserContext.require(), roleCode, domainCode));
     }
 
     @PostMapping("/roles/applications")

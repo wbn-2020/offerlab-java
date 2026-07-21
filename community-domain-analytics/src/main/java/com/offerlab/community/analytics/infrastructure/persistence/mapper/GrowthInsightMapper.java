@@ -157,7 +157,7 @@ public interface GrowthInsightMapper {
             LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.author_id = #{authorId}
               AND (profile.last_confirmed_at IS NULL
-                   OR profile.last_confirmed_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 180 DAY))
+                   OR profile.last_confirmed_at &lt; DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 180 DAY))
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
