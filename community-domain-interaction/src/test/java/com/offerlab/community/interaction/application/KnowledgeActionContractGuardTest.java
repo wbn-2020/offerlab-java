@@ -1,11 +1,19 @@
 package com.offerlab.community.interaction.application;
 
+import com.offerlab.community.interaction.infrastructure.persistence.mapper.KnowledgeActionMapper;
+import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskMapper;
+import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelationMapper;
+import com.offerlab.community.post.reference.infrastructure.persistence.PostReferenceMapper;
+import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class KnowledgeActionContractGuardTest {
@@ -42,6 +50,36 @@ class KnowledgeActionContractGuardTest {
         }) {
             assertTrue(types.contains(type));
         }
+    }
+
+    @Test
+    void zeroCandidateRequestMustNotBeBoundAsSqlLimit() throws Exception {
+        assertUnbounded(KnowledgeActionMapper.class, "listSuggestionActions", Long.class, int.class);
+        assertUnbounded(KnowledgeActionMapper.class, "listStaleSuggestionActions", Long.class, int.class);
+        assertUnbounded(KnowledgeActionMapper.class, "listFreshnessActions", int.class);
+        assertUnbounded(KnowledgeActionMapper.class, "listOutcomeRevisitActions", Long.class, int.class);
+        assertUnbounded(PostReferenceMapper.class, "listBrokenOwned", Long.class, int.class);
+        assertUnbounded(PostKnowledgeRelationMapper.class, "listOwnedActions", Long.class, int.class);
+        assertUnbounded(PostKnowledgeRelationMapper.class, "listPendingReviewActions", int.class);
+        String maintenanceSql = sql(ContentMaintenanceTaskMapper.class,
+                "listKnowledgeActions", Long.class, int.class);
+        assertFalse(maintenanceSql.contains("limit #{limit}"));
+        assertTrue(maintenanceSql.contains("task_status in ('open', 'claimed', 'submitted')"));
+    }
+
+    private static void assertUnbounded(Class<?> mapperType, String methodName,
+                                        Class<?>... parameterTypes) throws Exception {
+        assertFalse(sql(mapperType, methodName, parameterTypes).contains("limit #{limit}"),
+                () -> mapperType.getSimpleName() + "." + methodName
+                        + " must keep zero as the current all-candidates request");
+    }
+
+    private static String sql(Class<?> mapperType, String methodName,
+                              Class<?>... parameterTypes) throws Exception {
+        Select select = mapperType.getMethod(methodName, parameterTypes).getAnnotation(Select.class);
+        assertNotNull(select, () -> mapperType.getSimpleName() + "." + methodName
+                + " must remain an annotated select");
+        return String.join("\n", select.value()).toLowerCase(Locale.ROOT);
     }
 
     private static int count(String source, String token) {

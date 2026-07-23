@@ -43,7 +43,7 @@ public class ProjectionHealthController {
     @RateLimit(key = "'community-health:projection-issues:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<PageResult<ProjectionIssueDTO>> issues(
             @PathVariable @Size(max = 64) String projectionType,
-            @RequestParam(defaultValue = "0") @Min(0) long cursor,
+            @RequestParam(defaultValue = "0") @Size(max = 256) String cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return Result.ok(service.issues(
                 projectionType, cursor, size, UserContext.require()));

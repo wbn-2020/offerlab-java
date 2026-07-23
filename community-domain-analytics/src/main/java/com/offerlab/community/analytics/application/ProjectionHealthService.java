@@ -32,6 +32,7 @@ import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -46,6 +47,7 @@ import java.util.function.Supplier;
 public class ProjectionHealthService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    private static final int MAX_CURSOR_LENGTH = 256;
     private static final int ISSUE_COUNT_CAP = 1000;
     private static final String AUDIT_ACTION = "COMMUNITY_PROJECTION_RECONCILE";
     private static final String AUDIT_RESOURCE = "COMMUNITY_PROJECTION";
@@ -55,6 +57,15 @@ public class ProjectionHealthService {
     private static final String PENDING_RELATIONS = "PENDING_RELATIONS";
     private static final String INVALID_PUBLIC_RELATION_TARGETS = "INVALID_PUBLIC_RELATION_TARGETS";
     private static final String DUE_OUTCOME_REVISITS = "DUE_OUTCOME_REVISITS";
+    private static final String FRESHNESS_ATTENTION = "FRESHNESS_ATTENTION";
+    private static final List<String> KNOWLEDGE_SOURCE_ORDER = List.of(
+            PENDING_SUGGESTIONS,
+            BROKEN_REFERENCES,
+            PENDING_RELATIONS,
+            INVALID_PUBLIC_RELATION_TARGETS,
+            DUE_OUTCOME_REVISITS,
+            FRESHNESS_ATTENTION);
+    private static final int LEGACY_CURSOR_SOURCE_ORDER = Integer.MAX_VALUE;
 
     private static final Map<String, ProjectionDefinition> DEFINITIONS = definitions();
 
@@ -79,15 +90,34 @@ public class ProjectionHealthService {
             long cursor,
             int requestedSize,
             Long operatorUid) {
+        if (cursor < 0) {
+            throw invalidCursor();
+        }
+        return issues(rawProjectionType, cursor == 0 ? "0" : String.valueOf(cursor),
+                requestedSize, operatorUid);
+    }
+
+    public PageResult<ProjectionIssueDTO> issues(
+            String rawProjectionType,
+            String rawCursor,
+            int requestedSize,
+            Long operatorUid) {
         requireOperations(operatorUid);
         ProjectionDefinition definition = requireDefinition(rawProjectionType);
         int size = Math.max(1, Math.min(requestedSize <= 0 ? 20 : requestedSize, MAX_PAGE_SIZE));
+        KnowledgeLifecycleCursor knowledgeCursor = null;
+        long numericCursor = 0L;
+        if (KNOWLEDGE_LIFECYCLE.equals(definition.type())) {
+            knowledgeCursor = KnowledgeLifecycleCursor.parse(rawCursor);
+        } else {
+            numericCursor = parseNumericCursor(rawCursor);
+        }
         Set<String> existingTables = Set.copyOf(mapper.selectExistingProjectionTables());
         if (KNOWLEDGE_LIFECYCLE.equals(definition.type())) {
-            return knowledgeLifecycleIssues(existingTables, Math.max(0, cursor), size);
+            return knowledgeLifecycleIssues(existingTables, knowledgeCursor, size);
         }
         requireAvailable(definition, existingTables);
-        List<IssueRow> rows = issueRows(definition.type(), Math.max(0, cursor), size + 1);
+        List<IssueRow> rows = issueRows(definition.type(), numericCursor, size + 1);
         boolean hasMore = rows.size() > size;
         List<IssueRow> visible = rows.stream().limit(size).toList();
         String nextCursor = hasMore && !visible.isEmpty()
@@ -353,7 +383,12 @@ public class ProjectionHealthService {
                         DUE_OUTCOME_REVISITS,
                         Set.of("t_int_post_outcome"),
                         existingTables,
-                        () -> mapper.selectDueOutcomeRevisitHealth(ISSUE_COUNT_CAP + 1))
+                        () -> mapper.selectDueOutcomeRevisitHealth(ISSUE_COUNT_CAP + 1)),
+                readKnowledgeLifecycleSource(
+                        FRESHNESS_ATTENTION,
+                        Set.of("t_int_post_trust_state", "t_post_main"),
+                        existingTables,
+                        () -> mapper.selectFreshnessAttentionHealth(ISSUE_COUNT_CAP + 1))
         );
         long boundedCount = boundedKnowledgeCount(sources);
         long visibleCount = Math.min(boundedCount, ISSUE_COUNT_CAP);
@@ -366,16 +401,18 @@ public class ProjectionHealthService {
                 .mapToLong(KnowledgeLifecycleSource::count)
                 .findFirst()
                 .orElse(0);
-        LocalDateTime oldest = sources.stream()
+        // Freshness age is source-level context only; keep the V12 backlog-age source set.
+        LocalDateTime oldestBacklogAt = sources.stream()
+                .filter(source -> !FRESHNESS_ATTENTION.equals(source.source()))
                 .filter(KnowledgeLifecycleSource::available)
                 .filter(source -> source.count() > 0)
                 .map(KnowledgeLifecycleSource::oldestIssueAt)
                 .filter(java.util.Objects::nonNull)
                 .min(LocalDateTime::compareTo)
                 .orElse(null);
-        long oldestAgeSeconds = oldest == null
+        long backlogAgeSeconds = oldestBacklogAt == null
                 ? 0
-                : Math.max(0, Duration.between(oldest, checkedAt).getSeconds());
+                : Math.max(0, Duration.between(oldestBacklogAt, checkedAt).getSeconds());
         long availableSources = sources.stream()
                 .filter(KnowledgeLifecycleSource::available)
                 .count();
@@ -394,8 +431,8 @@ public class ProjectionHealthService {
                 .reconciliationSupported(false)
                 .backlogCount(Math.min(backlogCount, ISSUE_COUNT_CAP))
                 .overdueCount(Math.min(dueOutcomeRevisitCount, ISSUE_COUNT_CAP))
-                .backlogAgeSeconds(oldestAgeSeconds)
-                .oldestBacklogAt(oldest)
+                .backlogAgeSeconds(backlogAgeSeconds)
+                .oldestBacklogAt(oldestBacklogAt)
                 .repairMode("DIAGNOSIS_ONLY")
                 .checkedAt(checkedAt)
                 .attentionReasons(attentionReasons)
@@ -460,66 +497,101 @@ public class ProjectionHealthService {
 
     private PageResult<ProjectionIssueDTO> knowledgeLifecycleIssues(
             Set<String> existingTables,
-            long cursor,
+            KnowledgeLifecycleCursor cursor,
             int size) {
         int fetchLimit = size + 1;
-        List<IssueRow> rows = new ArrayList<>();
+        List<KnowledgeLifecycleIssue> rows = new ArrayList<>();
         Map<String, String> sourceErrors = new LinkedHashMap<>();
         readKnowledgeLifecycleIssues(
                 PENDING_SUGGESTIONS,
+                sourceOrder(PENDING_SUGGESTIONS),
                 Set.of("t_int_content_suggestion"),
                 existingTables,
-                () -> mapper.listPendingSuggestionIssues(cursor, fetchLimit),
+                () -> mapper.listPendingSuggestionIssues(
+                        cursor.issueId(),
+                        cursor.includeCursorId(sourceOrder(PENDING_SUGGESTIONS)),
+                        fetchLimit),
                 rows,
                 sourceErrors);
         readKnowledgeLifecycleIssues(
                 BROKEN_REFERENCES,
+                sourceOrder(BROKEN_REFERENCES),
                 Set.of("t_post_reference"),
                 existingTables,
-                () -> mapper.listBrokenReferenceIssues(cursor, fetchLimit),
+                () -> mapper.listBrokenReferenceIssues(
+                        cursor.issueId(),
+                        cursor.includeCursorId(sourceOrder(BROKEN_REFERENCES)),
+                        fetchLimit),
                 rows,
                 sourceErrors);
         readKnowledgeLifecycleIssues(
                 PENDING_RELATIONS,
+                sourceOrder(PENDING_RELATIONS),
                 Set.of("t_post_knowledge_relation"),
                 existingTables,
-                () -> mapper.listPendingKnowledgeRelationIssues(cursor, fetchLimit),
+                () -> mapper.listPendingKnowledgeRelationIssues(
+                        cursor.issueId(),
+                        cursor.includeCursorId(sourceOrder(PENDING_RELATIONS)),
+                        fetchLimit),
                 rows,
                 sourceErrors);
         readKnowledgeLifecycleIssues(
                 INVALID_PUBLIC_RELATION_TARGETS,
+                sourceOrder(INVALID_PUBLIC_RELATION_TARGETS),
                 Set.of("t_post_knowledge_relation", "t_post_main"),
                 existingTables,
-                () -> mapper.listInvalidPublicRelationTargetIssues(cursor, fetchLimit),
+                () -> mapper.listInvalidPublicRelationTargetIssues(
+                        cursor.issueId(),
+                        cursor.includeCursorId(sourceOrder(INVALID_PUBLIC_RELATION_TARGETS)),
+                        fetchLimit),
                 rows,
                 sourceErrors);
         readKnowledgeLifecycleIssues(
                 DUE_OUTCOME_REVISITS,
+                sourceOrder(DUE_OUTCOME_REVISITS),
                 Set.of("t_int_post_outcome"),
                 existingTables,
-                () -> mapper.listDueOutcomeRevisitIssues(cursor, fetchLimit),
+                () -> mapper.listDueOutcomeRevisitIssues(
+                        cursor.issueId(),
+                        cursor.includeCursorId(sourceOrder(DUE_OUTCOME_REVISITS)),
+                        fetchLimit),
                 rows,
                 sourceErrors);
-        rows.sort(Comparator.comparing(
-                IssueRow::getIssueId,
-                Comparator.nullsLast(Comparator.reverseOrder())));
-        boolean hasMore = rows.size() > size;
-        List<IssueRow> visible = rows.stream().limit(size).toList();
+        readKnowledgeLifecycleIssues(
+                FRESHNESS_ATTENTION,
+                sourceOrder(FRESHNESS_ATTENTION),
+                Set.of("t_int_post_trust_state", "t_post_main"),
+                existingTables,
+                () -> mapper.listFreshnessAttentionIssues(
+                        cursor.issueId(),
+                        cursor.includeCursorId(sourceOrder(FRESHNESS_ATTENTION)),
+                        fetchLimit),
+                rows,
+                sourceErrors);
+        rows.sort(Comparator
+                .comparing((KnowledgeLifecycleIssue item) -> item.row().getIssueId(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparingInt(KnowledgeLifecycleIssue::sourceOrder)
+                .thenComparing(item -> item.row().getIssueType() == null
+                        ? "" : item.row().getIssueType()));
+        boolean degraded = !sourceErrors.isEmpty();
+        boolean hasMore = !degraded && rows.size() > size;
+        List<KnowledgeLifecycleIssue> visible = rows.stream().limit(size).toList();
         String nextCursor = hasMore && !visible.isEmpty()
-                ? String.valueOf(visible.get(visible.size() - 1).getIssueId())
+                ? KnowledgeLifecycleCursor.from(visible.get(visible.size() - 1)).encode()
                 : null;
         PageResult<ProjectionIssueDTO> result = PageResult.of(
                         visible.stream()
-                                .map(row -> toIssue(KNOWLEDGE_LIFECYCLE, row))
+                                .map(item -> toIssue(KNOWLEDGE_LIFECYCLE, item.row()))
                                 .toList(),
                         nextCursor,
                         hasMore)
                 .withMetadata(
                         "knowledge-lifecycle",
-                        !sourceErrors.isEmpty(),
-                        sourceErrors.isEmpty() ? null : "KNOWLEDGE_LIFECYCLE_SOURCE_DEGRADED",
-                        fetchLimit * 5);
-        if (!sourceErrors.isEmpty()) {
+                        degraded,
+                        degraded ? "KNOWLEDGE_LIFECYCLE_SOURCE_DEGRADED" : null,
+                        fetchLimit * 6);
+        if (degraded) {
             result.withDiagnostic("sourceErrors", Map.copyOf(sourceErrors));
         }
         return result;
@@ -527,10 +599,11 @@ public class ProjectionHealthService {
 
     private void readKnowledgeLifecycleIssues(
             String source,
+            int sourceOrder,
             Set<String> requiredTables,
             Set<String> existingTables,
             Supplier<List<IssueRow>> query,
-            List<IssueRow> rows,
+            List<KnowledgeLifecycleIssue> rows,
             Map<String, String> sourceErrors) {
         List<String> missingTables = requiredTables.stream()
                 .filter(table -> !existingTables.contains(table))
@@ -542,12 +615,59 @@ public class ProjectionHealthService {
         }
         try {
             List<IssueRow> sourceRows = query.get();
-            if (sourceRows != null) {
-                rows.addAll(sourceRows);
+            if (sourceRows == null) {
+                sourceErrors.put(source, "READ_UNAVAILABLE");
+                return;
+            }
+            for (IssueRow row : sourceRows) {
+                if (row == null || row.getIssueId() == null || row.getIssueId() <= 0) {
+                    sourceErrors.put(source, "INVALID_ROW");
+                    continue;
+                }
+                rows.add(new KnowledgeLifecycleIssue(source, sourceOrder, row));
             }
         } catch (RuntimeException ex) {
             sourceErrors.put(source, "READ_UNAVAILABLE");
         }
+    }
+
+    private static long parseNumericCursor(String rawCursor) {
+        String value = normalizeCursor(rawCursor);
+        if (value.isEmpty() || "0".equals(value)) {
+            return 0L;
+        }
+        if (!value.matches("[0-9]+")) {
+            throw invalidCursor();
+        }
+        try {
+            long cursor = Long.parseLong(value);
+            if (cursor < 0) {
+                throw invalidCursor();
+            }
+            return cursor;
+        } catch (NumberFormatException ex) {
+            throw invalidCursor();
+        }
+    }
+
+    private static int sourceOrder(String source) {
+        int order = KNOWLEDGE_SOURCE_ORDER.indexOf(source);
+        if (order < 0) {
+            throw new IllegalStateException("unknown knowledge lifecycle source: " + source);
+        }
+        return order;
+    }
+
+    private static BizException invalidCursor() {
+        return new BizException(ErrorCode.PARAM_ERROR.getCode(), "cursor is invalid");
+    }
+
+    private static String normalizeCursor(String rawCursor) {
+        String value = rawCursor == null ? "" : rawCursor;
+        if (value.length() > MAX_CURSOR_LENGTH) {
+            throw invalidCursor();
+        }
+        return value.trim();
     }
 
     private ProjectionReconcileResultDTO reconcileIncentiveAccount(
@@ -914,9 +1034,10 @@ public class ProjectionHealthService {
                 "t_collab_topic_post", "t_post_main");
         register(definitions, KNOWLEDGE_LIFECYCLE, "知识生命周期",
                 false,
-                "知识生命周期存在待处理、失效引用、公开目标异常或到期复访",
+                "知识生命周期存在待处理、失效引用、公开目标异常、到期复访或新鲜度关注项",
                 "t_int_content_suggestion", "t_post_reference",
-                "t_post_knowledge_relation", "t_post_main", "t_int_post_outcome");
+                "t_post_knowledge_relation", "t_post_main", "t_int_post_outcome",
+                "t_int_post_trust_state");
         return Map.copyOf(definitions);
     }
 
@@ -951,6 +1072,93 @@ public class ProjectionHealthService {
 
         private boolean available() {
             return sourceError == null;
+        }
+    }
+
+    private record KnowledgeLifecycleIssue(
+            String source,
+            int sourceOrder,
+            IssueRow row) {
+    }
+
+    private record KnowledgeLifecycleCursor(
+            long issueId,
+            int sourceOrder,
+            String source) {
+
+        private static KnowledgeLifecycleCursor parse(String rawCursor) {
+            String value = normalizeCursor(rawCursor);
+            if (value.isEmpty() || "0".equals(value)) {
+                return new KnowledgeLifecycleCursor(0L, -1, null);
+            }
+            if (value.matches("[0-9]+")) {
+                try {
+                    long legacyId = Long.parseLong(value);
+                    if (legacyId < 0) {
+                        throw invalidCursor();
+                    }
+                    return new KnowledgeLifecycleCursor(
+                            legacyId, LEGACY_CURSOR_SOURCE_ORDER, null);
+                } catch (NumberFormatException ex) {
+                    throw invalidCursor();
+                }
+            }
+            if (value.contains("=")) {
+                throw invalidCursor();
+            }
+            try {
+                byte[] decodedBytes = Base64.getUrlDecoder().decode(value);
+                String canonical = Base64.getUrlEncoder()
+                        .withoutPadding()
+                        .encodeToString(decodedBytes);
+                if (!canonical.equals(value)) {
+                    throw invalidCursor();
+                }
+                String decoded = new String(decodedBytes, StandardCharsets.UTF_8);
+                String[] parts = decoded.split("\\|", -1);
+                if (parts.length != 3
+                        || !"kl1".equals(parts[0])
+                        || !parts[1].matches("[1-9][0-9]*")) {
+                    throw invalidCursor();
+                }
+                long id = Long.parseLong(parts[1]);
+                int sourceOrder = ProjectionHealthService.sourceOrder(parts[2]);
+                if (id <= 0) {
+                    throw invalidCursor();
+                }
+                return new KnowledgeLifecycleCursor(id, sourceOrder, parts[2]);
+            } catch (BizException ex) {
+                throw ex;
+            } catch (RuntimeException ex) {
+                throw invalidCursor();
+            }
+        }
+
+        private boolean includeCursorId(int currentSourceOrder) {
+            return issueId > 0
+                    && source != null
+                    && currentSourceOrder > sourceOrder;
+        }
+
+        private static KnowledgeLifecycleCursor from(KnowledgeLifecycleIssue item) {
+            if (item == null
+                    || item.row() == null
+                    || item.row().getIssueId() == null
+                    || item.row().getIssueId() <= 0
+                    || item.source() == null) {
+                throw invalidCursor();
+            }
+            return new KnowledgeLifecycleCursor(
+                    item.row().getIssueId(),
+                    item.sourceOrder(),
+                    item.source());
+        }
+
+        private String encode() {
+            String raw = "kl1|" + issueId + "|" + source;
+            return Base64.getUrlEncoder()
+                    .withoutPadding()
+                    .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
         }
     }
 

@@ -42,6 +42,7 @@ public interface ProjectionHealthMapper {
                 't_feed_feedback_preference',
                 't_collab_topic_post',
                 't_post_main',
+                't_int_post_trust_state',
                 't_collab_series',
                 't_collab_series_submission',
                 't_outbox_message',
@@ -642,11 +643,16 @@ public interface ProjectionHealthMapper {
                    create_time AS detectedAt
             FROM t_int_content_suggestion
             WHERE resolution = 'PENDING'
-              AND (#{cursor} = 0 OR id < #{cursor})
+              AND (
+                    #{cursor} = 0
+                    OR id < #{cursor}
+                    OR (#{includeCursorId} = 1 AND id = #{cursor})
+                  )
             ORDER BY id DESC
             LIMIT #{limit}
             """)
     List<IssueRow> listPendingSuggestionIssues(@Param("cursor") long cursor,
+                                               @Param("includeCursorId") boolean includeCursorId,
                                                @Param("limit") int limit);
 
     @Select("""
@@ -675,11 +681,16 @@ public interface ProjectionHealthMapper {
             FROM t_post_reference
             WHERE reference_status = 'BROKEN'
               AND is_deleted = 0
-              AND (#{cursor} = 0 OR id < #{cursor})
+              AND (
+                    #{cursor} = 0
+                    OR id < #{cursor}
+                    OR (#{includeCursorId} = 1 AND id = #{cursor})
+                  )
             ORDER BY id DESC
             LIMIT #{limit}
             """)
     List<IssueRow> listBrokenReferenceIssues(@Param("cursor") long cursor,
+                                             @Param("includeCursorId") boolean includeCursorId,
                                              @Param("limit") int limit);
 
     @Select("""
@@ -711,11 +722,16 @@ public interface ProjectionHealthMapper {
             FROM t_post_knowledge_relation
             WHERE review_status = 'PENDING'
               AND is_deleted = 0
-              AND (#{cursor} = 0 OR id < #{cursor})
+              AND (
+                    #{cursor} = 0
+                    OR id < #{cursor}
+                    OR (#{includeCursorId} = 1 AND id = #{cursor})
+                  )
             ORDER BY id DESC
             LIMIT #{limit}
             """)
     List<IssueRow> listPendingKnowledgeRelationIssues(@Param("cursor") long cursor,
+                                                      @Param("includeCursorId") boolean includeCursorId,
                                                       @Param("limit") int limit);
 
     @Select("""
@@ -762,11 +778,16 @@ public interface ProjectionHealthMapper {
                   OR target_post.post_status <> 1
                   OR target_post.visibility <> 1
               )
-              AND (#{cursor} = 0 OR relation.id < #{cursor})
+              AND (
+                    #{cursor} = 0
+                    OR relation.id < #{cursor}
+                    OR (#{includeCursorId} = 1 AND relation.id = #{cursor})
+                  )
             ORDER BY relation.id DESC
             LIMIT #{limit}
             """)
     List<IssueRow> listInvalidPublicRelationTargetIssues(@Param("cursor") long cursor,
+                                                        @Param("includeCursorId") boolean includeCursorId,
                                                         @Param("limit") int limit);
 
     @Select("""
@@ -798,12 +819,79 @@ public interface ProjectionHealthMapper {
               AND is_deleted = 0
               AND follow_up_at IS NOT NULL
               AND follow_up_at <= CURRENT_TIMESTAMP(3)
-              AND (#{cursor} = 0 OR id < #{cursor})
+              AND (
+                    #{cursor} = 0
+                    OR id < #{cursor}
+                    OR (#{includeCursorId} = 1 AND id = #{cursor})
+                  )
             ORDER BY id DESC
             LIMIT #{limit}
             """)
     List<IssueRow> listDueOutcomeRevisitIssues(@Param("cursor") long cursor,
+                                              @Param("includeCursorId") boolean includeCursorId,
                                               @Param("limit") int limit);
+
+    @Select("""
+            SELECT COUNT(*) AS issueCount,
+                   MIN(issueAt) AS oldestIssueAt
+            FROM (
+                SELECT state.update_time AS issueAt
+                FROM t_int_post_trust_state state
+                INNER JOIN t_post_main post ON post.id = state.post_id
+                WHERE state.freshness_status IN (
+                          'POSSIBLY_STALE',
+                          'AWAITING_AUTHOR_CONFIRMATION'
+                      )
+                  AND post.is_deleted = 0
+                  AND post.post_status = 1
+                  AND post.visibility = 1
+                ORDER BY state.update_time, state.post_id
+                LIMIT #{cap}
+            ) bounded
+            """)
+    KnowledgeLifecycleSourceHealthRow selectFreshnessAttentionHealth(@Param("cap") int cap);
+
+    @Select("""
+            SELECT state.post_id AS issueId,
+                   CASE state.freshness_status
+                       WHEN 'POSSIBLY_STALE'
+                           THEN 'POST_FRESHNESS_POSSIBLY_STALE'
+                       WHEN 'AWAITING_AUTHOR_CONFIRMATION'
+                           THEN 'POST_FRESHNESS_AWAITING_CONFIRMATION'
+                   END AS issueType,
+                   CASE state.freshness_status
+                       WHEN 'POSSIBLY_STALE' THEN 'MEDIUM'
+                       WHEN 'AWAITING_AUTHOR_CONFIRMATION' THEN 'HIGH'
+                   END AS severity,
+                   'POST' AS subjectType,
+                   CAST(state.post_id AS CHAR) AS subjectId,
+                   CASE state.freshness_status
+                       WHEN 'POSSIBLY_STALE'
+                           THEN CONCAT('公开文章「', post.title, '」可能已过时')
+                       WHEN 'AWAITING_AUTHOR_CONFIRMATION'
+                           THEN CONCAT('公开文章「', post.title, '」等待作者确认新鲜度')
+                   END AS summary,
+                   state.update_time AS detectedAt
+            FROM t_int_post_trust_state state
+            INNER JOIN t_post_main post ON post.id = state.post_id
+            WHERE state.freshness_status IN (
+                      'POSSIBLY_STALE',
+                      'AWAITING_AUTHOR_CONFIRMATION'
+                  )
+              AND post.is_deleted = 0
+              AND post.post_status = 1
+              AND post.visibility = 1
+              AND (
+                    #{cursor} = 0
+                    OR state.post_id < #{cursor}
+                    OR (#{includeCursorId} = 1 AND state.post_id = #{cursor})
+                  )
+            ORDER BY state.post_id DESC
+            LIMIT #{limit}
+            """)
+    List<IssueRow> listFreshnessAttentionIssues(@Param("cursor") long cursor,
+                                                @Param("includeCursorId") boolean includeCursorId,
+                                                @Param("limit") int limit);
 
     @Select("""
             SELECT operator_uid AS operatorUid,
