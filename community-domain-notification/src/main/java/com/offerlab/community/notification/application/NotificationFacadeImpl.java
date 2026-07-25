@@ -9,6 +9,7 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.notification.api.dto.NotificationReadAllResultDTO;
 import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
+import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationAggregateWindow;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationMessagePO;
 import com.offerlab.community.user.api.UserFacade;
@@ -86,7 +87,11 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .filter(id -> id != null && id > 0)
                 .collect(Collectors.toSet());
         Map<Long, UserBriefDTO> senders = userFacade.batchGetUserBriefs(senderIds);
-        List<Map<String, Object>> items = aggregateItems(pageRows, senders);
+        List<NotificationGroup> groups = notificationGroups(pageRows);
+        Map<String, AggregateCounts> aggregateCounts = aggregateCounts(uid, groups);
+        List<Map<String, Object>> items = groups.stream()
+                .map(group -> toGroupedItem(group, senders, aggregateCounts.get(group.key())))
+                .toList();
         NotificationMessagePO last = pageRows.get(pageRows.size() - 1);
         String next = hasMore && last.getCreateTime() != null
                 ? last.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli()
@@ -462,22 +467,22 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .toList();
     }
 
-    private List<Map<String, Object>> aggregateItems(List<NotificationMessagePO> rows, Map<Long, UserBriefDTO> senders) {
-        List<Map<String, Object>> items = new ArrayList<>();
+    private List<NotificationGroup> notificationGroups(List<NotificationMessagePO> rows) {
+        List<NotificationGroup> groups = new ArrayList<>();
         List<NotificationMessagePO> group = new ArrayList<>();
         for (NotificationMessagePO row : rows) {
             if (group.isEmpty() || canAggregate(group.get(0), row)) {
                 group.add(row);
                 continue;
             }
-            items.add(toGroupedItem(group, senders));
+            groups.add(new NotificationGroup("g" + groups.size(), List.copyOf(group)));
             group = new ArrayList<>();
             group.add(row);
         }
         if (!group.isEmpty()) {
-            items.add(toGroupedItem(group, senders));
+            groups.add(new NotificationGroup("g" + groups.size(), List.copyOf(group)));
         }
-        return items;
+        return groups;
     }
 
     private boolean canAggregate(NotificationMessagePO head, NotificationMessagePO candidate) {
@@ -506,22 +511,71 @@ public class NotificationFacadeImpl implements NotificationFacade {
         return notifType != null && (notifType == TYPE_LIKE || notifType == TYPE_FAVORITE);
     }
 
-    private Map<String, Object> toGroupedItem(List<NotificationMessagePO> group, Map<Long, UserBriefDTO> senders) {
-        NotificationMessagePO head = group.get(0);
-        if (group.size() == 1) {
+    private Map<String, AggregateCounts> aggregateCounts(Long uid, List<NotificationGroup> groups) {
+        List<NotificationAggregateWindow> windows = groups.stream()
+                .filter(group -> isAggregatableType(group.head().getNotifType()))
+                .map(this::toAggregateWindow)
+                .filter(Objects::nonNull)
+                .toList();
+        if (windows.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            Map<String, AggregateCounts> result = new LinkedHashMap<>();
+            List<Map<String, Object>> rows = mapper.countAggregateWindows(uid, windows);
+            if (rows == null) {
+                return Map.of();
+            }
+            for (Map<String, Object> row : rows) {
+                String windowKey = String.valueOf(row.get("windowKey"));
+                result.put(windowKey, new AggregateCounts(
+                        asLong(row, "aggregateCount"),
+                        asLong(row, "unreadCount")));
+            }
+            return result;
+        } catch (RuntimeException e) {
+            log.warn("notification aggregate count query failed, uid={}", LogMask.id(uid), e);
+            return Map.of();
+        }
+    }
+
+    private NotificationAggregateWindow toAggregateWindow(NotificationGroup group) {
+        NotificationMessagePO head = group.head();
+        if (head.getCreateTime() == null) {
+            return null;
+        }
+        return new NotificationAggregateWindow(
+                group.key(),
+                head.getNotifType(),
+                head.getTargetType(),
+                head.getTargetId(),
+                head.getCreateTime().minusMinutes(AGGREGATION_WINDOW_MINUTES),
+                head.getCreateTime());
+    }
+
+    private Map<String, Object> toGroupedItem(NotificationGroup group, Map<Long, UserBriefDTO> senders,
+                                               AggregateCounts actualCounts) {
+        List<NotificationMessagePO> rows = group.rows();
+        NotificationMessagePO head = group.head();
+        int pageUnreadCount = (int) rows.stream()
+                .filter(row -> row.getIsRead() == null || row.getIsRead() == 0)
+                .count();
+        long aggregateCount = actualCounts == null
+                ? rows.size()
+                : Math.max(rows.size(), actualCounts.aggregateCount());
+        long unreadCount = actualCounts == null ? pageUnreadCount : actualCounts.unreadCount();
+        boolean aggregated = isAggregatableType(head.getNotifType()) && aggregateCount > 1;
+        if (!aggregated && rows.size() == 1) {
             return toItem(head, senders.get(head.getSenderUid()));
         }
         Map<String, Object> item = toItem(head, senders.get(head.getSenderUid()));
-        int unreadCount = (int) group.stream()
-                .filter(row -> row.getIsRead() == null || row.getIsRead() == 0)
-                .count();
         Map<String, Object> content = new LinkedHashMap<>(parseContent(head.getContentJson()));
-        content.put("aggregateCount", group.size());
+        content.put("aggregateCount", aggregateCount);
         content.put("unreadCount", unreadCount);
         content.put("aggregated", true);
         item.put("content", content);
-        item.put("notificationIds", group.stream().map(NotificationMessagePO::getId).toList());
-        item.put("aggregateCount", group.size());
+        item.put("notificationIds", rows.stream().map(NotificationMessagePO::getId).toList());
+        item.put("aggregateCount", aggregateCount);
         item.put("unreadCount", unreadCount);
         item.put("isRead", unreadCount == 0);
         return item;
@@ -675,5 +729,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
 
     private String commentsTargetPath(Long postId) {
         return "/post/" + postId + "#comments";
+    }
+
+    private record NotificationGroup(String key, List<NotificationMessagePO> rows) {
+        private NotificationMessagePO head() {
+            return rows.get(0);
+        }
+    }
+
+    private record AggregateCounts(long aggregateCount, long unreadCount) {
     }
 }

@@ -165,15 +165,74 @@ class QuestionSafetyGuardTest {
         assertTrue(facadeSource.contains("Set<String> changedHashes = questions.stream()"), "hiding a source post must refresh affected canonical groups");
         assertTrue(facadeSource.contains("Set<String> affectedCompanies = oldQuestions.stream()"), "re-extraction must evict company prep caches for old source companies");
         assertTrue(facadeSource.contains("Set<String> affectedCompanies = questions.stream()"), "hiding source questions must evict company prep caches for old source companies");
-        assertTrue(facadeSource.contains("po.setCanonicalId(questionMapper.selectCanonicalIdByHash(normalizedHash))"), "inserted questions must preserve canonical linkage immediately");
+        assertTrue(facadeSource.contains("questionMapper.selectCanonicalIdByHash(normalizedHash)"), "inserted questions must preserve canonical linkage immediately");
         assertTrue(facadeSource.contains("changedHashes.forEach(this::refreshCanonicalGroup)"), "extraction must refresh canonical appear counts after replacement");
-        assertTrue(facadeSource.contains("affectedCompanies.forEach(this::evictQuestionCachesByCompany)"), "company prep caches must be evicted after question replacement or hiding");
+        assertTrue(facadeSource.contains("scheduleCompanyCacheEvictions(affectedCompanies"),
+                "company prep caches must be evicted after transaction commit");
         assertTrue(facadeSource.contains("questionMapper.updateCanonicalGroup(hash, canonicalId, appearCount)"), "canonical refresh must write grouped appear counts");
         assertTrue(facadeSource.contains("scheduleQuestionIndexes(")
                         && facadeSource.contains("questionSearchIndexer::indexQuestion"),
                 "updated frequency values must be reflected in the search index after the transaction commits");
         assertTrue(migrationSql.contains("idx_normalized_status"), "existing databases must receive the normalized hash index non-destructively");
         assertFalse(migrationSql.contains("drop table"), "canonical migration must not drop data");
+    }
+
+    @Test
+    void extractedQuestionsMustRemainPendingAndMergeByStableHash() throws Exception {
+        String facadeSource = Files.readString(
+                Path.of("src/main/java/com/offerlab/community/question/application/QuestionFacadeImpl.java"),
+                StandardCharsets.UTF_8);
+        String mapperSource = Files.readString(
+                Path.of("src/main/java/com/offerlab/community/question/infrastructure/persistence/mapper/InterviewQuestionMapper.java"),
+                StandardCharsets.UTF_8);
+        String tagMapperSource = Files.readString(
+                Path.of("src/main/java/com/offerlab/community/question/infrastructure/persistence/mapper/InterviewQuestionTagMapper.java"),
+                StandardCharsets.UTF_8);
+        String listenerSource = Files.readString(
+                Path.of("src/main/java/com/offerlab/community/question/application/PostQuestionEventListener.java"),
+                StandardCharsets.UTF_8);
+
+        assertFalse(facadeSource.contains("new AutoReviewDecision(QuestionConstants.QUESTION_APPROVED"),
+                "AI extraction must never automatically approve a question");
+        assertTrue(facadeSource.contains("自动预检通过，待人工确认"),
+                "high-quality extraction should remain a human-review proposal");
+        assertTrue(facadeSource.contains("existing == null ? idGen.nextId() : existing.getId()"),
+                "matching hashes must preserve question ids and user progress");
+        assertTrue(facadeSource.contains("requiresNewQuestionReview("),
+                "material answer changes must return an approved question to pending review");
+        assertTrue(facadeSource.contains("reviewQueuePublisher.reopen"),
+                "pending question review items must reopen after material changes");
+        assertFalse(facadeSource.contains("questionTagMapper.deleteByPostId(post.getId())"),
+                "question tags must not be deleted for the whole post");
+        assertFalse(facadeSource.contains("questionMapper.delete(new LambdaQueryWrapper<InterviewQuestionPO>()"),
+                "question replacement must not hard-delete every question before rebuilding");
+        assertFalse(facadeSource.contains("deleteByIdsAndPostId"),
+                "questions removed by re-extraction must remain addressable for user progress and history");
+        assertTrue(mapperSource.contains("updateExtractedByIdAndPostId"),
+                "extracted fields need a status-safe, ownership-scoped update");
+        assertTrue(mapperSource.contains("reviewStatusIfPendingAndCurrent"),
+                "human review must use an optimistic content-version check");
+        assertTrue(mapperSource.contains("AND status = 0")
+                        && mapperSource.contains("AND update_time = #{expectedUpdateTime}"),
+                "human review must only finalize the pending version shown to the reviewer");
+        assertTrue(mapperSource.contains("hideRemovedByIdsAndPostId"),
+                "questions removed by re-extraction must be hidden instead of physically deleted");
+        assertTrue(mapperSource.contains("AND status IN (0, 1)"),
+                "source visibility changes must preserve explicit human-hidden decisions");
+        assertTrue(mapperSource.contains("clearCanonicalGroup"),
+                "canonical references must clear when a hash has no approved root");
+        assertTrue(mapperSource.contains("AND source_post_id = #{question.sourcePostId}"),
+                "extracted field updates must remain scoped to the source post");
+        assertTrue(tagMapperSource.contains("deleteByQuestionIds"),
+                "tag replacement must target only touched question ids");
+        assertTrue(facadeSource.contains("scheduleQuestionIndexes(mergeItems.stream()"),
+                "all retained and new questions must refresh their search document");
+        assertTrue(listenerSource.contains("PostDeletedEvent")
+                        && listenerSource.contains("questionFacade.hidePostQuestions"),
+                "post deletion must hide and reindex extracted questions");
+        assertTrue(facadeSource.contains("question source post deleted")
+                        && facadeSource.contains("closePendingQuestionQueueItem"),
+                "post deletion must close pending question review queue items");
     }
 
     @Test

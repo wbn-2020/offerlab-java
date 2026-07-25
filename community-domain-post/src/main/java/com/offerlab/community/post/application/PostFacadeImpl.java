@@ -213,12 +213,13 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
-    public void updatePost(PostUpdateCmd cmd) {
-        postService.update(cmd);
+    public boolean updatePost(PostUpdateCmd cmd) {
+        boolean reviewRequired = postService.update(cmd);
         // 帖子正文、可见性和标签都可能变化，更新成功后必须清理详情缓存。
 
 
         evictPostDetail(cmd.getPostId());
+        return reviewRequired;
     }
 
     @Override
@@ -289,6 +290,17 @@ public class PostFacadeImpl implements PostFacade {
         List<Post> list = scanPublicPosts(authorId, tagId, postType, featured, activeDomain, cursor, limit);
 
         return paged(list, limit, includeTestData);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listPostsByKeyset(Long authorId, Long tagId, Integer postType,
+                                                      Boolean featured, Integer domain,
+                                                      LocalDateTime cursorTime, Long cursorId, int size) {
+        Integer activeDomain = requireOptionalDomain(domain);
+        int limit = pageSize(size);
+        List<Post> list = scanPublicPostsByKeyset(
+                authorId, tagId, postType, featured, activeDomain, cursorTime, cursorId, limit);
+        return paged(list, limit, false);
     }
 
     @Override
@@ -461,6 +473,36 @@ public class PostFacadeImpl implements PostFacade {
                 break;
             }
             scanCursor = nextCursor;
+        }
+        return scanned;
+    }
+
+    private List<Post> scanPublicPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured,
+                                               Integer domain, LocalDateTime cursorTime, Long cursorId, int pageSize) {
+        int scanLimit = scanSize(pageSize);
+        int maxRows = Math.min(MAX_SYNTHETIC_SCAN_ROWS,
+                Math.max(scanLimit, scanLimit * SYNTHETIC_SCAN_MULTIPLIER));
+        List<Post> scanned = new ArrayList<>();
+        LocalDateTime scanTime = cursorTime;
+        Long scanId = cursorId;
+        while (scanned.size() < maxRows) {
+            int remaining = Math.min(scanLimit, maxRows - scanned.size());
+            List<Post> batch = postRepo.findPostsByKeyset(
+                    authorId, tagId, postType, featured, domain, scanTime, scanId, remaining);
+            if (batch.isEmpty()) {
+                break;
+            }
+            scanned.addAll(batch);
+            if (batch.size() < remaining || hasVisiblePageAfterSyntheticFiltering(scanned, pageSize)) {
+                break;
+            }
+            Post last = batch.get(batch.size() - 1);
+            if (last.getCreateTime() == null || last.getId() == null
+                    || (Objects.equals(scanTime, last.getCreateTime()) && Objects.equals(scanId, last.getId()))) {
+                break;
+            }
+            scanTime = last.getCreateTime();
+            scanId = last.getId();
         }
         return scanned;
     }

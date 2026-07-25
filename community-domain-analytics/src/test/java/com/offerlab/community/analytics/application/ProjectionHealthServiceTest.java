@@ -83,6 +83,7 @@ class ProjectionHealthServiceTest {
                 "t_feed_feedback_preference",
                 "t_collab_topic_post",
                 "t_post_main",
+                "t_post_extension",
                 "t_int_post_trust_state",
                 "t_collab_series",
                 "t_collab_series_submission",
@@ -238,7 +239,8 @@ class ProjectionHealthServiceTest {
                 "t_post_knowledge_relation",
                 "t_post_main",
                 "t_int_post_outcome",
-                "t_int_post_trust_state"
+                "t_int_post_trust_state",
+                "t_post_extension"
         ));
         when(mapper.selectPendingSuggestionHealth(1001))
                 .thenReturn(knowledgeHealth(1, LocalDateTime.now().minusHours(1)));
@@ -586,7 +588,8 @@ class ProjectionHealthServiceTest {
                 "t_post_knowledge_relation",
                 "t_post_main",
                 "t_int_post_outcome",
-                "t_int_post_trust_state"
+                "t_int_post_trust_state",
+                "t_post_extension"
         ));
         IssueRow suggestion = knowledgeIssue(
                 50L, "CONTENT_SUGGESTION_PENDING", "CONTENT_SUGGESTION");
@@ -634,6 +637,42 @@ class ProjectionHealthServiceTest {
         assertEquals(detectedAt, result.getItems().get(0).getDetectedAt());
         assertEquals(18, result.getScanLimit());
         verify(mapper).listFreshnessAttentionIssues(0L, false, 3);
+    }
+
+    @Test
+    void knowledgeLifecycleIssueCarriesRelatedPostAndDomainWithoutChangingIdentity() {
+        IssueRow suggestion = knowledgeIssue(
+                71L, "CONTENT_SUGGESTION_PENDING", "CONTENT_SUGGESTION");
+        suggestion.setRelatedPostId(9001L);
+        suggestion.setDomain(3);
+        when(mapper.listPendingSuggestionIssues(0L, false, 3)).thenReturn(List.of(suggestion));
+
+        var result = service.issues("KNOWLEDGE_LIFECYCLE", 0L, 2, 8L);
+
+        assertEquals(1, result.getItems().size());
+        var item = result.getItems().get(0);
+        assertEquals(71L, item.getIssueId());
+        assertEquals("CONTENT_SUGGESTION_PENDING", item.getIssueType());
+        assertEquals(9001L, item.getRelatedPostId());
+        assertEquals(3, item.getDomain());
+    }
+
+    @Test
+    void knowledgeLifecycleIssuesReportMissingPostExtensionAsSourceError() {
+        when(mapper.selectExistingProjectionTables()).thenReturn(List.of(
+                "t_int_content_suggestion",
+                "t_post_main"));
+
+        var result = service.issues("KNOWLEDGE_LIFECYCLE", 0L, 2, 8L);
+
+        assertTrue(result.getDegraded());
+        assertFalse(result.getHasMore());
+        assertNull(result.getNextCursor());
+        @SuppressWarnings("unchecked")
+        var sourceErrors = (java.util.Map<String, String>) result.getDiagnostics().get("sourceErrors");
+        assertEquals("TABLE_MISSING:t_post_extension", sourceErrors.get("PENDING_SUGGESTIONS"));
+        verify(mapper, never()).listPendingSuggestionIssues(
+                any(Long.class), anyBoolean(), any(Integer.class));
     }
 
     @Test

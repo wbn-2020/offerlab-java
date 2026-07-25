@@ -571,7 +571,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND e.domain = #{domain}
               </if>
               <if test="cursorTime != null">
-              AND p.create_time &lt; #{cursorTime}
+              AND (p.create_time &lt; #{cursorTime}
+                   OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId}))
               </if>
             ORDER BY p.create_time DESC, p.id DESC
             LIMIT #{limit}
@@ -584,6 +585,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                            @Param("type") Integer type,
                                            @Param("domain") Integer domain,
                                            @Param("cursorTime") LocalDateTime cursorTime,
+                                           @Param("cursorId") Long cursorId,
                                            @Param("limit") int limit);
 
     @Select("""
@@ -648,7 +650,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND e.domain = #{domain}
               </if>
               <if test="cursorTime != null">
-              AND p.create_time &lt; #{cursorTime}
+              AND (p.create_time &lt; #{cursorTime}
+                   OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId}))
               </if>
             ORDER BY p.create_time DESC, p.id DESC
             LIMIT #{limit}
@@ -661,6 +664,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                                  @Param("type") Integer type,
                                                  @Param("domain") Integer domain,
                                                  @Param("cursorTime") LocalDateTime cursorTime,
+                                                 @Param("cursorId") Long cursorId,
                                                  @Param("limit") int limit);
 
     @Select("""

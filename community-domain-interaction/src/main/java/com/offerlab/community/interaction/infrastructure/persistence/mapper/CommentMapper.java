@@ -55,57 +55,83 @@ public interface CommentMapper extends BaseMapper<CommentPO> {
               SELECT c.id, c.post_id, c.post_author_id, c.author_id, c.root_id, c.parent_id,
                      c.reply_to_uid, c.content, c.like_count, c.helpful_count,
                      c.comment_status, c.create_time, c.update_time, c.is_deleted,
-                     ROW_NUMBER() OVER (
-                       ORDER BY
-                         CASE WHEN EXISTS (
-                           SELECT 1
-                           FROM t_int_comment_quality_signal s
-                           WHERE s.post_id = c.post_id
-                             AND s.signal_type = 'AUTHOR_PINNED'
-                             AND s.signal_status = 1
-                             AND s.is_deleted = 0
-                             AND (s.comment_id = c.id OR s.root_id = c.id)
-                         ) THEN 1 ELSE 0 END DESC,
-                         CASE WHEN EXISTS (
-                           SELECT 1
-                           FROM t_int_comment_quality_signal s
-                           WHERE s.post_id = c.post_id
-                             AND s.signal_type = 'FEATURED'
-                             AND s.signal_status = 1
-                             AND s.is_deleted = 0
-                             AND (s.comment_id = c.id OR s.root_id = c.id)
-                         ) THEN 1 ELSE 0 END DESC,
-                         CASE WHEN c.author_id = c.post_author_id THEN 1 ELSE 0 END DESC,
-                         COALESCE(c.helpful_count, 0) DESC,
-                         COALESCE(c.like_count, 0) DESC,
-                         c.create_time DESC,
-                         c.id DESC
-                     ) AS rn
+                     CASE WHEN EXISTS (
+                       SELECT 1
+                       FROM t_int_comment_quality_signal s
+                       WHERE s.post_id = c.post_id
+                         AND s.signal_type = 'AUTHOR_PINNED'
+                         AND s.signal_status = 1
+                         AND s.is_deleted = 0
+                         AND (s.comment_id = c.id OR s.root_id = c.id)
+                     ) THEN 1 ELSE 0 END AS quality_pinned,
+                     CASE WHEN EXISTS (
+                       SELECT 1
+                       FROM t_int_comment_quality_signal s
+                       WHERE s.post_id = c.post_id
+                         AND s.signal_type = 'FEATURED'
+                         AND s.signal_status = 1
+                         AND s.is_deleted = 0
+                         AND (s.comment_id = c.id OR s.root_id = c.id)
+                     ) THEN 1 ELSE 0 END AS quality_featured,
+                     CASE WHEN c.author_id = c.post_author_id THEN 1 ELSE 0 END AS quality_author
               FROM t_int_comment c
               WHERE c.post_id = #{postId}
                 AND c.root_id = 0
                 AND c.comment_status = 1
                 AND c.is_deleted = 0
-            ),
-            cursor_rank AS (
-              SELECT 0 AS rn
-              WHERE #{beforeId} IS NULL
-              UNION ALL
-              SELECT rn
-              FROM ranked
-              WHERE #{beforeId} IS NOT NULL
-                AND id = #{beforeId}
             )
             SELECT r.id, r.post_id, r.post_author_id, r.author_id, r.root_id, r.parent_id,
                    r.reply_to_uid, r.content, r.like_count, r.helpful_count,
-                   r.comment_status, r.create_time, r.update_time, r.is_deleted
+                   r.comment_status, r.create_time, r.update_time, r.is_deleted,
+                   r.quality_pinned AS qualityPinned,
+                   r.quality_featured AS qualityFeatured,
+                   r.quality_author AS qualityAuthor
             FROM ranked r
-            JOIN cursor_rank cr ON r.rn > cr.rn
-            ORDER BY r.rn
+            WHERE #{cursorId} IS NULL
+               OR r.quality_pinned < #{cursorPinned}
+               OR (r.quality_pinned = #{cursorPinned} AND r.quality_featured < #{cursorFeatured})
+               OR (r.quality_pinned = #{cursorPinned}
+                   AND r.quality_featured = #{cursorFeatured}
+                   AND r.quality_author < #{cursorAuthor})
+               OR (r.quality_pinned = #{cursorPinned}
+                   AND r.quality_featured = #{cursorFeatured}
+                   AND r.quality_author = #{cursorAuthor}
+                   AND COALESCE(r.helpful_count, 0) < #{cursorHelpful})
+               OR (r.quality_pinned = #{cursorPinned}
+                   AND r.quality_featured = #{cursorFeatured}
+                   AND r.quality_author = #{cursorAuthor}
+                   AND COALESCE(r.helpful_count, 0) = #{cursorHelpful}
+                   AND COALESCE(r.like_count, 0) < #{cursorLike})
+               OR (r.quality_pinned = #{cursorPinned}
+                   AND r.quality_featured = #{cursorFeatured}
+                   AND r.quality_author = #{cursorAuthor}
+                   AND COALESCE(r.helpful_count, 0) = #{cursorHelpful}
+                   AND COALESCE(r.like_count, 0) = #{cursorLike}
+                   AND r.create_time < #{cursorTime})
+               OR (r.quality_pinned = #{cursorPinned}
+                   AND r.quality_featured = #{cursorFeatured}
+                   AND r.quality_author = #{cursorAuthor}
+                   AND COALESCE(r.helpful_count, 0) = #{cursorHelpful}
+                   AND COALESCE(r.like_count, 0) = #{cursorLike}
+                   AND r.create_time = #{cursorTime}
+                   AND r.id < #{cursorId})
+            ORDER BY r.quality_pinned DESC,
+                     r.quality_featured DESC,
+                     r.quality_author DESC,
+                     COALESCE(r.helpful_count, 0) DESC,
+                     COALESCE(r.like_count, 0) DESC,
+                     r.create_time DESC,
+                     r.id DESC
             LIMIT #{limit}
             """)
     List<CommentPO> selectQualityRoots(@Param("postId") Long postId,
-                                       @Param("beforeId") Long beforeId,
+                                       @Param("cursorPinned") Integer cursorPinned,
+                                       @Param("cursorFeatured") Integer cursorFeatured,
+                                       @Param("cursorAuthor") Integer cursorAuthor,
+                                       @Param("cursorHelpful") Integer cursorHelpful,
+                                       @Param("cursorLike") Integer cursorLike,
+                                       @Param("cursorTime") java.time.LocalDateTime cursorTime,
+                                       @Param("cursorId") Long cursorId,
                                        @Param("limit") int limit);
 
     @Select("""

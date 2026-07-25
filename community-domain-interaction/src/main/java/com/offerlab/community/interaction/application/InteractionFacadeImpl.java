@@ -53,9 +53,11 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -76,6 +78,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
     private static final int COMMENT_REPLY_PREVIEW_LIMIT = 5;
     private static final int COMMENT_HELPFUL_REWARD_THRESHOLD = 3;
     private static final String SORT_QUALITY = "quality";
+    private static final String QUALITY_CURSOR_VERSION = "cmq1";
     private static final String SIGNAL_AUTHOR_PINNED = "AUTHOR_PINNED";
     private static final String SIGNAL_FEATURED = "FEATURED";
     private static final String SIGNAL_LOW_QUALITY_FOLDED = "LOW_QUALITY_FOLDED";
@@ -391,16 +394,23 @@ public class InteractionFacadeImpl implements InteractionFacade {
         requirePostVisible(postId, viewerUid);
         int limit = clampPageSize(size);
         boolean qualitySort = SORT_QUALITY.equalsIgnoreCase(sort == null ? "" : sort.trim());
-        Cursor parsedCursor = parseCursor(cursor);
-        LocalDateTime beforeCreateTime = parsedCursor.time();
-        Long beforeId = parsedCursor.id();
+        Cursor parsedCursor = qualitySort ? Cursor.empty() : parseCursor(cursor);
         List<CommentPO> roots;
         if (qualitySort) {
-            if (beforeCreateTime != null && beforeId == null) {
-                throw new BizException(ErrorCode.PARAM_ERROR);
-            }
-            roots = commentMapper.selectQualityRoots(postId, beforeId, limit + 1);
+            QualityCursor qualityCursor = parseQualityCursor(cursor);
+            roots = commentMapper.selectQualityRoots(
+                    postId,
+                    qualityCursor.pinned(),
+                    qualityCursor.featured(),
+                    qualityCursor.author(),
+                    qualityCursor.helpful(),
+                    qualityCursor.like(),
+                    qualityCursor.time(),
+                    qualityCursor.id(),
+                    limit + 1);
         } else {
+            LocalDateTime beforeCreateTime = parsedCursor.time();
+            Long beforeId = parsedCursor.id();
             LambdaQueryWrapper<CommentPO> q = new LambdaQueryWrapper<CommentPO>()
                     .eq(CommentPO::getPostId, postId)
                     .eq(CommentPO::getRootId, 0L)             // 仅一级
@@ -454,8 +464,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
                     return dto;
                 })
                 .toList();
-        String next = hasMore ? commentCursor(roots.get(roots.size() - 1)) : null;
-        return PageResult.of(items, next, hasMore);
+        String next = hasMore
+                ? qualitySort ? qualityCursor(roots.get(roots.size() - 1)) : commentCursor(roots.get(roots.size() - 1))
+                : null;
+        PageResult<CommentDTO> page = PageResult.of(items, next, hasMore);
+        if (qualitySort) {
+            page.withDiagnostic("qualityCursorMode", "mutable_keyset_best_effort");
+        }
+        return page;
     }
 
     @Override
@@ -1334,12 +1350,67 @@ public class InteractionFacadeImpl implements InteractionFacade {
         return dto == null ? null : timeIdCursor(dto.getCreateTime(), dto.getId());
     }
 
+    private static String qualityCursor(CommentPO po) {
+        if (po == null || po.getCreateTime() == null || po.getId() == null || po.getId() <= 0) {
+            return null;
+        }
+        int pinned = safeQuality(po.getQualityPinned());
+        int featured = safeQuality(po.getQualityFeatured());
+        int author = po.getQualityAuthor() == null
+                ? (Objects.equals(po.getAuthorId(), po.getPostAuthorId()) ? 1 : 0)
+                : safeQuality(po.getQualityAuthor());
+        long millis = po.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+        String raw = QUALITY_CURSOR_VERSION + "|" + pinned + "|" + featured + "|" + author
+                + "|" + safeInt(po.getHelpfulCount()) + "|" + safeInt(po.getLikeCount())
+                + "|" + millis + "|" + po.getId();
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
     private static String timeIdCursor(LocalDateTime createTime, Long id) {
         if (createTime == null) {
             return null;
         }
         long millis = createTime.toInstant(ZoneOffset.UTC).toEpochMilli();
         return id == null || id <= 0 ? String.valueOf(millis) : millis + ":" + id;
+    }
+
+    private static QualityCursor parseQualityCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return QualityCursor.empty();
+        }
+        String value = cursor.trim();
+        try {
+            String raw = new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
+            String canonical = Base64.getUrlEncoder()
+                    .withoutPadding()
+                    .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+            if (!canonical.equals(value)) {
+                throw new IllegalArgumentException("non-canonical quality cursor");
+            }
+            String[] parts = raw.split("\\|", -1);
+            if (parts.length != 8 || !QUALITY_CURSOR_VERSION.equals(parts[0])) {
+                throw new IllegalArgumentException("quality cursor version");
+            }
+            int pinned = parseQualityBit(parts[1], "pinned");
+            int featured = parseQualityBit(parts[2], "featured");
+            int author = parseQualityBit(parts[3], "author");
+            int helpful = parseNonNegativeInt(parts[4], "helpful");
+            int like = parseNonNegativeInt(parts[5], "like");
+            long millis = parsePositiveLong(parts[6], "time");
+            long id = parsePositiveLong(parts[7], "id");
+            return new QualityCursor(
+                    pinned,
+                    featured,
+                    author,
+                    helpful,
+                    like,
+                    LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneOffset.UTC),
+                    id);
+        } catch (RuntimeException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid quality comment cursor");
+        }
     }
 
     private static Cursor parseCursor(String cursor) {
@@ -1366,9 +1437,54 @@ public class InteractionFacadeImpl implements InteractionFacade {
         }
     }
 
+    private static int safeQuality(Integer value) {
+        return value == null || value <= 0 ? 0 : 1;
+    }
+
+    private static int safeInt(Integer value) {
+        return value == null || value < 0 ? 0 : value;
+    }
+
+    private static int parseQualityBit(String value, String label) {
+        int parsed = parseNonNegativeInt(value, label);
+        if (parsed > 1) {
+            throw new IllegalArgumentException(label + " must be 0 or 1");
+        }
+        return parsed;
+    }
+
+    private static int parseNonNegativeInt(String value, String label) {
+        if (value == null || value.isBlank() || !value.chars().allMatch(ch -> ch >= '0' && ch <= '9')) {
+            throw new IllegalArgumentException(label + " must be digits");
+        }
+        int parsed = Integer.parseInt(value);
+        if (parsed < 0) {
+            throw new IllegalArgumentException(label + " must be non-negative");
+        }
+        return parsed;
+    }
+
+    private static long parsePositiveLong(String value, String label) {
+        if (value == null || value.isBlank() || !value.chars().allMatch(ch -> ch >= '0' && ch <= '9')) {
+            throw new IllegalArgumentException(label + " must be digits");
+        }
+        long parsed = Long.parseLong(value);
+        if (parsed <= 0) {
+            throw new IllegalArgumentException(label + " must be positive");
+        }
+        return parsed;
+    }
+
     private record Cursor(LocalDateTime time, Long id) {
         private static Cursor empty() {
             return new Cursor(null, null);
+        }
+    }
+
+    private record QualityCursor(Integer pinned, Integer featured, Integer author,
+                                 Integer helpful, Integer like, LocalDateTime time, Long id) {
+        private static QualityCursor empty() {
+            return new QualityCursor(null, null, null, null, null, null, null);
         }
     }
 

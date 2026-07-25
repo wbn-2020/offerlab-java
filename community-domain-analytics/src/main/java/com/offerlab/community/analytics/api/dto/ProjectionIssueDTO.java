@@ -20,4 +20,6 @@ public class ProjectionIssueDTO {
     private String subjectId;
     private String summary;
     private LocalDateTime detectedAt;
+    private Long relatedPostId;
+    private Integer domain;
 }

@@ -135,6 +135,54 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             """)
     List<InterviewQuestionPO> selectByPostId(@Param("postId") Long postId, @Param("admin") boolean admin);
 
+    @Update("""
+            <script>
+            UPDATE t_interview_question
+            SET canonical_id = #{question.canonicalId},
+                question_text = #{question.questionText},
+                normalized_hash = #{question.normalizedHash},
+                answer_hint = #{question.answerHint},
+                exam_point = #{question.examPoint},
+                reference_answer = #{question.referenceAnswer},
+                source_snippet = #{question.sourceSnippet},
+                quality_reason = #{question.qualityReason},
+                company = #{question.company},
+                position = #{question.position},
+                interview_round = #{question.interviewRound},
+                difficulty = #{question.difficulty},
+                confidence = #{question.confidence},
+                source_author_uid = #{question.sourceAuthorUid},
+                appear_count = #{question.appearCount},
+                quality_score = #{question.qualityScore},
+                update_time = NOW(3)
+                <if test="resetToPending">
+                  , status = 0
+                </if>
+            WHERE id = #{question.id}
+              AND source_post_id = #{question.sourcePostId}
+            </script>
+            """)
+    int updateExtractedByIdAndPostId(@Param("question") InterviewQuestionPO question,
+                                     @Param("resetToPending") boolean resetToPending);
+
+    @Update("""
+            <script>
+            UPDATE t_interview_question
+            SET status = 2,
+                quality_reason = LEFT(CONCAT_WS('；', #{reason}, NULLIF(quality_reason, '')), 500),
+                update_time = NOW(3)
+            WHERE source_post_id = #{postId}
+              AND status IN (0, 1)
+              AND id IN
+              <foreach collection="questionIds" item="questionId" open="(" separator="," close=")">
+                #{questionId}
+              </foreach>
+            </script>
+            """)
+    int hideRemovedByIdsAndPostId(@Param("postId") Long postId,
+                                  @Param("questionIds") Collection<Long> questionIds,
+                                  @Param("reason") String reason);
+
     @Select("""
             SELECT COUNT(*)
             FROM t_interview_question
@@ -199,6 +247,15 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
     int updateCanonicalGroup(@Param("normalizedHash") String normalizedHash,
                              @Param("canonicalId") Long canonicalId,
                              @Param("appearCount") int appearCount);
+
+    @Update("""
+            UPDATE t_interview_question
+            SET canonical_id = NULL,
+                appear_count = 1,
+                update_time = NOW(3)
+            WHERE normalized_hash = #{normalizedHash}
+            """)
+    int clearCanonicalGroup(@Param("normalizedHash") String normalizedHash);
 
     @Select("""
             SELECT q.*
@@ -299,10 +356,13 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
 
     @Update("""
             UPDATE t_interview_question
-            SET status = 2, update_time = NOW(3)
+            SET status = 2,
+                quality_reason = LEFT(CONCAT_WS('；', #{reason}, NULLIF(quality_reason, '')), 500),
+                update_time = NOW(3)
             WHERE source_post_id = #{postId}
+              AND status IN (0, 1)
             """)
-    int hideByPostId(@Param("postId") Long postId);
+    int hideByPostId(@Param("postId") Long postId, @Param("reason") String reason);
 
     @Select("""
             SELECT company AS name, COUNT(*) AS count
@@ -657,6 +717,17 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE id = #{questionId}
             """)
     int updateStatus(@Param("questionId") Long questionId, @Param("status") int status);
+
+    @Update("""
+            UPDATE t_interview_question
+            SET status = #{status}, update_time = NOW(3)
+            WHERE id = #{questionId}
+              AND status = 0
+              AND update_time = #{expectedUpdateTime}
+            """)
+    int reviewStatusIfPendingAndCurrent(@Param("questionId") Long questionId,
+                                        @Param("status") int status,
+                                        @Param("expectedUpdateTime") LocalDateTime expectedUpdateTime);
 
     @Update("""
             <script>

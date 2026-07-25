@@ -27,4 +27,5 @@ public class PostUpdateCmd {
     private String impactScope;
     private List<Long> respondedSuggestionIds;
     private Boolean reviewRequired;
+    private Boolean keywordReviewRequired;
 }

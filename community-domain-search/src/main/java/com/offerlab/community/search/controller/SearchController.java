@@ -81,7 +81,7 @@ public class SearchController {
                                                        @RequestParam(required = false) @Size(max = 40) String freshnessStatus,
                                                        @RequestParam(required = false) Boolean resolved,
                                                        @RequestParam(required = false) Boolean sourceComplete,
-                                                       @RequestParam(required = false) @Size(max = 32) String cursor,
+                                                       @RequestParam(required = false) @Size(max = 128) String cursor,
                                                        @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
                                                        HttpServletRequest request) {
         domain = requireOptionalDomain(domain);

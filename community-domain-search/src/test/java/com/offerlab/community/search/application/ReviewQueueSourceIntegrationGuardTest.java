@@ -15,27 +15,37 @@ class ReviewQueueSourceIntegrationGuardTest {
     void legacyReviewSourcesMustPublishAndResolveUnifiedQueueItems() throws Exception {
         String command = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueueItemCommand.java");
         String event = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueueUpsertRequestedEvent.java");
+        String reopenEvent = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueueReopenRequestedEvent.java");
         String publisher = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueuePublisher.java");
+        String actionHandler = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/ReviewQueueSourceActionHandler.java");
         String noop = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/review/NoopReviewQueuePublisher.java");
         String service = read("src/main/java/com/offerlab/community/search/application/ReviewQueueService.java");
         String eventListener = read("src/main/java/com/offerlab/community/search/application/ReviewQueueUpsertRequestedEventListener.java");
+        String reopenEventListener = read("src/main/java/com/offerlab/community/search/application/ReviewQueueReopenRequestedEventListener.java");
         String mapper = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/mapper/ReviewQueueMapper.java");
         String postReport = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostReportService.java");
         String commentReport = read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/application/CommentReportService.java");
         String moderation = read("../community-infrastructure/src/main/java/com/offerlab/community/infra/moderation/ContentModerationService.java");
+        String postApplication = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostApplicationService.java");
         String questionFacade = read("../community-domain-question/src/main/java/com/offerlab/community/question/application/QuestionFacadeImpl.java");
 
         assertTrue(command.contains("record ReviewQueueItemCommand"), "legacy sources must share a typed review queue command");
         assertTrue(event.contains("record ReviewQueueUpsertRequestedEvent"), "infrastructure moderation must cross the domain boundary through an event");
+        assertTrue(reopenEvent.contains("record ReviewQueueReopenRequestedEvent"), "reopened sources must cross the domain boundary through an event");
         assertTrue(publisher.contains("void upsert(ReviewQueueItemCommand command)"), "publisher must expose source upsert");
         assertTrue(publisher.contains("void resolve(String sourceType, Long sourceId"), "publisher must expose source resolve");
+        assertTrue(actionHandler.contains("Long operatorUid, String extJson"),
+                "source actions must receive queue metadata for optimistic source-version checks");
         assertTrue(noop.contains("@ConditionalOnMissingBean(ReviewQueuePublisher.class)"), "domain modules must have a no-op fallback outside the search module");
 
         assertTrue(service.contains("implements ReviewQueuePublisher"), "search review queue service must implement the shared publisher");
         assertTrue(eventListener.contains("reviewQueueService.upsert(event.command())"), "search must consume moderation queue events");
+        assertTrue(reopenEventListener.contains("reviewQueueService.reopen(event.command())"), "search must consume queue reopen events");
         assertTrue(service.contains("@Primary"), "real queue publisher must win over the no-op fallback when search module is present");
         assertTrue(service.contains("upsertInternal"), "manual and source-created items must share queue creation logic");
         assertTrue(service.contains("resolveSourceRequired"), "operator-triggered source resolution must have a fail-closed path");
+        assertTrue(service.contains("operatorUid, item.getExtJson()"),
+                "queue actions must forward source metadata to their handler");
         assertTrue(service.contains("operatorUid != null"), "source resolution must distinguish operator-triggered changes from system sync");
         assertTrue(service.contains("auditService.recordRequired(operatorUid, \"REVIEW_QUEUE_SOURCE_RESOLVE\""),
                 "operator-triggered source resolution must use required audit");
@@ -60,6 +70,10 @@ class ReviewQueueSourceIntegrationGuardTest {
                 "moderation review hits must be delivered through the event boundary");
         assertFalse(moderation.contains("private final ReviewQueuePublisher"),
                 "moderation must not directly depend on the search queue publisher and recreate a bean cycle");
+        assertTrue(postApplication.contains("new ReviewQueueReopenRequestedEvent"),
+                "post policy review must reopen its queue through the event boundary");
+        assertFalse(postApplication.contains("private final ReviewQueuePublisher"),
+                "post publishing must not directly depend on the search queue publisher and recreate a bean cycle");
 
         assertTrue(questionFacade.contains("\"QUESTION_PENDING\""), "pending questions must publish QUESTION_PENDING queue items");
         assertTrue(questionFacade.contains("publishPendingQuestionQueueItem(po)"), "question extraction must enqueue pending questions");

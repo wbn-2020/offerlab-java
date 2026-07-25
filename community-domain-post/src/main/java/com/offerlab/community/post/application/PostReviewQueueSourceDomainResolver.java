@@ -18,6 +18,7 @@ public class PostReviewQueueSourceDomainResolver implements ReviewQueueSourceDom
 
     private static final String SOURCE_POST_REPORT = "POST_REPORT";
     private static final String SOURCE_MODERATION_HIT = "MODERATION_HIT";
+    private static final String SOURCE_POST_PENDING_REVIEW = "POST_PENDING_REVIEW";
 
     private final PostReportMapper postReportMapper;
     private final PostRepository postRepository;
@@ -26,7 +27,9 @@ public class PostReviewQueueSourceDomainResolver implements ReviewQueueSourceDom
     @Override
     public boolean supports(String sourceType) {
         String normalized = normalize(sourceType);
-        return SOURCE_POST_REPORT.equals(normalized) || SOURCE_MODERATION_HIT.equals(normalized);
+        return SOURCE_POST_REPORT.equals(normalized)
+                || SOURCE_MODERATION_HIT.equals(normalized)
+                || SOURCE_POST_PENDING_REVIEW.equals(normalized);
     }
 
     @Override
@@ -37,6 +40,7 @@ public class PostReviewQueueSourceDomainResolver implements ReviewQueueSourceDom
         return switch (normalize(sourceType)) {
             case SOURCE_POST_REPORT -> resolvePostReportDomain(sourceId);
             case SOURCE_MODERATION_HIT -> resolvePostModerationHitDomain(sourceId);
+            case SOURCE_POST_PENDING_REVIEW -> resolvePostDomain(sourceId);
             default -> null;
         };
     }

@@ -226,12 +226,13 @@ class CrossDomainRecommendationFacadeTest {
         }
 
         @Override public PostDTO getPost(Long postId) { throw unsupported(); }
+        @Override public PostDTO getPostMetadata(Long postId) { return getPost(postId); }
         @Override public PostDTO getPost(Long postId, Long viewerUid) { throw unsupported(); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) { throw unsupported(); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) { throw unsupported(); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid, boolean includeTestData) { throw unsupported(); }
         @Override public Long publishPost(PostCreateCmd cmd) { throw unsupported(); }
-        @Override public void updatePost(PostUpdateCmd cmd) { throw unsupported(); }
+        @Override public boolean updatePost(PostUpdateCmd cmd) { throw unsupported(); }
         @Override public void deletePost(Long postId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getLatest(long cursor, int size) { throw unsupported(); }

@@ -158,7 +158,7 @@ class SearchFacadeVisibilityTest {
                 {"company":"\u5B57\u8282\u8DF3\u52A8","position":"Java \u540E\u7AEF"}
                 """);
 
-        when(postMapper.searchPublicPostsFallback(eq("Kafka"), isNull(), any(), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq("Kafka"), isNull(), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of(extension));
         when(tagMapper.selectTagsByPostIds(List.of(201L))).thenReturn(List.of());
@@ -191,7 +191,7 @@ class SearchFacadeVisibilityTest {
         post.setContent("公开帖子已经写入主库，ES 搜索不可见时 API 也要通过 MySQL fallback 找到。");
         post.setCreateTime(LocalDateTime.now());
 
-        when(postMapper.searchPublicPostsFallback(eq(probe), isNull(), any(), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq(probe), isNull(), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(202L))).thenReturn(List.of());
@@ -217,7 +217,7 @@ class SearchFacadeVisibilityTest {
         PostPO post = post(203L, 23L, "Payment rollout for " + keyword, LocalDateTime.now());
         post.setPostType(10);
 
-        when(postMapper.searchPublicPostsFallback(eq(keyword), isNull(), any(), any(), eq(10), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq(keyword), isNull(), any(), any(), eq(10), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(203L))).thenReturn(List.of());
@@ -254,7 +254,7 @@ class SearchFacadeVisibilityTest {
                 post(402L, 42L, "Visible Java fallback 2", now.minusMinutes(1)),
                 post(403L, 43L, "Visible Java fallback 3", now.minusMinutes(2))
         );
-        when(postMapper.searchPublicPostsFallback(eq("Java"), isNull(), any(), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq("Java"), isNull(), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(mysqlPosts);
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(any())).thenReturn(List.of());
@@ -282,7 +282,7 @@ class SearchFacadeVisibilityTest {
         PostPO post = post(501L, 51L, keyword + " Java offer replay", LocalDateTime.now());
         post.setContent("Synthetic CODEX-E2E verification content.");
 
-        when(postMapper.searchPublicPostsFallback(eq(keyword), isNull(), any(), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq(keyword), isNull(), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(501L))).thenReturn(List.of());
@@ -304,7 +304,7 @@ class SearchFacadeVisibilityTest {
     void numericPostIdKeywordCanRecallExactMysqlPost() {
         PostPO post = post(909L, 90L, "Type 10 search diagnostics", LocalDateTime.now());
 
-        when(postMapper.searchPublicPostsFallback(eq("909"), eq(909L), any(), any(), any(), any(), any(), anyInt()))
+        when(postMapper.searchPublicPostsFallback(eq("909"), eq(909L), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of(post));
         when(extensionMapper.selectBatchIds(any())).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(909L))).thenReturn(List.of());

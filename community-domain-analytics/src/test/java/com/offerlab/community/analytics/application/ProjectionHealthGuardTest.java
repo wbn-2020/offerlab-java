@@ -39,6 +39,10 @@ class ProjectionHealthGuardTest {
                 "src/main/java/com/offerlab/community/analytics/application/ProjectionHealthService.java");
         String mapper = read(
                 "src/main/java/com/offerlab/community/analytics/infrastructure/persistence/mapper/ProjectionHealthMapper.java");
+        String issueDto = read(
+                "src/main/java/com/offerlab/community/analytics/api/dto/ProjectionIssueDTO.java");
+        String rows = read(
+                "src/main/java/com/offerlab/community/analytics/infrastructure/persistence/ProjectionHealthRows.java");
         String freshnessHealthSql = selectSql(mapper, "selectFreshnessAttentionHealth");
         String freshnessIssueSql = selectSql(mapper, "listFreshnessAttentionIssues");
         String[] knowledgeIssueMethods = {
@@ -93,6 +97,18 @@ class ProjectionHealthGuardTest {
                 ".filter(source -> !FRESHNESS_ATTENTION.equals(source.source()))"));
         assertTrue(service.contains("SOURCE_ERROR"));
         assertTrue(service.contains(".repairMode(\"DIAGNOSIS_ONLY\")"));
+        assertTrue(service.contains(".relatedPostId(row.getRelatedPostId())"));
+        assertTrue(service.contains(".domain(row.getDomain())"));
+        assertTrue(service.contains(
+                "Set.of(\"t_int_content_suggestion\", \"t_post_main\", \"t_post_extension\")"));
+        assertTrue(service.contains(
+                "Set.of(\"t_post_reference\", \"t_post_main\", \"t_post_extension\")"));
+        assertTrue(service.contains(
+                "Set.of(\"t_int_post_outcome\", \"t_post_main\", \"t_post_extension\")"));
+        assertTrue(issueDto.contains("private Long relatedPostId;"));
+        assertTrue(issueDto.contains("private Integer domain;"));
+        assertTrue(rows.contains("private Long relatedPostId;"));
+        assertTrue(rows.contains("private Integer domain;"));
         assertTrue(mapper.contains("LIMIT #{cap}"));
         assertTrue(mapper.contains("ORDER BY"));
         assertTrue(mapper.contains("t_admin_audit_log"));
@@ -110,6 +126,8 @@ class ProjectionHealthGuardTest {
         assertTrue(mapper.contains("selectDueOutcomeRevisitHealth"));
         assertTrue(mapper.contains("follow_up_at <= CURRENT_TIMESTAMP(3)"));
         assertTrue(mapper.contains("'t_int_post_trust_state'"));
+        assertTrue(selectSql(mapper, "selectExistingProjectionTables")
+                .contains("'t_post_extension'"));
         assertTrue(mapper.contains("selectFreshnessAttentionHealth"));
         assertTrue(mapper.contains("listFreshnessAttentionIssues"));
         for (String method : knowledgeIssueMethods) {
@@ -122,23 +140,27 @@ class ProjectionHealthGuardTest {
         assertKnowledgeSourceSql(
                 mapper,
                 "listPendingSuggestionIssues",
-                "id",
+                "t_int_content_suggestion.id",
                 "t_int_content_suggestion",
-                List.of("resolution = 'PENDING'"),
+                List.of("t_int_content_suggestion.resolution = 'PENDING'"),
                 Set.of("CONTENT_SUGGESTION_PENDING"));
         assertKnowledgeSourceSql(
                 mapper,
                 "listBrokenReferenceIssues",
-                "id",
+                "t_post_reference.id",
                 "t_post_reference",
-                List.of("reference_status = 'BROKEN'", "is_deleted = 0"),
+                List.of(
+                        "t_post_reference.reference_status = 'BROKEN'",
+                        "t_post_reference.is_deleted = 0"),
                 Set.of("POST_REFERENCE_BROKEN"));
         assertKnowledgeSourceSql(
                 mapper,
                 "listPendingKnowledgeRelationIssues",
-                "id",
+                "t_post_knowledge_relation.id",
                 "t_post_knowledge_relation",
-                List.of("review_status = 'PENDING'", "is_deleted = 0"),
+                List.of(
+                        "t_post_knowledge_relation.review_status = 'PENDING'",
+                        "t_post_knowledge_relation.is_deleted = 0"),
                 Set.of("KNOWLEDGE_RELATION_PENDING"));
         assertKnowledgeSourceSql(
                 mapper,
@@ -153,11 +175,11 @@ class ProjectionHealthGuardTest {
         assertKnowledgeSourceSql(
                 mapper,
                 "listDueOutcomeRevisitIssues",
-                "id",
+                "t_int_post_outcome.id",
                 "t_int_post_outcome",
                 List.of(
-                        "outcome_status = 'ACTIVE'",
-                        "follow_up_at <= CURRENT_TIMESTAMP(3)"),
+                        "t_int_post_outcome.outcome_status = 'ACTIVE'",
+                        "t_int_post_outcome.follow_up_at <= CURRENT_TIMESTAMP(3)"),
                 Set.of("POST_OUTCOME_REVISIT_DUE"));
         assertKnowledgeSourceSql(
                 mapper,
@@ -172,6 +194,49 @@ class ProjectionHealthGuardTest {
                 Set.of(
                         "POST_FRESHNESS_POSSIBLY_STALE",
                         "POST_FRESHNESS_AWAITING_CONFIRMATION"));
+        assertKnowledgeEligibleContextSql(
+                mapper,
+                "listPendingSuggestionIssues",
+                "t_int_content_suggestion.post_id",
+                "host_post");
+        assertKnowledgeEligibleContextSql(
+                mapper,
+                "listBrokenReferenceIssues",
+                "t_post_reference.post_id",
+                "host_post");
+        assertTrue(selectSql(mapper, "listBrokenReferenceIssues")
+                .contains("t_post_reference.update_time AS detectedAt"));
+        assertKnowledgeEligibleContextSql(
+                mapper,
+                "listPendingKnowledgeRelationIssues",
+                "t_post_knowledge_relation.source_post_id",
+                "host_post");
+        assertKnowledgeEligibleContextSql(
+                mapper,
+                "listInvalidPublicRelationTargetIssues",
+                "relation.source_post_id",
+                "source_post");
+        assertKnowledgeEligibleContextSql(
+                mapper,
+                "listDueOutcomeRevisitIssues",
+                "t_int_post_outcome.post_id",
+                "host_post");
+        assertKnowledgeContextSql(
+                mapper,
+                "listFreshnessAttentionIssues",
+                "state.post_id");
+        assertFalse(selectSql(mapper, "selectPendingSuggestionHealth")
+                .contains("t_post_extension"));
+        assertFalse(selectSql(mapper, "selectBrokenReferenceHealth")
+                .contains("t_post_extension"));
+        assertFalse(selectSql(mapper, "selectPendingKnowledgeRelationHealth")
+                .contains("t_post_extension"));
+        assertFalse(selectSql(mapper, "selectInvalidPublicRelationTargetHealth")
+                .contains("t_post_extension"));
+        assertFalse(selectSql(mapper, "selectDueOutcomeRevisitHealth")
+                .contains("t_post_extension"));
+        assertFalse(selectSql(mapper, "selectFreshnessAttentionHealth")
+                .contains("t_post_extension"));
         assertTrue(mapper.contains("'CONTENT_SUGGESTION_PENDING'"));
         assertTrue(mapper.contains("'POST_REFERENCE_BROKEN'"));
         assertTrue(mapper.contains("'KNOWLEDGE_RELATION_PENDING'"));
@@ -233,6 +298,44 @@ class ProjectionHealthGuardTest {
                     sql.contains("'" + issueType + "'"),
                     methodName + " has an unexpected issueType mapping for " + issueType);
         }
+    }
+
+    private static void assertKnowledgeContextSql(
+            String mapper,
+            String methodName,
+            String hostPostExpression) {
+        String sql = selectSql(mapper, methodName);
+        assertTrue(sql.contains("AS relatedPostId"),
+                methodName + " must expose the owning post id");
+        assertTrue(sql.contains("ext.domain AS domain"),
+                methodName + " must expose the owning post domain");
+        assertTrue(sql.contains("LEFT JOIN t_post_extension ext"),
+                methodName + " must preserve rows without an extension");
+        assertTrue(sql.contains("ext.post_id = " + hostPostExpression),
+                methodName + " must join the extension by the owning post");
+    }
+
+    private static void assertKnowledgeEligibleContextSql(
+            String mapper,
+            String methodName,
+            String hostPostExpression,
+            String hostAlias) {
+        String sql = selectSql(mapper, methodName);
+        assertKnowledgeContextSql(mapper, methodName, hostPostExpression);
+        assertTrue(sql.contains("LEFT JOIN t_post_main " + hostAlias),
+                methodName + " must preserve issues whose host post is unavailable");
+        assertTrue(sql.contains(hostAlias + ".id = " + hostPostExpression),
+                methodName + " must resolve the owning host post");
+        assertTrue(sql.contains("WHEN " + hostAlias + ".id IS NOT NULL"),
+                methodName + " must only expose a resolved host post");
+        assertTrue(sql.contains(hostAlias + ".is_deleted = 0"),
+                methodName + " must reject deleted host posts");
+        assertTrue(sql.contains(hostAlias + ".post_status = 1"),
+                methodName + " must reject unpublished host posts");
+        assertTrue(sql.contains(hostAlias + ".visibility = 1"),
+                methodName + " must reject non-public host posts");
+        assertTrue(sql.contains("THEN " + hostPostExpression),
+                methodName + " must expose the eligible host post id");
     }
 
     private static <A extends Annotation> A parameterAnnotation(

@@ -8,6 +8,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostReportPO;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -141,6 +142,12 @@ class PostReportServiceBatchLookupTest {
 
         @Override
         public List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
+                                            LocalDateTime cursorTime, Long cursorId, int size) {
             throw new UnsupportedOperationException();
         }
     }

@@ -1,5 +1,6 @@
 package com.offerlab.community.question.application;
 
+import com.offerlab.community.post.api.event.PostDeletedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PostUpdatedEvent;
 import com.offerlab.community.post.api.dto.PostDTO;
@@ -33,6 +34,15 @@ public class PostQuestionEventListener {
             questionFacade.evictQuestionCachesForPost(postFacade.getPost(event.getPostId()));
         } catch (Exception e) {
             log.warn("post question extraction skipped after update: postId={}", event.getPostId(), e);
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPostDeleted(PostDeletedEvent event) {
+        try {
+            questionFacade.hidePostQuestions(event.getPostId());
+        } catch (Exception e) {
+            log.warn("post question hiding skipped after delete: postId={}", event.getPostId(), e);
         }
     }
 }

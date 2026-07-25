@@ -83,6 +83,35 @@ public interface NotificationMessageMapper extends BaseMapper<NotificationMessag
 
     @Select("""
             <script>
+            SELECT w.window_key AS windowKey,
+                   COUNT(m.id) AS aggregateCount,
+                   COALESCE(SUM(CASE WHEN m.is_read = 0 THEN 1 ELSE 0 END), 0) AS unreadCount
+            FROM (
+              <foreach collection="windows" item="window" separator=" UNION ALL ">
+              SELECT #{window.windowKey} AS window_key,
+                     #{window.notifType} AS notif_type,
+                     #{window.targetType} AS target_type,
+                     #{window.targetId} AS target_id,
+                     #{window.windowStart} AS window_start,
+                     #{window.windowEnd} AS window_end
+              </foreach>
+            ) w
+            LEFT JOIN t_notif_message m
+              ON m.receiver_uid = #{uid}
+             AND m.is_deleted = 0
+             AND m.notif_type = w.notif_type
+             AND m.target_type &lt;=&gt; w.target_type
+             AND m.target_id &lt;=&gt; w.target_id
+             AND m.create_time &gt;= w.window_start
+             AND m.create_time &lt;= w.window_end
+            GROUP BY w.window_key
+            </script>
+            """)
+    List<java.util.Map<String, Object>> countAggregateWindows(@Param("uid") Long uid,
+                                                               @Param("windows") List<NotificationAggregateWindow> windows);
+
+    @Select("""
+            <script>
             SELECT id, receiver_uid, sender_uid, notif_type, target_type, target_id,
                    content_json, dedup_key, is_read, create_time, is_deleted
             FROM t_notif_message

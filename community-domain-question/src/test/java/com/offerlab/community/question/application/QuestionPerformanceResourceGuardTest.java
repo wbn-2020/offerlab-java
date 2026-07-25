@@ -25,10 +25,10 @@ class QuestionPerformanceResourceGuardTest {
         String facade = read("src/main/java/com/offerlab/community/question/application/QuestionFacadeImpl.java");
 
         assertTrue(facade.contains("scheduleQuestionIndexes"));
-        assertTrue(facade.contains("scheduleQuestionDeletes"));
         assertTrue(facade.contains("afterCommit.execute(() -> ids.forEach(questionSearchIndexer::indexQuestion)"));
-        assertTrue(facade.contains("afterCommit.execute(() -> ids.forEach(questionSearchIndexer::deleteQuestion)"));
-        assertFalse(facade.contains("oldQuestionIds.forEach(questionSearchIndexer::deleteQuestion)"));
+        assertTrue(facade.contains("hideRemovedByIdsAndPostId"));
+        assertTrue(facade.contains("scheduleQuestionIndexes(removedQuestionIds"));
+        assertFalse(facade.contains("questionSearchIndexer::deleteQuestion"));
         assertTrue(facade.contains("safePageOffset(page, pageSize, MAX_PUBLIC_QUESTION_OFFSET)"));
         assertTrue(facade.contains("safePageOffset(safePage, safePageSize, MAX_ADMIN_QUESTION_OFFSET)"));
     }

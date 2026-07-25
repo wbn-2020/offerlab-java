@@ -11,6 +11,7 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
 import com.offerlab.community.post.application.PostApplicationService;
+import com.offerlab.community.post.application.DomainConfigService;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostFeaturedService;
@@ -58,6 +59,8 @@ class PostControllerApiTest {
     @Mock
     private PostDraftService draftService;
     @Mock
+    private DomainConfigService domainConfigService;
+    @Mock
     private DomainModeratorService domainModeratorService;
     @Mock
     private AdminPermissionService adminPermissionService;
@@ -76,7 +79,7 @@ class PostControllerApiTest {
     void setUp() {
         mvc = ApiTestSupport.mvc(
                 new PostController(postFacade, postService, reportService, featuredService, knowledgeReviewService,
-                        draftService, domainModeratorService, adminPermissionService, contentModerationService,
+                        draftService, domainConfigService, domainModeratorService, adminPermissionService, contentModerationService,
                         idGenerator, applicationEventPublisher),
                 jwtService);
     }
@@ -139,6 +142,29 @@ class PostControllerApiTest {
         verify(postFacade).getPost(102L, 7L);
         verify(postService).incrView(102L);
         verifyNoInteractions(applicationEventPublisher);
+    }
+
+    @Test
+    void domainModeratorCanLoadReviewingPostPreviewWithoutPublicVisibility() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(postFacade.getPostMetadata(103L)).thenReturn(PostDTO.builder()
+                .id(103L)
+                .authorId(9L)
+                .title("reviewing post")
+                .content("full reviewing content")
+                .domain(Post.DOMAIN_INVESTMENT)
+                .postStatus(Post.STATUS_REVIEWING)
+                .build());
+
+        mvc.perform(get("/api/v1/posts/admin/review-preview/103")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(103))
+                .andExpect(jsonPath("$.data.content").value("full reviewing content"));
+
+        verify(postFacade).getPostMetadata(103L);
+        verify(domainModeratorService).requireModerateDomain(7L, Post.DOMAIN_INVESTMENT);
+        verifyNoInteractions(postService);
     }
 
     @Test

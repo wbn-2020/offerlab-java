@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
@@ -174,8 +175,8 @@ class InteractionFacadeVisibilityTest {
         List<CommentPO> qualityRankedRoots = List.of(root, newestRegularRoot, middleRegularRoot);
         when(postFacade.getPost(100L, 10L)).thenReturn(PostDTO.builder().id(100L).authorId(10L).build());
         when(commentMapper.selectList(any())).thenReturn(List.of(root), List.of());
-        when(commentMapper.selectQualityRoots(100L, null, 3)).thenReturn(qualityRankedRoots);
-        when(commentMapper.selectQualityRoots(100L, 3L, 3)).thenReturn(List.of(middleRegularRoot));
+        when(commentMapper.selectQualityRoots(eq(100L), any(), any(), any(), any(), any(), any(), any(), eq(3)))
+                .thenReturn(qualityRankedRoots, List.of(middleRegularRoot));
         when(commentMapper.selectById(1L)).thenReturn(root);
         when(commentMapper.selectById(2L)).thenReturn(reply);
         when(commentMapper.countRepliesByRootIds(100L, List.of(1L)))
@@ -202,8 +203,7 @@ class InteractionFacadeVisibilityTest {
         assertEquals(List.of(1L, 3L), firstQualityPage.getItems().stream().map(CommentDTO::getId).toList());
         assertEquals(List.of(4L), secondQualityPage.getItems().stream().map(CommentDTO::getId).toList());
         verify(postFacade, times(5)).getPost(100L, 10L);
-        verify(commentMapper).selectQualityRoots(100L, null, 3);
-        verify(commentMapper).selectQualityRoots(100L, 3L, 3);
+        verify(commentMapper, times(2)).selectQualityRoots(eq(100L), any(), any(), any(), any(), any(), any(), any(), eq(3));
         verify(commentMapper, atLeastOnce()).selectList(any());
     }
 }

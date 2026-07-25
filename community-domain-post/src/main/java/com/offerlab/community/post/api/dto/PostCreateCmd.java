@@ -38,4 +38,5 @@ public class PostCreateCmd {
     private List<Long> tagIds;
     private List<String> tagNames;
     private Boolean reviewRequired;
+    private Boolean keywordReviewRequired;
 }

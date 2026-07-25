@@ -24,6 +24,7 @@ import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
+import com.offerlab.community.post.application.DomainConfigService;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
@@ -70,6 +71,7 @@ public class PostController {
     private final PostFeaturedService featuredService;
     private final PostKnowledgeReviewService knowledgeReviewService;
     private final PostDraftService draftService;
+    private final DomainConfigService domainConfigService;
     private final DomainModeratorService domainModeratorService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
@@ -114,6 +116,8 @@ public class PostController {
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
                 uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, id,
                 req.getTitle(), req.getContent());
+        boolean reviewRequired = moderationDecision.reviewRequired()
+                || domainConfigService.reviewRequiredForPublish(domain);
         postFacade.publishPost(PostCreateCmd.builder()
                 .postId(id)
                 .authorId(uid)
@@ -127,10 +131,11 @@ public class PostController {
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
                 .anonymous(req.getAnonymous())
-                .reviewRequired(moderationDecision.reviewRequired())
+                .reviewRequired(reviewRequired)
+                .keywordReviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
-        return Result.ok(Map.of("postId", id, "reviewRequired", moderationDecision.reviewRequired()));
+        return Result.ok(Map.of("postId", id, "reviewRequired", reviewRequired));
     }
 
     @PutMapping("/{postId}")
@@ -147,7 +152,7 @@ public class PostController {
                 uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, postId,
                 req.getTitle(), req.getContent());
         // 更新后只返回成功状态；详情接口会按可见性重新拉取，避免私密帖被匿名视角误判为空。
-        postFacade.updatePost(PostUpdateCmd.builder()
+        boolean reviewRequired = postFacade.updatePost(PostUpdateCmd.builder()
                 .postId(postId)
                 .operatorUid(uid)
                 .title(req.getTitle())
@@ -163,9 +168,10 @@ public class PostController {
                 .impactScope(req.getImpactScope())
                 .respondedSuggestionIds(req.getRespondedSuggestionIds())
                 .reviewRequired(moderationDecision.reviewRequired())
+                .keywordReviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
-        return Result.ok(Map.of("postId", postId, "reviewRequired", moderationDecision.reviewRequired()));
+        return Result.ok(Map.of("postId", postId, "reviewRequired", reviewRequired));
     }
 
     @DeleteMapping("/{postId}")
@@ -282,6 +288,18 @@ public class PostController {
                                                       @Valid @RequestBody FeaturedReq req) {
         Long uid = UserContext.require();
         return Result.ok(featuredService.updateFeatured(postId, Boolean.TRUE.equals(req.getFeatured()), uid, req.getNote()));
+    }
+
+    @GetMapping("/admin/review-preview/{postId}")
+    @RateLimit(key = "'post:review-preview:' + #postId", rate = 120, per = 60, failOpen = false)
+    public Result<PostDTO> getReviewPreview(@PathVariable @Positive Long postId) {
+        Long uid = UserContext.require();
+        PostDTO post = postFacade.getPostMetadata(postId);
+        if (post == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        domainModeratorService.requireModerateDomain(uid, post.getDomain());
+        return Result.ok(post);
     }
 
     @PostMapping("/admin/knowledge/{postId}/review")

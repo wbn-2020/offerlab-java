@@ -505,7 +505,7 @@ public class ProjectionHealthService {
         readKnowledgeLifecycleIssues(
                 PENDING_SUGGESTIONS,
                 sourceOrder(PENDING_SUGGESTIONS),
-                Set.of("t_int_content_suggestion"),
+                Set.of("t_int_content_suggestion", "t_post_main", "t_post_extension"),
                 existingTables,
                 () -> mapper.listPendingSuggestionIssues(
                         cursor.issueId(),
@@ -516,7 +516,7 @@ public class ProjectionHealthService {
         readKnowledgeLifecycleIssues(
                 BROKEN_REFERENCES,
                 sourceOrder(BROKEN_REFERENCES),
-                Set.of("t_post_reference"),
+                Set.of("t_post_reference", "t_post_main", "t_post_extension"),
                 existingTables,
                 () -> mapper.listBrokenReferenceIssues(
                         cursor.issueId(),
@@ -527,7 +527,7 @@ public class ProjectionHealthService {
         readKnowledgeLifecycleIssues(
                 PENDING_RELATIONS,
                 sourceOrder(PENDING_RELATIONS),
-                Set.of("t_post_knowledge_relation"),
+                Set.of("t_post_knowledge_relation", "t_post_main", "t_post_extension"),
                 existingTables,
                 () -> mapper.listPendingKnowledgeRelationIssues(
                         cursor.issueId(),
@@ -538,7 +538,7 @@ public class ProjectionHealthService {
         readKnowledgeLifecycleIssues(
                 INVALID_PUBLIC_RELATION_TARGETS,
                 sourceOrder(INVALID_PUBLIC_RELATION_TARGETS),
-                Set.of("t_post_knowledge_relation", "t_post_main"),
+                Set.of("t_post_knowledge_relation", "t_post_main", "t_post_extension"),
                 existingTables,
                 () -> mapper.listInvalidPublicRelationTargetIssues(
                         cursor.issueId(),
@@ -549,7 +549,7 @@ public class ProjectionHealthService {
         readKnowledgeLifecycleIssues(
                 DUE_OUTCOME_REVISITS,
                 sourceOrder(DUE_OUTCOME_REVISITS),
-                Set.of("t_int_post_outcome"),
+                Set.of("t_int_post_outcome", "t_post_main", "t_post_extension"),
                 existingTables,
                 () -> mapper.listDueOutcomeRevisitIssues(
                         cursor.issueId(),
@@ -560,7 +560,7 @@ public class ProjectionHealthService {
         readKnowledgeLifecycleIssues(
                 FRESHNESS_ATTENTION,
                 sourceOrder(FRESHNESS_ATTENTION),
-                Set.of("t_int_post_trust_state", "t_post_main"),
+                Set.of("t_int_post_trust_state", "t_post_main", "t_post_extension"),
                 existingTables,
                 () -> mapper.listFreshnessAttentionIssues(
                         cursor.issueId(),
@@ -882,6 +882,8 @@ public class ProjectionHealthService {
                 .subjectId(row.getSubjectId())
                 .summary(row.getSummary())
                 .detectedAt(row.getDetectedAt())
+                .relatedPostId(row.getRelatedPostId())
+                .domain(row.getDomain())
                 .build();
     }
 

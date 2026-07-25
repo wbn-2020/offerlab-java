@@ -287,7 +287,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
         String sourceType = item.getSourceType();
         for (ReviewQueueSourceActionHandler handler : sourceActionHandlers) {
             if (handler.supports(sourceType)) {
-                handler.handle(sourceType, item.getSourceId(), status, result, note, operatorUid);
+                handler.handle(sourceType, item.getSourceId(), status, result, note, operatorUid, item.getExtJson());
             }
         }
     }

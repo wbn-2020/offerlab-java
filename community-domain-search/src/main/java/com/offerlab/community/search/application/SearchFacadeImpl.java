@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.utils.CursorUtils;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PublicContentFilter;
@@ -49,6 +50,7 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private static final int SUMMARY_LEN = 120;
     private static final int MYSQL_FALLBACK_MAX_SCAN = 200;
+    private static final String SEARCH_CURSOR_VERSION = "sr1";
 
     private final PostMapper postMapper;
     private final PostExtensionMapper extensionMapper;
@@ -96,7 +98,7 @@ public class SearchFacadeImpl implements SearchFacade {
         SearchTrustFilter normalizedTrustFilter = trustFilter == null ? SearchTrustFilter.empty() : trustFilter;
         boolean trustedSort = "trusted".equals(normalizedSort);
         boolean trustConstrained = trustedSort || normalizedTrustFilter.active();
-        boolean firstPage = trustedSort ? trustedOffset(cursor) == 0 : parseCursor(cursor) <= 0;
+        boolean firstPage = trustedSort ? trustedOffset(cursor) == 0 : !parseSearchCursor(cursor).present();
         if (trustConstrained && !migrationCheckService.trustedDistributionReady()) {
             PageResult<PostBriefDTO> unavailable = withSearchMetadata(
                     PageResult.empty(),
@@ -279,7 +281,7 @@ public class SearchFacadeImpl implements SearchFacade {
                                                                     boolean includeTestData) {
         int scanLimit = elasticsearchScanLimit(limit);
         Map<String, Object> body = new HashMap<>();
-        body.put("query", buildEsQuery(keyword, company, position, type, domain, cursor));
+        body.put("query", buildEsQuery(keyword, company, position, type, domain, parseSearchCursor(cursor)));
         body.put("sort", buildEsSort(sort));
         body.put("highlight", Map.of(
                 "pre_tags", List.of("<em>"),
@@ -299,14 +301,14 @@ public class SearchFacadeImpl implements SearchFacade {
             return List.of(
                     Map.of("_score", Map.of("order", "desc")),
                     Map.of("createTime", Map.of("order", "desc")),
-                    Map.of("id", Map.of("order", "asc"))
+                    Map.of("id", Map.of("order", "desc"))
             );
         }
-        return List.of(Map.of("createTime", Map.of("order", "desc")), Map.of("id", Map.of("order", "asc")));
+        return List.of(Map.of("createTime", Map.of("order", "desc")), Map.of("id", Map.of("order", "desc")));
     }
 
     private Map<String, Object> buildEsQuery(String keyword, String company, String position, Integer type,
-                                             Integer domain, String cursor) {
+                                             Integer domain, SearchCursor cursor) {
         List<Object> must = new ArrayList<>();
         List<Object> filter = new ArrayList<>();
         String kw = clean(keyword);
@@ -352,9 +354,17 @@ public class SearchFacadeImpl implements SearchFacade {
                     Map.of("match_phrase", Map.of("tagSearchTerms", clean(position)))
             ), "minimum_should_match", 1)));
         }
-        long c = parseCursor(cursor);
-        if (c > 0) {
-            filter.add(Map.of("range", Map.of("createTime", Map.of("lt", c))));
+        if (cursor.present()) {
+            filter.add(Map.of("bool", Map.of(
+                    "should", List.of(
+                            Map.of("range", Map.of("createTime", Map.of("lt", cursor.millis()))),
+                            Map.of("bool", Map.of("filter", List.of(
+                                    Map.of("term", Map.of("createTime", cursor.millis())),
+                                    Map.of("range", Map.of("id", Map.of("lt", cursor.id())))
+                            )))
+                    ),
+                    "minimum_should_match", 1
+            )));
         }
         return Map.of("bool", Map.of("must", must, "filter", filter));
     }
@@ -391,9 +401,7 @@ public class SearchFacadeImpl implements SearchFacade {
         boolean hasMore = visibleItems.size() > limit;
         List<PostBriefDTO> pageItems = hasMore ? visibleItems.subList(0, limit) : visibleItems;
         PostBriefDTO cursorItem = pageItems.isEmpty() ? null : pageItems.get(pageItems.size() - 1);
-        String next = hasMore && cursorItem.getCreateTime() != null
-                ? String.valueOf(cursorItem.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
-                : null;
+        String next = hasMore ? searchCursor(cursorItem) : null;
         PageResult<PostBriefDTO> page = PageResult.of(pageItems, next, hasMore)
                 .withDiagnostic("rawHits", items.size())
                 .withDiagnostic("visibleHits", visibleItems.size())
@@ -662,10 +670,9 @@ public class SearchFacadeImpl implements SearchFacade {
     private PageResult<PostBriefDTO> searchByMysql(String keyword, String company, String position,
                                                    Integer type, Integer domain, String sort, String cursor, int limit,
                                                    boolean includeTestData, SearchTrustFilter trustFilter) {
-        long c = parseCursor(cursor);
+        SearchCursor parsedCursor = parseSearchCursor(cursor);
         String kw = clean(keyword);
         Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
-        LocalDateTime cursorTime = c > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(c), ZoneOffset.UTC) : null;
         List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
                 ? postMapper.searchPublicPostsFallback(
                         blankToNull(kw),
@@ -674,7 +681,8 @@ public class SearchFacadeImpl implements SearchFacade {
                         blankToNull(clean(position)),
                         type,
                         domain,
-                        cursorTime,
+                        parsedCursor.time(),
+                        parsedCursor.id(),
                         fallbackScanLimit(limit))
                 : postMapper.searchPublicPostsFallbackCompat(
                         blankToNull(kw),
@@ -683,7 +691,8 @@ public class SearchFacadeImpl implements SearchFacade {
                         blankToNull(clean(position)),
                         type,
                         domain,
-                        cursorTime,
+                        parsedCursor.time(),
+                        parsedCursor.id(),
                         fallbackScanLimit(limit));
         if (candidates.isEmpty()) {
             return PageResult.empty();
@@ -719,9 +728,7 @@ public class SearchFacadeImpl implements SearchFacade {
         }
         boolean hasMore = items.size() > limit;
         items = items.stream().limit(limit).toList();
-        String next = hasMore && !items.isEmpty()
-                ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
-                : null;
+        String next = hasMore && !items.isEmpty() ? searchCursor(items.get(items.size() - 1)) : null;
         return PageResult.of(items, next, hasMore)
                 .withDiagnostic("rawHits", candidates.size())
                 .withDiagnostic("visibleHits", items.size())
@@ -735,9 +742,9 @@ public class SearchFacadeImpl implements SearchFacade {
         Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
         List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
                 ? postMapper.searchPublicPostsFallback(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
-                blankToNull(clean(position)), type, domain, null, MYSQL_FALLBACK_MAX_SCAN)
+                blankToNull(clean(position)), type, domain, null, null, MYSQL_FALLBACK_MAX_SCAN)
                 : postMapper.searchPublicPostsFallbackCompat(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
-                blankToNull(clean(position)), type, domain, null, MYSQL_FALLBACK_MAX_SCAN);
+                blankToNull(clean(position)), type, domain, null, null, MYSQL_FALLBACK_MAX_SCAN);
         if (candidates.isEmpty()) {
             return PageResult.empty();
         }
@@ -1003,13 +1010,31 @@ public class SearchFacadeImpl implements SearchFacade {
         return values;
     }
 
-    private long parseCursor(String c) {
-        if (c == null || c.isBlank()) return 0L;
-        try {
-            return Long.parseLong(c);
-        } catch (Exception e) {
-            return 0L;
+    private SearchCursor parseSearchCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return SearchCursor.empty();
         }
+        String value = cursor.trim();
+        if (value.chars().allMatch(Character::isDigit)) {
+            long millis = Long.parseLong(value);
+            if (millis <= 0) {
+                return SearchCursor.empty();
+            }
+            return new SearchCursor(LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneOffset.UTC), 0L, millis);
+        }
+        try {
+            CursorUtils.TimeIdCursor decoded = CursorUtils.decodeTimeId(value, SEARCH_CURSOR_VERSION);
+            return new SearchCursor(decoded.time(), decoded.id(), decoded.millis());
+        } catch (IllegalArgumentException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid search cursor");
+        }
+    }
+
+    private static String searchCursor(PostBriefDTO post) {
+        if (post == null || post.getCreateTime() == null || post.getId() == null || post.getId() <= 0) {
+            return null;
+        }
+        return CursorUtils.encodeTimeId(SEARCH_CURSOR_VERSION, post.getCreateTime(), post.getId());
     }
 
     private Optional<Long> parsePostIdKeyword(String keyword) {
@@ -1021,6 +1046,16 @@ public class SearchFacadeImpl implements SearchFacade {
             return Optional.of(Long.parseLong(value));
         } catch (NumberFormatException e) {
             return Optional.empty();
+        }
+    }
+
+    private record SearchCursor(LocalDateTime time, Long id, long millis) {
+        private static SearchCursor empty() {
+            return new SearchCursor(null, null, 0L);
+        }
+
+        private boolean present() {
+            return time != null;
         }
     }
 

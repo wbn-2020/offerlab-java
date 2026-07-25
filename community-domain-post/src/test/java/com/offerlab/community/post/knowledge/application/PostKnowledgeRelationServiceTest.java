@@ -330,6 +330,13 @@ class PostKnowledgeRelationServiceTest {
                                     Boolean featured, Integer domain, long cursor, int size) {
             return List.of();
         }
+
+        @Override
+        public List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType,
+                                            Boolean featured, Integer domain,
+                                            LocalDateTime cursorTime, Long cursorId, int size) {
+            return List.of();
+        }
     }
 
     private static final class ReviewQueueStub implements ReviewQueuePublisher {

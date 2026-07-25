@@ -346,6 +346,7 @@ class FeedDomainFilterTest {
         }
 
         @Override public PostDTO getPost(Long postId) { throw unsupported(); }
+        @Override public PostDTO getPostMetadata(Long postId) { return getPost(postId); }
         @Override public PostDTO getPost(Long postId, Long viewerUid) { throw unsupported(); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) { return batchGetPosts(postIds, null); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) { return batchGetPosts(postIds, viewerUid, false); }
@@ -356,7 +357,7 @@ class FeedDomainFilterTest {
                     .collect(java.util.stream.Collectors.toMap(PostBriefDTO::getId, post -> post));
         }
         @Override public Long publishPost(PostCreateCmd cmd) { throw unsupported(); }
-        @Override public void updatePost(PostUpdateCmd cmd) { throw unsupported(); }
+        @Override public boolean updatePost(PostUpdateCmd cmd) { throw unsupported(); }
         @Override public void deletePost(Long postId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getHot(String cursor, int size) { throw unsupported(); }

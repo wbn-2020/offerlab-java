@@ -177,6 +177,14 @@ public class PostRepositoryImpl implements PostRepository {
         return toDomainListWithExt(posts);
     }
 
+    @Override
+    public List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
+                                        LocalDateTime cursorTime, Long cursorId, int size) {
+        List<PostPO> posts = postMapper.selectPublicPosts(authorId, tagId != null && tagId > 0 ? tagId : null, postType,
+                featured, domain, cursorTime, cursorTime == null ? null : cursorId, listLimit(size));
+        return toDomainListWithExt(posts);
+    }
+
     private List<Post> toDomainListWithExt(List<PostPO> posts) {
         if (posts == null || posts.isEmpty()) {
             return List.of();

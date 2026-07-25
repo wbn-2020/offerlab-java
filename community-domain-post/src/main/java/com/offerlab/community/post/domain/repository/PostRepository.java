@@ -2,6 +2,7 @@ package com.offerlab.community.post.domain.repository;
 
 import com.offerlab.community.post.domain.model.Post;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,9 @@ public interface PostRepository {
     List<Post> findLatest(long cursor, int size);
 
     List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size);
+
+    List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
+                                 LocalDateTime cursorTime, Long cursorId, int size);
 
     default List<Post> findPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
         return findPosts(authorId, tagId, postType, null, null, cursor, size);

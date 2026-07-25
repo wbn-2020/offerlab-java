@@ -13,9 +13,11 @@ import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 class NotificationFacadeAggregationTest {
 
     @Test
@@ -40,13 +42,41 @@ class NotificationFacadeAggregationTest {
         Map<String, Object> aggregated = result.getItems().get(0);
         assertEquals("like", aggregated.get("type"));
         assertEquals(List.of(2002L, 2001L), aggregated.get("notificationIds"));
-        assertEquals(2, aggregated.get("aggregateCount"));
-        assertEquals(2, aggregated.get("unreadCount"));
+        assertEquals(2L, aggregated.get("aggregateCount"));
+        assertEquals(2L, aggregated.get("unreadCount"));
         assertFalse((Boolean) aggregated.get("isRead"));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> content = (Map<String, Object>) aggregated.get("content");
-        assertEquals(2, content.get("aggregateCount"));
+        assertEquals(2L, content.get("aggregateCount"));
+    }
+
+    @Test
+    void listNotificationsUsesOneWindowCountForAPageLocalAggregateCard() {
+        List<NotificationMessagePO> rows = List.of(
+                message(3002L, 7L, 12L, 1, 1, 101L, 0, LocalDateTime.of(2026, 6, 24, 0, 30)),
+                message(3001L, 7L, 11L, 5, 0, null, 1, LocalDateTime.of(2026, 6, 24, 0, 20))
+        );
+        AtomicInteger aggregateCalls = new AtomicInteger();
+        NotificationMessageMapper mapper = mapperStub(
+                rows,
+                List.of(Map.of("windowKey", "g0", "aggregateCount", 25L, "unreadCount", 17L)),
+                aggregateCalls);
+        NotificationFacadeImpl facade = new NotificationFacadeImpl(
+                mapper,
+                new SnowflakeIdGenerator(),
+                new ObjectMapper(),
+                userFacadeStub(Map.of(12L, user(12L, "Bob"))));
+
+        PageResult<Map<String, Object>> result = facade.listNotifications(7L, null, null, 1);
+
+        Map<String, Object> aggregated = result.getItems().get(0);
+        assertEquals(25L, aggregated.get("aggregateCount"));
+        assertEquals(17L, aggregated.get("unreadCount"));
+        assertEquals(List.of(3002L), aggregated.get("notificationIds"));
+        assertFalse((Boolean) aggregated.get("isRead"));
+        assertEquals(1, aggregateCalls.get());
+        assertTrue(Boolean.TRUE.equals(((Map<?, ?>) aggregated.get("content")).get("aggregated")));
     }
 
     private static NotificationMessagePO message(Long id, Long receiverUid, Long senderUid,
@@ -74,12 +104,24 @@ class NotificationFacadeAggregationTest {
     }
 
     private static NotificationMessageMapper mapperStub(List<NotificationMessagePO> rows) {
+        return mapperStub(rows, List.of(), null);
+    }
+
+    private static NotificationMessageMapper mapperStub(List<NotificationMessagePO> rows,
+                                                         List<Map<String, Object>> aggregateRows,
+                                                         AtomicInteger aggregateCalls) {
         return (NotificationMessageMapper) Proxy.newProxyInstance(
                 NotificationMessageMapper.class.getClassLoader(),
                 new Class[]{NotificationMessageMapper.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "tableExists" -> 1;
                     case "listByUser" -> rows;
+                    case "countAggregateWindows" -> {
+                        if (aggregateCalls != null) {
+                            aggregateCalls.incrementAndGet();
+                        }
+                        yield aggregateRows;
+                    }
                     case "dedupKeyColumnExists" -> 1;
                     case "selectCount" -> 0L;
                     default -> defaultValue(method.getReturnType());

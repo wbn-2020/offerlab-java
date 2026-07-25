@@ -22,6 +22,7 @@ import com.offerlab.community.question.api.dto.UserWeeklyPrepReportDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -29,6 +30,8 @@ public interface QuestionFacade {
     Long extractPostQuestions(Long postId, boolean manual);
 
     void processExtractTask(Long taskId);
+
+    void hidePostQuestions(Long postId);
 
     Map<String, Object> rebuildQuestions(int limit);
 
@@ -82,7 +85,7 @@ public interface QuestionFacade {
 
     QuestionDTO updateQuestionAdmin(Long questionId, QuestionAdminUpdateCmd cmd);
 
-    Map<String, Object> reviewQuestion(Long questionId, int status);
+    Map<String, Object> reviewQuestion(Long questionId, int status, LocalDateTime expectedUpdateTime);
 
     QuestionDuplicateGroupDTO getDuplicateGroup(Long questionId);
 

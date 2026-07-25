@@ -3,6 +3,7 @@ package com.offerlab.community.feed.application;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.utils.CursorUtils;
 import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.api.FeedFacade;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
@@ -44,7 +45,8 @@ import java.util.stream.Stream;
 public class FeedFacadeImpl implements FeedFacade {
 
     private static final int MAX_DOMAIN_INBOX_SCAN_ROWS = 1000;
-    private static final int MAX_CROSS_DOMAIN_CANDIDATE_FETCH_SIZE = 20;
+    private static final int MAX_CROSS_DOMAIN_CANDIDATE_FETCH_SIZE = 100;
+    private static final String CROSS_DOMAIN_CURSOR_VERSION = "cd1";
     private static final long NEW_CREATOR_MAX_PUBLIC_POSTS = 3L;
     private static final double NEW_CREATOR_BOOST_SCORE = 12D;
     private static final double LESS_LIKE_THIS_PENALTY = 1_000D;
@@ -119,17 +121,21 @@ public class FeedFacadeImpl implements FeedFacade {
         Set<Integer> reducedDomains = uid == null ? Set.of() : feedbackStore.lessLikedDomains(uid);
         List<PostBriefDTO> candidates = new ArrayList<>();
         List<String> failedDomains = new ArrayList<>();
-        long c = parseCursorAsEpoch(cursor);
+        CrossDomainCursor pageCursor = parseCrossDomainCursor(cursor);
         int fetchSize = crossDomainCandidateFetchSize(pageSize);
+        boolean sourceHasMore = false;
         for (Integer targetDomain : crossDomainTargetDomains(sourceDomain)) {
             try {
-                PageResult<PostBriefDTO> page = postFacade.listPosts(null, null, null, null, targetDomain, c, fetchSize);
+                PageResult<PostBriefDTO> page = postFacade.listPostsByKeyset(
+                        null, null, null, null, targetDomain, pageCursor.time(), pageCursor.id(), fetchSize);
                 if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+                    sourceHasMore |= page != null && Boolean.TRUE.equals(page.getHasMore());
                     continue;
                 }
                 filterDistributablePosts(page.getItems()).stream()
                         .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
                         .forEach(candidates::add);
+                sourceHasMore |= Boolean.TRUE.equals(page.getHasMore());
             } catch (RuntimeException e) {
                 failedDomains.add(domainName(targetDomain));
                 log.warn("cross-domain recommendation candidate load failed, viewerUid={}, targetDomain={}",
@@ -142,24 +148,35 @@ public class FeedFacadeImpl implements FeedFacade {
                     .filter(Objects::nonNull)
                     .collect(Collectors.toSet()));
             List<PostBriefDTO> ranked = candidates.stream()
-                    .sorted(Comparator.<PostBriefDTO>comparingDouble(
-                                    post -> crossDomainScore(post, intent, publicPostCountByAuthor, sourceDomain, reducedDomains)).reversed()
-                            .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .sorted(Comparator.comparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder()))
+                            .thenComparing(PostBriefDTO::getId, Comparator.nullsLast(Comparator.reverseOrder())))
                     .limit(pageSize)
                     .toList();
             String fallbackReason = failedDomains.isEmpty()
                     ? null
                     : "部分跨领域候选拉取失败：" + String.join("、", failedDomains);
+            boolean hasMore = failedDomains.isEmpty()
+                    && (sourceHasMore || candidates.size() > ranked.size());
+            String nextCursor = hasMore && !ranked.isEmpty()
+                    ? crossDomainCursor(ranked.get(ranked.size() - 1))
+                    : null;
             return assembleCrossDomainPage(
                     ranked,
                     uid,
                     sourceDomain,
                     intent,
                     publicPostCountByAuthor,
-                    ranked.size() >= pageSize && candidates.size() > ranked.size(),
+                    hasMore,
+                    nextCursor,
                     failedDomains.isEmpty() ? "cross-domain" : "cross-domain-partial",
                     !failedDomains.isEmpty(),
                     fallbackReason);
+        }
+        if (pageCursor.present()) {
+            return PageResult.<CrossDomainRecommendationVO>empty()
+                    .withMetadata("cross-domain", !failedDomains.isEmpty(),
+                            failedDomains.isEmpty() ? null : "部分跨领域候选拉取失败：" + String.join("、", failedDomains),
+                            null);
         }
         return fallbackCrossDomainRecommendations(uid, cursor, pageSize, sourceDomain);
     }
@@ -599,14 +616,15 @@ public class FeedFacadeImpl implements FeedFacade {
     }
 
     private PageResult<CrossDomainRecommendationVO> assembleCrossDomainPage(List<PostBriefDTO> posts,
-                                                                            Long viewerUid,
-                                                                            Integer sourceDomain,
-                                                                            UserIntentDTO intent,
-                                                                            Map<Long, Long> publicPostCountByAuthor,
-                                                                            boolean hasMore,
-                                                                            String source,
-                                                                            boolean degraded,
-                                                                            String fallbackReason) {
+                                                                              Long viewerUid,
+                                                                              Integer sourceDomain,
+                                                                              UserIntentDTO intent,
+                                                                              Map<Long, Long> publicPostCountByAuthor,
+                                                                              boolean hasMore,
+                                                                              String nextCursor,
+                                                                              String source,
+                                                                              boolean degraded,
+                                                                              String fallbackReason) {
         if (posts == null || posts.isEmpty()) {
             return PageResult.<CrossDomainRecommendationVO>empty()
                     .withMetadata(source, degraded, fallbackReason, null);
@@ -646,7 +664,6 @@ public class FeedFacadeImpl implements FeedFacade {
                     .degraded(degraded)
                     .build();
         }).toList();
-        String nextCursor = hasMore ? crossDomainNextCursor(posts) : null;
         return PageResult.of(items, nextCursor, hasMore)
                 .withMetadata(source, degraded, fallbackReason, null);
     }
@@ -1244,13 +1261,45 @@ public class FeedFacadeImpl implements FeedFacade {
         };
     }
 
-    private String crossDomainNextCursor(List<PostBriefDTO> posts) {
-        return posts.stream()
-                .map(PostBriefDTO::getCreateTime)
-                .filter(Objects::nonNull)
-                .min(LocalDateTime::compareTo)
-                .map(time -> String.valueOf(time.toInstant(java.time.ZoneOffset.UTC).toEpochMilli()))
-                .orElse(null);
+    private CrossDomainCursor parseCrossDomainCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return CrossDomainCursor.empty();
+        }
+        String value = cursor.trim();
+        if (value.chars().allMatch(Character::isDigit)) {
+            try {
+                long millis = Long.parseLong(value);
+                return millis <= 0
+                        ? CrossDomainCursor.empty()
+                        : new CrossDomainCursor(LocalDateTime.ofInstant(
+                                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC), 0L);
+            } catch (NumberFormatException e) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid cross-domain cursor");
+            }
+        }
+        try {
+            CursorUtils.TimeIdCursor decoded = CursorUtils.decodeTimeId(value, CROSS_DOMAIN_CURSOR_VERSION);
+            return new CrossDomainCursor(decoded.time(), decoded.id());
+        } catch (IllegalArgumentException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid cross-domain cursor");
+        }
+    }
+
+    private String crossDomainCursor(PostBriefDTO post) {
+        if (post == null || post.getCreateTime() == null || post.getId() == null || post.getId() <= 0) {
+            return null;
+        }
+        return CursorUtils.encodeTimeId(CROSS_DOMAIN_CURSOR_VERSION, post.getCreateTime(), post.getId());
+    }
+
+    private record CrossDomainCursor(LocalDateTime time, Long id) {
+        private static CrossDomainCursor empty() {
+            return new CrossDomainCursor(null, null);
+        }
+
+        private boolean present() {
+            return time != null;
+        }
     }
 
     private boolean matchesDomain(FeedItemVO item, Integer domain) {
