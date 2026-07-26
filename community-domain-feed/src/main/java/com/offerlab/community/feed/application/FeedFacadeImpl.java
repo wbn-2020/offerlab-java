@@ -22,6 +22,7 @@ import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
@@ -45,8 +46,10 @@ import java.util.stream.Stream;
 public class FeedFacadeImpl implements FeedFacade {
 
     private static final int MAX_DOMAIN_INBOX_SCAN_ROWS = 1000;
+    private static final int MAX_FOLLOWING_DB_SCAN_ROWS = 5000;
     private static final int MAX_CROSS_DOMAIN_CANDIDATE_FETCH_SIZE = 100;
     private static final String CROSS_DOMAIN_CURSOR_VERSION = "cd1";
+    private static final String FOLLOWING_DB_CURSOR_VERSION = "fdb1";
     private static final long NEW_CREATOR_MAX_PUBLIC_POSTS = 3L;
     private static final double NEW_CREATOR_BOOST_SCORE = 12D;
     private static final double LESS_LIKE_THIS_PENALTY = 1_000D;
@@ -60,10 +63,19 @@ public class FeedFacadeImpl implements FeedFacade {
     private final ObjectMapper objectMapper;
     private final RecommendFeedNewCreatorSupportRecorder recommendFeedNewCreatorSupportRecorder;
 
+    @Value("${offerlab.kafka.enabled:true}")
+    private boolean kafkaEnabled = true;
+
+    @Value("${offerlab.feed.kafka-consumer-enabled:true}")
+    private boolean feedKafkaConsumerEnabled = true;
+
     @Override
     public PageResult<FeedItemVO> getFollowingFeed(Long uid, String cursor, int size, Integer domain) {
         if (cursor != null && cursor.startsWith("db:")) {
             return fallbackFollowingFromDb(uid, cursor.substring(3), size, domain);
+        }
+        if (!kafkaEnabled || !feedKafkaConsumerEnabled) {
+            return fallbackFollowingFromDb(uid, cursor, size, domain);
         }
         double maxScore = parseCursorScore(cursor);
         if (domain != null) {
@@ -471,38 +483,32 @@ public class FeedFacadeImpl implements FeedFacade {
                                                            int size,
                                                            Integer domain) {
         int pageSize = Math.max(1, size);
+        CursorUtils.TimeIdCursor pageCursor = parseFollowingDbCursor(cursor);
+        LocalDateTime scanTime = pageCursor.time();
+        Long scanId = pageCursor.id();
         int scannedRows = 0;
-        long scanCursor = parseCursorAsEpoch(cursor);
         List<PostBriefDTO> matches = new ArrayList<>(pageSize + 1);
+        Set<Long> hiddenPostIds = hiddenPostIdsSafely(uid);
         boolean sourceHasMore = false;
-        String sourceCursor = null;
+        PostBriefDTO lastRawPost = null;
 
-        while (matches.size() <= pageSize && scannedRows < MAX_DOMAIN_INBOX_SCAN_ROWS) {
+        while (matches.size() <= pageSize && scannedRows < MAX_FOLLOWING_DB_SCAN_ROWS) {
             int fetchSize = Math.min(
                     overFetchSize(pageSize),
-                    MAX_DOMAIN_INBOX_SCAN_ROWS - scannedRows);
-            PageResult<PostBriefDTO> page = domain == null
-                    ? postFacade.getLatest(scanCursor, fetchSize)
-                    : postFacade.listPosts(null, null, null, null, domain, scanCursor, fetchSize);
-            if (page == null || page.getItems() == null || page.getItems().isEmpty()) {
+                    MAX_FOLLOWING_DB_SCAN_ROWS - scannedRows);
+            List<PostBriefDTO> raw = postFacade.listFollowingPostsByKeyset(
+                    uid, domain, scanTime, scanId, fetchSize + 1);
+            if (raw == null || raw.isEmpty()) {
                 sourceHasMore = false;
                 break;
             }
 
-            List<PostBriefDTO> candidates = filterDistributablePosts(page.getItems());
-            scannedRows += page.getItems().size();
-            Set<Long> authorIds = candidates.stream()
-                    .map(PostBriefDTO::getAuthorId)
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toSet());
-            Map<Long, Boolean> following = authorIds.isEmpty()
-                    ? Map.of()
-                    : userFacade.batchIsFollowing(uid, authorIds);
-            if (following == null) {
-                following = Map.of();
-            }
-            for (PostBriefDTO post : candidates) {
-                if (Boolean.TRUE.equals(following.get(post.getAuthorId()))) {
+            sourceHasMore = raw.size() > fetchSize;
+            List<PostBriefDTO> scanned = sourceHasMore ? raw.subList(0, fetchSize) : raw;
+            scannedRows += scanned.size();
+            for (PostBriefDTO post : scanned) {
+                if (PublicContentFilter.isDistributablePost(post)
+                        && !hiddenPostIds.contains(post.getId())) {
                     matches.add(post);
                     if (matches.size() > pageSize) {
                         break;
@@ -510,40 +516,52 @@ public class FeedFacadeImpl implements FeedFacade {
                 }
             }
 
-            sourceHasMore = Boolean.TRUE.equals(page.getHasMore());
-            sourceCursor = page.getNextCursor();
-            if (matches.size() > pageSize || !sourceHasMore || sourceCursor == null) {
+            lastRawPost = scanned.get(scanned.size() - 1);
+            if (matches.size() > pageSize || !sourceHasMore) {
                 break;
             }
-            long nextScanCursor = parseCursorAsEpoch(sourceCursor);
-            if (nextScanCursor <= 0 || nextScanCursor == scanCursor) {
-                break;
+            if (!isStrictlyOlder(lastRawPost, scanTime, scanId)) {
+                throw new IllegalStateException("following feed database cursor did not advance");
             }
-            scanCursor = nextScanCursor;
+            scanTime = lastRawPost.getCreateTime();
+            scanId = lastRawPost.getId();
         }
 
         boolean hasMore = matches.size() > pageSize || sourceHasMore;
         List<PostBriefDTO> items = matches.size() > pageSize
                 ? matches.subList(0, pageSize)
                 : matches;
-        String nextCursor = null;
-        if (hasMore && !items.isEmpty()) {
-            nextCursor = matches.size() > pageSize
-                    ? postListCursor(items.get(items.size() - 1))
-                    : sourceCursor;
+        PostBriefDTO cursorPost = matches.size() > pageSize && !items.isEmpty()
+                ? items.get(items.size() - 1)
+                : lastRawPost;
+        String nextCursor = hasMore && cursorPost != null
+                ? "db:" + followingDbCursor(cursorPost)
+                : null;
+        if (items.isEmpty()) {
+            return PageResult.<FeedItemVO>of(List.of(), nextCursor, hasMore && nextCursor != null)
+                    .withMetadata(
+                            "following-db-fallback",
+                            true,
+                            "REDIS_FOLLOWING_UNAVAILABLE",
+                            MAX_FOLLOWING_DB_SCAN_ROWS)
+                    .withDiagnostic("followingFallbackScanRows", scannedRows)
+                    .withDiagnostic("followingFallbackScanLimited",
+                            scannedRows >= MAX_FOLLOWING_DB_SCAN_ROWS && sourceHasMore);
         }
         PageResult<FeedItemVO> result = assembleFromPosts(
                 items,
                 uid,
-                nextCursor == null ? null : "db:" + nextCursor,
+                nextCursor,
                 hasMore && nextCursor != null,
                 FeedSource.FOLLOWING);
         return result.withMetadata(
                         "following-db-fallback",
                         true,
                         "REDIS_FOLLOWING_UNAVAILABLE",
-                        MAX_DOMAIN_INBOX_SCAN_ROWS)
-                .withDiagnostic("followingFallbackScanRows", scannedRows);
+                        MAX_FOLLOWING_DB_SCAN_ROWS)
+                .withDiagnostic("followingFallbackScanRows", scannedRows)
+                .withDiagnostic("followingFallbackScanLimited",
+                        scannedRows >= MAX_FOLLOWING_DB_SCAN_ROWS && sourceHasMore);
     }
 
     private long[] toPostIdAndScore(ZSetOperations.TypedTuple<String> tuple) {
@@ -1168,6 +1186,14 @@ public class FeedFacadeImpl implements FeedFacade {
         return value == null ? 0L : value;
     }
 
+    void setKafkaEnabled(boolean kafkaEnabled) {
+        this.kafkaEnabled = kafkaEnabled;
+    }
+
+    void setFeedKafkaConsumerEnabled(boolean feedKafkaConsumerEnabled) {
+        this.feedKafkaConsumerEnabled = feedKafkaConsumerEnabled;
+    }
+
     private int overFetchSize(int size) {
         return Math.min(Math.max(size * 5, size), 100);
     }
@@ -1309,13 +1335,46 @@ public class FeedFacadeImpl implements FeedFacade {
         return Objects.equals(effectiveDomain(item.getPost().getDomain()), domain);
     }
 
-    private String postListCursor(PostBriefDTO post) {
-        if (post == null || post.getCreateTime() == null) {
-            return null;
+    private CursorUtils.TimeIdCursor parseFollowingDbCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return CursorUtils.TimeIdCursor.empty();
         }
-        long millis = post.getCreateTime().toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
-        long suffix = post.getId() == null ? 0L : Math.floorMod(post.getId(), 1_000_000L);
-        return String.valueOf(millis * 1_000_000L + suffix);
+        String value = cursor.trim();
+        try {
+            if (value.chars().allMatch(Character::isDigit)) {
+                long raw = Long.parseLong(value);
+                long millis = raw > 10_000_000_000_000L ? raw / 1_000_000L : raw;
+                if (millis <= 0) {
+                    throw new IllegalArgumentException("following cursor time must be positive");
+                }
+                return new CursorUtils.TimeIdCursor(
+                        LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC),
+                        Long.MAX_VALUE,
+                        millis);
+            }
+            return CursorUtils.decodeTimeId(value, FOLLOWING_DB_CURSOR_VERSION);
+        } catch (RuntimeException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "无效的关注流游标");
+        }
+    }
+
+    private String followingDbCursor(PostBriefDTO post) {
+        if (post == null || post.getCreateTime() == null || post.getId() == null || post.getId() <= 0) {
+            throw new IllegalStateException("following feed row is missing its keyset cursor");
+        }
+        return CursorUtils.encodeTimeId(FOLLOWING_DB_CURSOR_VERSION, post.getCreateTime(), post.getId());
+    }
+
+    private boolean isStrictlyOlder(PostBriefDTO post, LocalDateTime cursorTime, Long cursorId) {
+        if (post == null || post.getCreateTime() == null || post.getId() == null) {
+            return false;
+        }
+        if (cursorTime == null) {
+            return true;
+        }
+        int timeOrder = post.getCreateTime().compareTo(cursorTime);
+        return timeOrder < 0
+                || (timeOrder == 0 && cursorId != null && post.getId() < cursorId);
     }
 
     private enum FeedSource {

@@ -540,8 +540,8 @@ class QuestionAdminControllerApiTest {
         when(jwtService.parseUid("token")).thenReturn(7L);
 
         for (String body : List.of(
-                "{\"questionText\":\"updated question text\"}",
-                "{\"questionText\":\"updated question text\",\"remark\":\"   \"}"
+                "{\"questionText\":\"updated question text\",\"expectedUpdateTime\":\"2026-07-23T10:00:00\"}",
+                "{\"questionText\":\"updated question text\",\"expectedUpdateTime\":\"2026-07-23T10:00:00\",\"remark\":\"   \"}"
         )) {
             mvc.perform(post("/api/v1/admin/questions/42")
                             .header("Authorization", "Bearer token")
@@ -565,7 +565,11 @@ class QuestionAdminControllerApiTest {
         mvc.perform(post("/api/v1/admin/questions/42")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"questionText\":\"updated question text\",\"remark\":\"fix low quality answer\"}"))
+                        .content("""
+                                {"questionText":"updated question text",
+                                 "expectedUpdateTime":"2026-07-23T10:00:00",
+                                 "remark":"fix low quality answer"}
+                                """))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
@@ -580,14 +584,18 @@ class QuestionAdminControllerApiTest {
         QuestionDTO dto = QuestionDTO.builder()
                 .id(42L)
                 .questionText("updated question text")
-                .status(1)
+                .status(0)
                 .build();
         when(questionFacade.updateQuestionAdmin(eq(42L), any(QuestionAdminUpdateCmd.class))).thenReturn(dto);
 
         mvc.perform(post("/api/v1/admin/questions/42")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"questionText\":\"updated question text\",\"remark\":\"fix low quality answer\"}"))
+                        .content("""
+                                {"questionText":"updated question text",
+                                 "expectedUpdateTime":"2026-07-23T10:00:00",
+                                 "remark":"fix low quality answer"}
+                                """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.id").value(42))

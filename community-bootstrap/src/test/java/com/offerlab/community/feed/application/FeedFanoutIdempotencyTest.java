@@ -1,77 +1,91 @@
 package com.offerlab.community.feed.application;
 
-import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
-import com.offerlab.community.infra.mq.idempotent.IdempotentChecker;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.infra.mq.EventEnvelope;
+import com.offerlab.community.infra.mq.idempotent.IdempotentEventConsumer;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.domain.model.Post;
-import com.offerlab.community.user.api.UserFacade;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.kafka.support.Acknowledgment;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class FeedFanoutIdempotencyTest {
 
     @Mock
-    private UserFacade userFacade;
+    private FeedFanoutService fanoutService;
     @Mock
-    private FeedInboxRedis feedRedis;
+    private IdempotentEventConsumer idempotentConsumer;
     @Mock
-    private IdempotentChecker idempotentChecker;
+    private Acknowledgment acknowledgment;
 
-    private FeedFanoutService service;
+    @Test
+    void duplicatePostPublishedEventIsAcknowledgedWithoutFanoutWork() {
+        PostPublishedFeedConsumer consumer = new PostPublishedFeedConsumer(
+                fanoutService, new ObjectMapper(), idempotentConsumer);
+        EventEnvelope<PostPublishedEvent> envelope = envelope();
+        when(idempotentConsumer.consume(
+                eq("post.published:88:123456"),
+                eq("POST_PUBLISHED"),
+                eq("feed-fanout"),
+                any(Runnable.class))).thenReturn(false);
 
-    @BeforeEach
-    void setUp() {
-        service = new FeedFanoutService(userFacade, feedRedis, idempotentChecker);
+        consumer.onMessage(envelope, acknowledgment);
+
+        verify(acknowledgment).acknowledge();
+        verify(fanoutService, never()).fanoutPostPublished(any(), any());
     }
 
     @Test
-    void duplicatePostPublishedEventIsSkippedWithoutFanoutWork() {
-        when(idempotentChecker.tryConsume("post.published:88", "feed-fanout")).thenReturn(false);
+    void inboxOrFanoutFailureIsRethrownWithoutAcknowledging() {
+        PostPublishedFeedConsumer consumer = new PostPublishedFeedConsumer(
+                fanoutService, new ObjectMapper(), idempotentConsumer);
+        EventEnvelope<PostPublishedEvent> envelope = envelope();
+        when(idempotentConsumer.consume(
+                eq("post.published:88:123456"),
+                eq("POST_PUBLISHED"),
+                eq("feed-fanout"),
+                any(Runnable.class))).thenThrow(new IllegalStateException("database unavailable"));
 
-        boolean processed = service.fanoutPostPublished(event(88L, 7L, Post.VIS_PUBLIC, Post.STATUS_PUBLISHED, 123456L), "kafka");
+        assertThrows(IllegalStateException.class, () -> consumer.onMessage(envelope, acknowledgment));
 
-        assertFalse(processed);
-        verifyNoInteractions(userFacade, feedRedis);
-        verify(idempotentChecker, never()).release(anyString(), anyString());
+        verify(acknowledgment, never()).acknowledge();
     }
 
     @Test
-    void fanoutFailureReleasesIdempotentKeyBeforeRethrow() {
-        when(idempotentChecker.tryConsume("post.published:88", "feed-fanout")).thenReturn(true);
-        doThrow(new IllegalStateException("redis down"))
-                .when(feedRedis).addToAuthorTimeline(7L, 88L, 123456L);
+    void republishingTheSamePostUsesANewInboxIdentity() {
+        PostPublishedEvent first = envelope().getPayload();
+        PostPublishedEvent second = PostPublishedEvent.builder()
+                .postId(first.getPostId())
+                .timestamp(first.getTimestamp() + 1)
+                .build();
 
-        assertThrows(IllegalStateException.class,
-                () -> service.fanoutPostPublished(event(88L, 7L, Post.VIS_PUBLIC, Post.STATUS_PUBLISHED, 123456L), "kafka"));
-
-        verify(idempotentChecker).release("post.published:88", "feed-fanout");
-        verify(feedRedis, never()).addToGlobalLatest(anyLong(), anyLong());
-        verifyNoInteractions(userFacade);
+        assertNotEquals(
+                FeedFanoutService.idempotencyKey(first),
+                FeedFanoutService.idempotencyKey(second));
     }
 
-    private static PostPublishedEvent event(Long postId, Long authorId, Integer visibility, Integer postStatus, Long timestamp) {
-        return PostPublishedEvent.builder()
-                .postId(postId)
-                .authorId(authorId)
-                .visibility(visibility)
-                .postStatus(postStatus)
-                .timestamp(timestamp)
-                .title("post")
-                .content("content")
+    private static EventEnvelope<PostPublishedEvent> envelope() {
+        return EventEnvelope.<PostPublishedEvent>builder()
+                .messageId("message-88")
+                .eventType("POST_PUBLISHED")
+                .payload(PostPublishedEvent.builder()
+                        .postId(88L)
+                        .authorId(7L)
+                        .visibility(Post.VIS_PUBLIC)
+                        .postStatus(Post.STATUS_PUBLISHED)
+                        .timestamp(123456L)
+                        .build())
                 .build();
     }
 }

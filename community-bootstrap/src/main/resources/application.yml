@@ -84,8 +84,8 @@ springdoc:
 offerlab:
   id:
     snowflake:
-      worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID:1}
-      datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID:1}
+      worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID}
+      datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID}
   redis:
     pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}
   jwt:

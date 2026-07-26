@@ -2,6 +2,8 @@ package com.offerlab.community.post.infrastructure.persistence.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -223,64 +225,109 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<Map<String, Object>> countPublicPublishedPostsByAuthors(@Param("authorIds") Collection<Long> authorIds);
 
     @Select("""
+            WITH ranking_context AS (
+                SELECT COALESCE(#{rankingTime}, CURRENT_TIMESTAMP(3)) AS rankingTime
+            ),
+            ranked AS (
+                SELECT p.*,
+                       (
+                           COALESCE(c.like_count, 0) * 30
+                           + COALESCE(c.favorite_count, 0) * 40
+                           + COALESCE(c.comment_count, 0) * 50
+                           + COALESCE(c.view_count, 0) * 2
+                           + GREATEST(
+                               0,
+                               720 - TIMESTAMPDIFF(HOUR, p.create_time, context.rankingTime) * 10
+                           )
+                       ) AS hotScore,
+                       context.rankingTime AS rankingTime
+                FROM t_post_main p
+                LEFT JOIN t_post_counter c ON c.post_id = p.id
+                LEFT JOIN t_post_extension e_domain ON e_domain.post_id = p.id
+                CROSS JOIN ranking_context context
+                WHERE p.is_deleted = 0
+                  AND p.post_status = 1
+                  AND p.visibility = 1
+                  AND (#{domain} IS NULL
+                       OR e_domain.domain = #{domain})
+            )
+            SELECT *
+            FROM ranked
+            WHERE (
+                #{cursorScore} IS NULL
+                OR hotScore < #{cursorScore}
+                OR (hotScore = #{cursorScore} AND create_time < #{cursorTime})
+                OR (
+                    hotScore = #{cursorScore}
+                    AND create_time = #{cursorTime}
+                    AND id < #{cursorId}
+                )
+            )
+            ORDER BY hotScore DESC, create_time DESC, id DESC
+            LIMIT #{limit}
+            """)
+    List<HotPostRow> selectHotPosts(@Param("cursorScore") Long cursorScore,
+                                    @Param("cursorTime") LocalDateTime cursorTime,
+                                    @Param("cursorId") Long cursorId,
+                                    @Param("domain") Integer domain,
+                                    @Param("rankingTime") LocalDateTime rankingTime,
+                                    @Param("limit") int limit);
+
+    @Select("""
+            <script>
             SELECT p.*
             FROM t_post_main p
-            LEFT JOIN t_post_counter c ON c.post_id = p.id
+            <if test="featured != null">
+            LEFT JOIN t_post_extension e_featured ON e_featured.post_id = p.id
+            </if>
+            <if test="domain != null">
             LEFT JOIN t_post_extension e_domain ON e_domain.post_id = p.id
+            </if>
+            <if test="tagId != null">
+            JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
+            JOIN t_tag t_filter ON t_filter.id = r.tag_id
+                AND t_filter.is_deleted = 0
+                AND t_filter.tag_status = 1
+                AND t_filter.merge_target_id IS NULL
+            </if>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
-              AND (#{domain} IS NULL
-                   OR e_domain.domain = #{domain})
-              AND (
-                #{cursorScore} IS NULL
-                OR (
-                  (
-                    COALESCE(c.like_count, 0) * 3
-                    + COALESCE(c.favorite_count, 0) * 4
-                    + COALESCE(c.comment_count, 0) * 5
-                    + COALESCE(c.view_count, 0) * 0.2
-                    + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
-                  ) < #{cursorScore}
-                )
-                OR (
-                  (
-                    COALESCE(c.like_count, 0) * 3
-                    + COALESCE(c.favorite_count, 0) * 4
-                    + COALESCE(c.comment_count, 0) * 5
-                    + COALESCE(c.view_count, 0) * 0.2
-                    + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
-                  ) = #{cursorScore}
-                  AND p.create_time < #{cursorTime}
-                )
-                OR (
-                  (
-                    COALESCE(c.like_count, 0) * 3
-                    + COALESCE(c.favorite_count, 0) * 4
-                    + COALESCE(c.comment_count, 0) * 5
-                    + COALESCE(c.view_count, 0) * 0.2
-                    + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
-                  ) = #{cursorScore}
-                  AND p.create_time = #{cursorTime}
-                  AND p.id < #{cursorId}
-                )
-              )
-            ORDER BY (
-                COALESCE(c.like_count, 0) * 3
-                + COALESCE(c.favorite_count, 0) * 4
-                + COALESCE(c.comment_count, 0) * 5
-                + COALESCE(c.view_count, 0) * 0.2
-                + GREATEST(0, 72 - TIMESTAMPDIFF(HOUR, p.create_time, NOW()))
-            ) DESC,
-            p.create_time DESC,
-            p.id DESC
+              <if test="authorId != null">
+              AND p.author_id = #{authorId}
+              </if>
+              <if test="postType != null">
+              AND p.post_type = #{postType}
+              </if>
+              <if test="featured != null and featured == true">
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') IN ('true', '1')
+              </if>
+              <if test="featured != null and featured == false">
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e_featured.ext_json, '$.featured')), 'false') NOT IN ('true', '1')
+              </if>
+              <if test="domain != null">
+              AND e_domain.domain = #{domain}
+              </if>
+              <choose>
+                <when test="cursorTime != null">
+                AND p.create_time &lt; #{cursorTime}
+                </when>
+                <when test="cursorId != null">
+                AND p.id &lt; #{cursorId}
+                </when>
+              </choose>
+            ORDER BY p.id DESC
             LIMIT #{limit}
+            </script>
             """)
-    List<PostPO> selectHotPosts(@Param("cursorScore") Double cursorScore,
-                                @Param("cursorTime") LocalDateTime cursorTime,
-                                @Param("cursorId") Long cursorId,
-                                @Param("domain") Integer domain,
-                                @Param("limit") int limit);
+    List<PostPO> selectPublicPosts(@Param("authorId") Long authorId,
+                                   @Param("tagId") Long tagId,
+                                   @Param("postType") Integer postType,
+                                   @Param("featured") Boolean featured,
+                                   @Param("domain") Integer domain,
+                                   @Param("cursorTime") LocalDateTime cursorTime,
+                                   @Param("cursorId") Long cursorId,
+                                   @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -325,14 +372,47 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             </script>
             """)
-    List<PostPO> selectPublicPosts(@Param("authorId") Long authorId,
-                                   @Param("tagId") Long tagId,
-                                   @Param("postType") Integer postType,
-                                   @Param("featured") Boolean featured,
-                                   @Param("domain") Integer domain,
-                                   @Param("cursorTime") LocalDateTime cursorTime,
-                                   @Param("cursorId") Long cursorId,
-                                   @Param("limit") int limit);
+    List<PostPO> selectPublicPostsByTimeKeyset(@Param("authorId") Long authorId,
+                                               @Param("tagId") Long tagId,
+                                               @Param("postType") Integer postType,
+                                               @Param("featured") Boolean featured,
+                                               @Param("domain") Integer domain,
+                                               @Param("cursorTime") LocalDateTime cursorTime,
+                                               @Param("cursorId") Long cursorId,
+                                               @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT p.*
+            FROM t_post_main p
+            JOIN t_user_follow f
+              ON f.to_uid = p.author_id
+             AND f.from_uid = #{viewerUid}
+             AND f.is_deleted = 0
+            <if test="domain != null">
+            JOIN t_post_extension e
+              ON e.post_id = p.id
+             AND e.domain = #{domain}
+            </if>
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              <if test="cursorTime != null">
+              AND (
+                    p.create_time &lt; #{cursorTime}
+                    OR (p.create_time = #{cursorTime} AND p.id &lt; #{cursorId})
+                  )
+              </if>
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostPO> selectFollowingPublicPostsByTimeKeyset(
+            @Param("viewerUid") Long viewerUid,
+            @Param("domain") Integer domain,
+            @Param("cursorTime") LocalDateTime cursorTime,
+            @Param("cursorId") Long cursorId,
+            @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -658,14 +738,143 @@ public interface PostMapper extends BaseMapper<PostPO> {
             </script>
             """)
     List<PostPO> searchPublicPostsFallbackCompat(@Param("keyword") String keyword,
-                                                 @Param("keywordPostId") Long keywordPostId,
-                                                 @Param("company") String company,
+                                                  @Param("keywordPostId") Long keywordPostId,
+                                                  @Param("company") String company,
                                                  @Param("position") String position,
                                                  @Param("type") Integer type,
                                                  @Param("domain") Integer domain,
                                                  @Param("cursorTime") LocalDateTime cursorTime,
-                                                 @Param("cursorId") Long cursorId,
-                                                 @Param("limit") int limit);
+                                                  @Param("cursorId") Long cursorId,
+                                                  @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT ranked.postId, ranked.hotScore, ranked.createTime
+            FROM (
+                SELECT p.id AS postId,
+                       p.create_time AS createTime,
+                       (
+                           COALESCE(c.like_count, 0) * 30
+                           + COALESCE(c.favorite_count, 0) * 40
+                           + COALESCE(c.comment_count, 0) * 50
+                           + COALESCE(c.view_count, 0) * 2
+                           + GREATEST(
+                               0,
+                               720 - TIMESTAMPDIFF(HOUR, p.create_time, #{rankingTime}) * 10
+                           )
+                       ) AS hotScore
+                FROM t_post_main p
+                LEFT JOIN t_post_extension e ON e.post_id = p.id
+                LEFT JOIN t_post_counter c ON c.post_id = p.id
+                WHERE p.is_deleted = 0
+                  AND p.post_status = 1
+                  AND p.visibility = 1
+                  <if test="keyword != null and keyword != ''">
+                  AND (
+                        p.title LIKE CONCAT('%', #{keyword}, '%')
+                        <if test="keywordPostId != null">
+                        OR p.id = #{keywordPostId}
+                        </if>
+                        OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                        OR e.company LIKE CONCAT('%', #{keyword}, '%')
+                        OR e.position LIKE CONCAT('%', #{keyword}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+                        OR EXISTS (
+                            SELECT 1
+                            FROM t_post_tag_ref r
+                            JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                            <if test="tagGovernanceReady">
+                              AND t.tag_status = 1
+                              AND t.merge_target_id IS NULL
+                            </if>
+                            WHERE r.post_id = p.id
+                              AND (
+                                    t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                                    <if test="tagGovernanceReady">
+                                    OR t.synonyms LIKE CONCAT('%', #{keyword}, '%')
+                                    </if>
+                                  )
+                        )
+                      )
+                  </if>
+                  <if test="company != null and company != ''">
+                  AND (
+                        e.company LIKE CONCAT('%', #{company}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{company}, '%')
+                        OR EXISTS (
+                            SELECT 1
+                            FROM t_post_tag_ref r
+                            JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                            <if test="tagGovernanceReady">
+                              AND t.tag_status = 1
+                              AND t.merge_target_id IS NULL
+                            </if>
+                            WHERE r.post_id = p.id
+                              AND (
+                                    t.tag_name LIKE CONCAT('%', #{company}, '%')
+                                    <if test="tagGovernanceReady">
+                                    OR t.synonyms LIKE CONCAT('%', #{company}, '%')
+                                    </if>
+                                  )
+                        )
+                      )
+                  </if>
+                  <if test="position != null and position != ''">
+                  AND (
+                        e.position = #{position}
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) = #{position}
+                        OR EXISTS (
+                            SELECT 1
+                            FROM t_post_tag_ref r
+                            JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                            <if test="tagGovernanceReady">
+                              AND t.tag_status = 1
+                              AND t.merge_target_id IS NULL
+                            </if>
+                            WHERE r.post_id = p.id
+                              AND (
+                                    t.tag_name LIKE CONCAT('%', #{position}, '%')
+                                    <if test="tagGovernanceReady">
+                                    OR t.synonyms LIKE CONCAT('%', #{position}, '%')
+                                    </if>
+                                  )
+                        )
+                      )
+                  </if>
+                  <if test="type != null">
+                  AND p.post_type = #{type}
+                  </if>
+                  <if test="domain != null">
+                  AND e.domain = #{domain}
+                  </if>
+            ) ranked
+            <if test="cursorHotScore != null">
+            WHERE ranked.hotScore &lt; #{cursorHotScore}
+               OR (ranked.hotScore = #{cursorHotScore} AND ranked.createTime &lt; #{cursorTime})
+               OR (
+                    ranked.hotScore = #{cursorHotScore}
+                    AND ranked.createTime = #{cursorTime}
+                    AND ranked.postId &lt; #{cursorId}
+                  )
+            </if>
+            ORDER BY ranked.hotScore DESC, ranked.createTime DESC, ranked.postId DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<SearchHotRow> searchPublicPostsHotFallback(@Param("keyword") String keyword,
+                                                     @Param("keywordPostId") Long keywordPostId,
+                                                     @Param("company") String company,
+                                                     @Param("position") String position,
+                                                     @Param("type") Integer type,
+                                                     @Param("domain") Integer domain,
+                                                     @Param("tagGovernanceReady") boolean tagGovernanceReady,
+                                                     @Param("rankingTime") LocalDateTime rankingTime,
+                                                     @Param("cursorHotScore") Long cursorHotScore,
+                                                     @Param("cursorTime") LocalDateTime cursorTime,
+                                                     @Param("cursorId") Long cursorId,
+                                                     @Param("limit") int limit);
 
     @Select("""
             <script>
@@ -949,4 +1158,18 @@ public interface PostMapper extends BaseMapper<PostPO> {
     List<PostPO> selectPublicPostsByContentSeries(@Param("seriesId") Long seriesId,
                                                   @Param("cursor") long cursor,
                                                   @Param("limit") int limit);
+
+    @Data
+    class SearchHotRow {
+        private Long postId;
+        private Long hotScore;
+        private LocalDateTime createTime;
+    }
+
+    @Data
+    @EqualsAndHashCode(callSuper = true)
+    class HotPostRow extends PostPO {
+        private Long hotScore;
+        private LocalDateTime rankingTime;
+    }
 }

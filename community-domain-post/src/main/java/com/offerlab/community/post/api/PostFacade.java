@@ -36,6 +36,14 @@ public interface PostFacade {
         return post != null && java.util.Objects.equals(post.getAuthorId(), authorUid) ? post : null;
     }
 
+    /**
+     * Batch variant of the author workflow read. It may return unpublished posts, but only
+     * when the persisted author matches {@code authorUid}.
+     */
+    default Map<Long, PostBriefDTO> batchGetPostsForAuthor(Collection<Long> postIds, Long authorUid) {
+        return Map.of();
+    }
+
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds);
 
     Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid);
@@ -83,6 +91,15 @@ public interface PostFacade {
                                                         LocalDateTime cursorTime, Long cursorId, int size) {
         long legacyCursor = cursorTime == null ? 0L : cursorTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
         return listPosts(authorId, tagId, postType, featured, domain, legacyCursor, size);
+    }
+
+    /**
+     * Internal feed query ordered by {@code (create_time DESC, id DESC)}.
+     * Implementations must apply the follow relation and public-post predicates in the database.
+     */
+    default List<PostBriefDTO> listFollowingPostsByKeyset(Long viewerUid, Integer domain,
+                                                          LocalDateTime cursorTime, Long cursorId, int size) {
+        return List.of();
     }
 
     default PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {

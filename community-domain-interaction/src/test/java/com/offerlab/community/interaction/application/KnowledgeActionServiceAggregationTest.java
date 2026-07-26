@@ -2,19 +2,23 @@ package com.offerlab.community.interaction.application;
 
 import com.offerlab.community.interaction.api.dto.KnowledgeActionItemDTO;
 import com.offerlab.community.interaction.api.dto.KnowledgeActionPage;
+import com.offerlab.community.interaction.api.dto.KnowledgeActionSummaryDTO;
 import com.offerlab.community.interaction.infrastructure.persistence.mapper.KnowledgeActionMapper;
 import com.offerlab.community.post.api.KnowledgeMaintenanceReadFacade;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.KnowledgeMaintenanceSourceDTO;
-import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.dto.PostBriefDTO;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,7 +33,7 @@ class KnowledgeActionServiceAggregationTest {
     private static final LocalDateTime BASE_TIME = LocalDateTime.of(2026, 7, 21, 12, 0);
 
     @Test
-    void listAggregatesEveryFrozenSourceAndRequestsAllCandidates() {
+    void listAggregatesEveryFrozenSourceWithBoundedQueriesAndBatchPostReads() {
         Fixture fixture = fixture();
 
         KnowledgeActionPage<KnowledgeActionItemDTO> page =
@@ -61,11 +65,13 @@ class KnowledgeActionServiceAggregationTest {
         assertEquals("SUBMITTED", byId.get("MAINTENANCE_TASK:303").getStatus());
         assertEquals("/me/maintenance", byId.get("MAINTENANCE_TASK:303").getCanonicalRoute());
 
-        assertEquals(0, fixture.mapper.suggestionLimit);
-        assertEquals(0, fixture.mapper.staleSuggestionLimit);
-        assertEquals(0, fixture.mapper.freshnessLimit);
-        assertEquals(0, fixture.mapper.outcomeRevisitLimit);
-        assertEquals(0, fixture.maintenanceFacade.limit);
+        assertEquals(51, fixture.mapper.suggestionLimit);
+        assertEquals(51, fixture.mapper.staleSuggestionLimit);
+        assertEquals(51, fixture.mapper.freshnessLimit);
+        assertEquals(51, fixture.mapper.outcomeRevisitLimit);
+        assertEquals(51, fixture.maintenanceFacade.limit);
+        assertEquals(4, fixture.batchCalls.get());
+        assertEquals(1, fixture.maxBatchSize.get());
     }
 
     @Test
@@ -98,11 +104,85 @@ class KnowledgeActionServiceAggregationTest {
                 .map(KnowledgeActionItemDTO::getId)
                 .noneMatch(firstIds::contains));
 
-        assertEquals(0, fixture.mapper.suggestionLimit);
-        assertEquals(0, fixture.mapper.staleSuggestionLimit);
-        assertEquals(0, fixture.mapper.freshnessLimit);
-        assertEquals(0, fixture.mapper.outcomeRevisitLimit);
-        assertEquals(0, fixture.maintenanceFacade.limit);
+        assertEquals(51, fixture.mapper.suggestionLimit);
+        assertEquals(51, fixture.mapper.staleSuggestionLimit);
+        assertEquals(51, fixture.mapper.freshnessLimit);
+        assertEquals(51, fixture.mapper.outcomeRevisitLimit);
+        assertEquals(51, fixture.maintenanceFacade.limit);
+        assertEquals(5, fixture.batchCalls.get());
+    }
+
+    @Test
+    void summaryUsesExactSourceCountsWithoutLoadingCandidateRows() {
+        Fixture fixture = fixture();
+
+        KnowledgeActionSummaryDTO summary = fixture.service.summary(UID);
+
+        assertEquals(9L, summary.getTotal());
+        assertEquals(1L, summary.getCounts().get("SUGGESTION_RESPONSE"));
+        assertEquals(1L, summary.getCounts().get("STALE_SUGGESTION"));
+        assertEquals(1L, summary.getCounts().get("FRESHNESS_CONFIRMATION"));
+        assertEquals(1L, summary.getCounts().get("OUTCOME_REVISIT"));
+        assertEquals(1L, summary.getCounts().get("REFERENCE_REVIEW"));
+        assertEquals(1L, summary.getCounts().get("RELATION_REVIEW"));
+        assertEquals(3L, summary.getCounts().get("MAINTENANCE_TASK"));
+        assertFalse(summary.getDegraded());
+        assertTrue(summary.getSourceErrors().isEmpty());
+        assertEquals(0, fixture.batchCalls.get());
+        assertEquals(-1, fixture.mapper.suggestionLimit);
+        assertEquals(-1, fixture.maintenanceFacade.limit);
+    }
+
+    @Test
+    void keysetPaginationReachesRowsBeyondThePreviousTwoHundredItemCap() {
+        CapturingKnowledgeActionMapper mapper = new CapturingKnowledgeActionMapper();
+        mapper.suggestions = IntStream.rangeClosed(1, 251)
+                .mapToObj(index -> {
+                    KnowledgeActionMapper.ActionRow row = row(
+                            10_000L - index,
+                            20_000L + index,
+                            "SUGGESTION_RESPONSE",
+                            "PENDING",
+                            0);
+                    row.setUpdatedAt(BASE_TIME.minusMinutes(index));
+                    return row;
+                })
+                .toList();
+        Map<Long, PostBriefDTO> posts = mapper.suggestions.stream()
+                .collect(Collectors.toMap(
+                        KnowledgeActionMapper.ActionRow::getPostId,
+                        row -> post(row.getPostId(), "post-" + row.getPostId())
+                ));
+        AtomicInteger batchCalls = new AtomicInteger();
+        AtomicInteger maxBatchSize = new AtomicInteger();
+        KnowledgeActionService service = new KnowledgeActionService(
+                mapper,
+                postFacade(posts, batchCalls, maxBatchSize),
+                new CapturingMaintenanceFacade(List.of())
+        );
+
+        String cursor = null;
+        Map<String, KnowledgeActionItemDTO> allItems = new LinkedHashMap<>();
+        int pages = 0;
+        do {
+            KnowledgeActionPage<KnowledgeActionItemDTO> page =
+                    service.list(UID, "SUGGESTION_RESPONSE", null, cursor, 50);
+            pages++;
+            assertEquals(251L, page.getTotal());
+            assertTrue(page.getSourceErrors().isEmpty());
+            page.getItems().forEach(item -> allItems.put(item.getId(), item));
+            cursor = page.getNextCursor();
+            if (!page.getHasMore()) {
+                break;
+            }
+        } while (pages < 10);
+
+        assertEquals(6, pages);
+        assertEquals(251, allItems.size());
+        assertTrue(allItems.containsKey("SUGGESTION_RESPONSE:9749"));
+        assertEquals(51, mapper.suggestionLimit);
+        assertEquals(6, batchCalls.get());
+        assertEquals(51, maxBatchSize.get());
     }
 
     private static Fixture fixture() {
@@ -113,7 +193,7 @@ class KnowledgeActionServiceAggregationTest {
                 "AWAITING_AUTHOR_CONFIRMATION", 7));
         mapper.outcomeRevisits = List.of(row(104L, 1004L, "OUTCOME_REVISIT", "OPEN", 6));
 
-        Map<Long, PostDTO> posts = new LinkedHashMap<>();
+        Map<Long, PostBriefDTO> posts = new LinkedHashMap<>();
         posts.put(1001L, post(1001L, "Suggestion post"));
         posts.put(1002L, post(1002L, "Stale suggestion post"));
         posts.put(1003L, post(1003L, "Freshness post"));
@@ -127,9 +207,14 @@ class KnowledgeActionServiceAggregationTest {
                 source("MAINTENANCE_TASK:302", "MAINTENANCE_TASK", "CLAIMED", "/me/maintenance", 2),
                 source("MAINTENANCE_TASK:303", "MAINTENANCE_TASK", "SUBMITTED", "/me/maintenance", 1)
         ));
-        KnowledgeActionService service =
-                new KnowledgeActionService(mapper, postFacade(posts), maintenanceFacade);
-        return new Fixture(service, mapper, maintenanceFacade);
+        AtomicInteger batchCalls = new AtomicInteger();
+        AtomicInteger maxBatchSize = new AtomicInteger();
+        KnowledgeActionService service = new KnowledgeActionService(
+                mapper,
+                postFacade(posts, batchCalls, maxBatchSize),
+                maintenanceFacade
+        );
+        return new Fixture(service, mapper, maintenanceFacade, batchCalls, maxBatchSize);
     }
 
     private static KnowledgeActionMapper.ActionRow row(Long id, Long postId, String type,
@@ -158,21 +243,37 @@ class KnowledgeActionServiceAggregationTest {
                 .build();
     }
 
-    private static PostDTO post(Long id, String title) {
-        return PostDTO.builder()
+    private static PostBriefDTO post(Long id, String title) {
+        return PostBriefDTO.builder()
                 .id(id)
                 .authorId(UID)
                 .title(title)
                 .build();
     }
 
-    private static PostFacade postFacade(Map<Long, PostDTO> posts) {
+    @SuppressWarnings("unchecked")
+    private static PostFacade postFacade(Map<Long, PostBriefDTO> posts,
+                                         AtomicInteger batchCalls,
+                                         AtomicInteger maxBatchSize) {
         return (PostFacade) Proxy.newProxyInstance(
                 PostFacade.class.getClassLoader(),
                 new Class<?>[] {PostFacade.class},
                 (proxy, method, args) -> {
+                    if ("batchGetPosts".equals(method.getName())
+                            || "batchGetPostsForAuthor".equals(method.getName())) {
+                        Collection<Long> ids = (Collection<Long>) args[0];
+                        batchCalls.incrementAndGet();
+                        maxBatchSize.accumulateAndGet(ids.size(), Math::max);
+                        Map<Long, PostBriefDTO> selected = new LinkedHashMap<>();
+                        for (Long id : ids) {
+                            if (posts.containsKey(id)) {
+                                selected.put(id, posts.get(id));
+                            }
+                        }
+                        return selected;
+                    }
                     if ("getPost".equals(method.getName()) || "getPostForAuthor".equals(method.getName())) {
-                        return posts.get((Long) args[0]);
+                        throw new AssertionError("knowledge actions must not issue per-post reads");
                     }
                     return defaultValue(method.getReturnType());
                 });
@@ -202,7 +303,9 @@ class KnowledgeActionServiceAggregationTest {
 
     private record Fixture(KnowledgeActionService service,
                            CapturingKnowledgeActionMapper mapper,
-                           CapturingMaintenanceFacade maintenanceFacade) {
+                           CapturingMaintenanceFacade maintenanceFacade,
+                           AtomicInteger batchCalls,
+                           AtomicInteger maxBatchSize) {
     }
 
     private static final class CapturingKnowledgeActionMapper implements KnowledgeActionMapper {
@@ -223,6 +326,20 @@ class KnowledgeActionServiceAggregationTest {
         }
 
         @Override
+        public List<ActionRow> listSuggestionActionsAfter(
+                Long uid, LocalDateTime cursorTime, Long cursorId, int limit) {
+            assertEquals(UID, uid);
+            suggestionLimit = limit;
+            return after(suggestions, cursorTime, cursorId, limit);
+        }
+
+        @Override
+        public long countSuggestionActions(Long uid) {
+            assertEquals(UID, uid);
+            return suggestions.size();
+        }
+
+        @Override
         public List<ActionRow> listStaleSuggestionActions(Long uid, int limit) {
             assertEquals(UID, uid);
             staleSuggestionLimit = limit;
@@ -230,9 +347,38 @@ class KnowledgeActionServiceAggregationTest {
         }
 
         @Override
-        public List<ActionRow> listFreshnessActions(int limit) {
+        public List<ActionRow> listStaleSuggestionActionsAfter(
+                Long uid, LocalDateTime cursorTime, Long cursorId, int limit) {
+            assertEquals(UID, uid);
+            staleSuggestionLimit = limit;
+            return after(staleSuggestions, cursorTime, cursorId, limit);
+        }
+
+        @Override
+        public long countStaleSuggestionActions(Long uid) {
+            assertEquals(UID, uid);
+            return staleSuggestions.size();
+        }
+
+        @Override
+        public List<ActionRow> listFreshnessActions(Long uid, int limit) {
+            assertEquals(UID, uid);
             freshnessLimit = limit;
             return freshness;
+        }
+
+        @Override
+        public List<ActionRow> listFreshnessActionsAfter(
+                Long uid, LocalDateTime cursorTime, Long cursorId, int limit) {
+            assertEquals(UID, uid);
+            freshnessLimit = limit;
+            return after(freshness, cursorTime, cursorId, limit);
+        }
+
+        @Override
+        public long countFreshnessActions(Long uid) {
+            assertEquals(UID, uid);
+            return freshness.size();
         }
 
         @Override
@@ -240,6 +386,41 @@ class KnowledgeActionServiceAggregationTest {
             assertEquals(UID, uid);
             outcomeRevisitLimit = limit;
             return outcomeRevisits;
+        }
+
+        @Override
+        public List<ActionRow> listOutcomeRevisitActionsAfter(
+                Long uid, String status, LocalDateTime cursorTime, Long cursorId, int limit) {
+            assertEquals(UID, uid);
+            outcomeRevisitLimit = limit;
+            return after(outcomeRevisits, cursorTime, cursorId, limit).stream()
+                    .filter(row -> status == null || status.equals(row.getActionStatus()))
+                    .toList();
+        }
+
+        @Override
+        public long countOutcomeRevisitActions(Long uid, String status) {
+            assertEquals(UID, uid);
+            return outcomeRevisits.stream()
+                    .filter(row -> status == null || status.equals(row.getActionStatus()))
+                    .count();
+        }
+
+        private static List<ActionRow> after(List<ActionRow> rows,
+                                             LocalDateTime cursorTime,
+                                             Long cursorId,
+                                             int limit) {
+            return rows.stream()
+                    .filter(row -> {
+                        if (cursorTime == null) {
+                            return true;
+                        }
+                        int timeCompare = row.getUpdatedAt().compareTo(cursorTime);
+                        return timeCompare < 0
+                                || (timeCompare == 0 && row.getId() < cursorId);
+                    })
+                    .limit(limit)
+                    .toList();
         }
     }
 
@@ -256,6 +437,76 @@ class KnowledgeActionServiceAggregationTest {
             assertEquals(UID, uid);
             this.limit = limit;
             return items;
+        }
+
+        @Override
+        public List<KnowledgeMaintenanceSourceDTO> listActions(
+                Long uid, String actionType, String status,
+                LocalDateTime cursorTime, Integer cursorSourceOrder,
+                Long cursorSourceId, int limit) {
+            assertEquals(UID, uid);
+            this.limit = limit;
+            return items.stream()
+                    .filter(item -> actionType == null || actionType.equals(item.getActionType()))
+                    .filter(item -> status == null || status.equals(item.getStatus()))
+                    .filter(item -> afterCursor(
+                            item, cursorTime, cursorSourceOrder, cursorSourceId))
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public long countActions(Long uid, String actionType, String status) {
+            assertEquals(UID, uid);
+            return items.stream()
+                    .filter(item -> actionType == null || actionType.equals(item.getActionType()))
+                    .filter(item -> status == null || status.equals(item.getStatus()))
+                    .count();
+        }
+
+        @Override
+        public Map<String, Long> countActionsByType(Long uid) {
+            assertEquals(UID, uid);
+            return items.stream()
+                    .collect(Collectors.groupingBy(
+                            KnowledgeMaintenanceSourceDTO::getActionType,
+                            LinkedHashMap::new,
+                            Collectors.counting()));
+        }
+
+        private static boolean afterCursor(KnowledgeMaintenanceSourceDTO item,
+                                           LocalDateTime cursorTime,
+                                           Integer cursorSourceOrder,
+                                           Long cursorSourceId) {
+            if (cursorTime == null) {
+                return true;
+            }
+            int timeCompare = item.getUpdatedAt().compareTo(cursorTime);
+            if (timeCompare != 0) {
+                return timeCompare < 0;
+            }
+            SourceIdentity identity = sourceIdentity(item.getSourceKey());
+            if (identity.order != cursorSourceOrder) {
+                return identity.order > cursorSourceOrder;
+            }
+            return identity.id < cursorSourceId;
+        }
+
+        private static SourceIdentity sourceIdentity(String sourceKey) {
+            int separator = sourceKey.lastIndexOf(':');
+            String source = sourceKey.substring(0, separator);
+            long id = Long.parseLong(sourceKey.substring(separator + 1));
+            int order = switch (source) {
+                case "REFERENCE" -> SOURCE_ORDER_REFERENCE;
+                case "RELATION_PROPOSAL" -> SOURCE_ORDER_RELATION_PROPOSAL;
+                case "RELATION_REVIEW" -> SOURCE_ORDER_RELATION_REVIEW;
+                case "MAINTENANCE_TASK" -> SOURCE_ORDER_MAINTENANCE_TASK;
+                default -> throw new IllegalArgumentException(source);
+            };
+            return new SourceIdentity(order, id);
+        }
+
+        private record SourceIdentity(int order, long id) {
         }
     }
 }

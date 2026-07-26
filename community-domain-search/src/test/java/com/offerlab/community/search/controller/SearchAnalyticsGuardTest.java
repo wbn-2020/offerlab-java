@@ -49,8 +49,11 @@ class SearchAnalyticsGuardTest {
         assertTrue(serviceSource.contains("Math.max(1, Math.min(days, 90))"), "analytics summary must clamp days");
         assertTrue(serviceSource.contains("Math.max(1, Math.min(limit, 50))"), "analytics summary must clamp limit");
 
-        assertTrue(facadeSource.contains("boolean firstPage = trustedSort ? trustedOffset(cursor) == 0 : !parseSearchCursor(cursor).present()"),
-                "search analytics must only record the first page for both trusted-offset and timestamp cursors");
+        assertTrue(facadeSource.contains(
+                        "SearchCursor searchCursor = trustedSort ? null : parseSearchCursor(cursor, normalizedSort)"),
+                "search analytics must parse the normalized search cursor once");
+        assertTrue(facadeSource.contains(": !searchCursor.present();"),
+                "search analytics must only record the first page for both trusted-offset and search cursors");
         assertTrue(facadeSource.contains("searchAnalyticsService.recordSearch"), "post search must record analytics after ES/MySQL search");
 
         assertTrue(searchControllerSource.contains("/analytics/track"), "search controller must expose client analytics tracking endpoint");

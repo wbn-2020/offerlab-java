@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.moderation.ContentModerationSourceAuthorizationHandler;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.moderation.ModerationKeywordHit;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
@@ -49,7 +50,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class PostApplicationService {
+public class PostApplicationService implements ContentModerationSourceAuthorizationHandler {
 
     static final String PENDING_REVIEW_SOURCE_TYPE = "POST_PENDING_REVIEW";
 
@@ -232,6 +233,24 @@ public class PostApplicationService {
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
         return Objects.equals(post.getPostStatus(), Post.STATUS_REVIEWING);
+    }
+
+    @Override
+    public boolean supports(String scope, String sourceType) {
+        return ContentModerationService.SCOPE_POST.equalsIgnoreCase(scope)
+                && ContentModerationService.SOURCE_POST.equalsIgnoreCase(sourceType);
+    }
+
+    @Override
+    public void requireAuthorized(Long uid, Long sourceId) {
+        if (sourceId == null || sourceId <= 0) {
+            return;
+        }
+        Post post = postRepo.findById(sourceId)
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        if (!Objects.equals(post.getAuthorId(), uid)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
     }
 
     @Transactional

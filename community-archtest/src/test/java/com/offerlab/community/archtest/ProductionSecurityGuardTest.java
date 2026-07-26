@@ -113,6 +113,33 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
+    void devProfileRejectsLocalDefaultJwtSecret() throws Exception {
+        JwtService jwtService = new JwtService(nullRedis());
+        setField(jwtService, "environment", devEnvironment());
+        setField(jwtService, "secret", "offerlab-local-dev-only-secret-key-change-before-shared-env-123456");
+
+        assertThrows(IllegalStateException.class, () -> invokeValidateSecret(jwtService));
+    }
+
+    @Test
+    void localProfileAloneAllowsLocalDefaultJwtSecret() throws Exception {
+        JwtService jwtService = new JwtService(nullRedis());
+        setField(jwtService, "environment", profiles("local"));
+        setField(jwtService, "secret", "offerlab-local-dev-only-secret-key-change-before-shared-env-123456");
+
+        invokeValidateSecret(jwtService);
+    }
+
+    @Test
+    void mixedLocalAndSharedProfilesRejectLocalDefaultJwtSecret() throws Exception {
+        JwtService jwtService = new JwtService(nullRedis());
+        setField(jwtService, "environment", profiles("local", "dev"));
+        setField(jwtService, "secret", "offerlab-local-dev-only-secret-key-change-before-shared-env-123456");
+
+        assertThrows(IllegalStateException.class, () -> invokeValidateSecret(jwtService));
+    }
+
+    @Test
     void prodProfileDoesNotAllowLocalOpenAdminMode() {
         AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), prodEnvironment());
 
@@ -157,6 +184,8 @@ class ProductionSecurityGuardTest {
         String prodConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
         String baseConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
         String devConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
+        String localConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-local.yml"), StandardCharsets.UTF_8);
+        String acceptanceEnv = Files.readString(Path.of("../.env.acceptance.example"), StandardCharsets.UTF_8);
 
         assertTrue(baseConfig.contains("api-docs:\n    path: /v3/api-docs\n    enabled: false") || baseConfig.contains("api-docs:\r\n    path: /v3/api-docs\r\n    enabled: false"), "base config must disable OpenAPI docs by default");
         assertTrue(baseConfig.contains("swagger-ui:\n    path: /swagger-ui.html\n    enabled: false") || baseConfig.contains("swagger-ui:\r\n    path: /swagger-ui.html\r\n    enabled: false"), "base config must disable Swagger UI by default");
@@ -176,6 +205,24 @@ class ProductionSecurityGuardTest {
                 "dev profile must disable Redis Pub/Sub by default and opt in through OFFERLAB_REDIS_PUBSUB_ENABLED");
         assertTrue(baseConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}"),
                 "base profile must keep Redis Pub/Sub enabled by default unless explicitly overridden");
+        assertTrue(devConfig.contains("secret: ${JWT_SECRET}"),
+                "dev must require an external JWT secret");
+        assertFalse(devConfig.contains("JWT_SECRET:offerlab-local"),
+                "dev must not expose a shared default JWT secret");
+        assertTrue(devConfig.contains("baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}"),
+                "dev must not baseline an unmanaged database by default");
+        assertTrue(baseConfig.contains("worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID}"),
+                "shared profiles must require an explicit Snowflake worker ID");
+        assertTrue(baseConfig.contains("datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID}"),
+                "shared profiles must require an explicit Snowflake datacenter ID");
+        assertTrue(localConfig.contains("worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID:1}"),
+                "local profile may provide a single-node Snowflake worker ID");
+        assertTrue(localConfig.contains("datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID:1}"),
+                "local profile may provide a single-node Snowflake datacenter ID");
+        assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_WORKER_ID=<0-31>"),
+                "acceptance template must document the required Snowflake worker ID");
+        assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_DATACENTER_ID=<0-31>"),
+                "acceptance template must document the required Snowflake datacenter ID");
     }
 
     @Test

@@ -156,6 +156,30 @@ class PostApplicationServiceDomainTest {
     }
 
     @Test
+    void moderationSourceAuthorizationRejectsNonOwner() {
+        Post post = Post.builder()
+                .id(84L)
+                .authorId(7L)
+                .build();
+        when(postRepo.findById(84L)).thenReturn(Optional.of(post));
+
+        BizException ex = assertThrows(BizException.class, () -> service.requireAuthorized(8L, 84L));
+
+        assertEquals(ErrorCode.FORBIDDEN.getCode(), ex.getCode());
+        verifyNoInteractions(contentModerationService, springEvents);
+    }
+
+    @Test
+    void moderationSourceAuthorizationRejectsMissingPost() {
+        when(postRepo.findById(85L)).thenReturn(Optional.empty());
+
+        BizException ex = assertThrows(BizException.class, () -> service.requireAuthorized(7L, 85L));
+
+        assertEquals(ErrorCode.POST_NOT_FOUND.getCode(), ex.getCode());
+        verifyNoInteractions(contentModerationService, springEvents);
+    }
+
+    @Test
     void deleteEvictsPostCounterAfterTransactionCommit() {
         Post post = Post.builder()
                 .id(91L)

@@ -207,12 +207,58 @@ class PostKnowledgeRelationServiceTest {
         }
 
         @Override
+        public List<PostKnowledgeRelationRow> listOwnedActionsAfter(
+                Long uid, String status, LocalDateTime cursorTime, Long cursorId, int limit) {
+            return rows.values().stream()
+                    .filter(row -> uid.equals(row.getProposerUid()))
+                    .filter(row -> List.of("PENDING", "REJECTED").contains(row.getReviewStatus()))
+                    .filter(row -> status == null || status.equals(row.getReviewStatus()))
+                    .filter(row -> afterCursor(row, cursorTime, cursorId))
+                    .limit(limit)
+                    .map(PostKnowledgeRelationServiceTest::copy)
+                    .toList();
+        }
+
+        @Override
+        public long countOwnedActions(Long uid, String status) {
+            return rows.values().stream()
+                    .filter(row -> uid.equals(row.getProposerUid()))
+                    .filter(row -> List.of("PENDING", "REJECTED").contains(row.getReviewStatus()))
+                    .filter(row -> status == null || status.equals(row.getReviewStatus()))
+                    .count();
+        }
+
+        @Override
         public List<PostKnowledgeRelationRow> listPendingReviewActions(int limit) {
             return rows.values().stream()
                     .filter(row -> "PENDING".equals(row.getReviewStatus()))
                     .limit(limit)
                     .map(PostKnowledgeRelationServiceTest::copy)
                     .toList();
+        }
+
+        @Override
+        public List<PostKnowledgeRelationRow> listPendingReviewActionsForDomainsAfter(
+                Long uid, List<Integer> domains, String status,
+                LocalDateTime cursorTime, Long cursorId, int limit) {
+            return rows.values().stream()
+                    .filter(row -> "PENDING".equals(row.getReviewStatus()))
+                    .filter(row -> !uid.equals(row.getProposerUid()))
+                    .filter(row -> status == null || status.equals(row.getReviewStatus()))
+                    .filter(row -> afterCursor(row, cursorTime, cursorId))
+                    .limit(limit)
+                    .map(PostKnowledgeRelationServiceTest::copy)
+                    .toList();
+        }
+
+        @Override
+        public long countPendingReviewActionsForDomains(
+                Long uid, List<Integer> domains, String status) {
+            return rows.values().stream()
+                    .filter(row -> "PENDING".equals(row.getReviewStatus()))
+                    .filter(row -> !uid.equals(row.getProposerUid()))
+                    .filter(row -> status == null || status.equals(row.getReviewStatus()))
+                    .count();
         }
 
         @Override
@@ -265,6 +311,17 @@ class PostKnowledgeRelationServiceTest {
             row.setReviewNote(reviewNote);
             row.setReviewedAt(LocalDateTime.now());
             return 1;
+        }
+
+        private static boolean afterCursor(PostKnowledgeRelationRow row,
+                                           LocalDateTime cursorTime,
+                                           Long cursorId) {
+            if (cursorTime == null) {
+                return true;
+            }
+            int timeCompare = row.getUpdateTime().compareTo(cursorTime);
+            return timeCompare < 0
+                    || (timeCompare == 0 && row.getId() < cursorId);
         }
     }
 

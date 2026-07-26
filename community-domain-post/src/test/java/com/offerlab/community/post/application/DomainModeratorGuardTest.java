@@ -55,7 +55,10 @@ class DomainModeratorGuardTest {
         assertContains(service, "AdminPermissionService", "service must preserve admin/content moderator behavior");
         assertContains(service, "AdminAuditService", "service must audit moderator assignments");
         assertContains(service, "Post.DOMAIN_", "service must validate known domains");
-        int globalGrant = service.indexOf("adminPermissionService.isAdmin(uid)");
+        assertContains(service, "adminPermissionService.isAdmin(uid)", "global moderation access must include admin grant");
+        assertContains(service, "AdminPermissionService.ROLE_CONTENT_MODERATOR", "global moderation access must include content moderator grant");
+        assertContains(service, "adminPermissionService.isLocalOpenMode()", "global moderation access must include local-open mode");
+        int globalGrant = service.indexOf("if (hasGlobalModerationAccess(uid))");
         int domainValidation = service.indexOf("Integer normalizedDomain = requireKnownDomain(domain)");
         assertTrue(globalGrant >= 0 && domainValidation > globalGrant,
                 "admin/content/local-open moderators must be allowed before null-domain validation");

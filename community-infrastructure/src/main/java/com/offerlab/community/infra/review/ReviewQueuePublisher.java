@@ -8,4 +8,9 @@ public interface ReviewQueuePublisher {
     }
 
     void resolve(String sourceType, Long sourceId, String status, String result, String note, Long operatorUid);
+
+    default void resolveRequired(String sourceType, Long sourceId, String status, String result,
+                                 String note, Long operatorUid) {
+        resolve(sourceType, sourceId, status, result, note, operatorUid);
+    }
 }

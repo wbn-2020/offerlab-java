@@ -26,16 +26,21 @@ public interface PostRepository {
 
     void softDelete(Long id);
 
-    /** 按作者 + 时间倒序，cursor 为上一页最后一条的 createTime epoch ms；首屏传 0 */
+    /** 按 Snowflake id 倒序，cursor 为上一页最后一条的完整 post id；首屏传 0 */
     List<Post> findByAuthor(Long authorId, long cursor, int size);
 
-    /** 全站最新（公开 + 已发布） */
+    /** 全站最新（公开 + 已发布），使用完整 Snowflake id 作为游标 */
     List<Post> findLatest(long cursor, int size);
 
     List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size);
 
     List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
                                  LocalDateTime cursorTime, Long cursorId, int size);
+
+    default List<Post> findFollowingPostsByKeyset(Long viewerUid, Integer domain,
+                                                  LocalDateTime cursorTime, Long cursorId, int size) {
+        return List.of();
+    }
 
     default List<Post> findPosts(Long authorId, Long tagId, Integer postType, long cursor, int size) {
         return findPosts(authorId, tagId, postType, null, null, cursor, size);

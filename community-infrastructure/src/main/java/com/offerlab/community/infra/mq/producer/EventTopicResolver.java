@@ -95,6 +95,13 @@ public class EventTopicResolver {
             return new TopicMapping("interaction.comment.like", readLong(event, "getCommentId"), "COMMENT_LIKED");
         }
 
+        if ("CommentQualitySignalChangedEvent".equals(className)) {
+            return new TopicMapping(
+                    "interaction.comment.quality-signal-changed",
+                    readLong(event, "getCommentId"),
+                    "COMMENT_QUALITY_SIGNAL_CHANGED");
+        }
+
         if ("CommentHelpfulThresholdReachedEvent".equals(className)) {
             return new TopicMapping(
                     "interaction.comment.helpful-threshold",

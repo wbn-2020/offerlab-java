@@ -6,12 +6,19 @@ import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelatio
 import com.offerlab.community.post.reference.infrastructure.persistence.PostReferenceMapper;
 import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.Test;
+import org.xml.sax.InputSource;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.StringReader;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Locale;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,14 +41,19 @@ class KnowledgeActionContractGuardTest {
         assertTrue(service.contains("KnowledgeMaintenanceReadFacade"));
         assertTrue(service.contains("maintenanceReadFacade.listActions"));
         assertTrue(service.contains("POST_KNOWLEDGE_ACTION_SOURCE_UNAVAILABLE"));
-        assertTrue(service.contains("postFacade.getPostForAuthor"));
-        assertTrue(service.contains("postFacade.getPost(row.getPostId(), uid)"));
+        assertTrue(service.contains("postFacade.batchGetPostsForAuthor"));
+        assertTrue(service.contains("postFacade.batchGetPosts"));
+        assertFalse(service.contains("postFacade.getPostForAuthor"));
+        assertFalse(service.contains("postFacade.getPost(row.getPostId(), uid)"));
+        assertFalse(service.contains("MAX_SOURCE_CANDIDATES"));
+        assertFalse(service.contains("SOURCE_TRUNCATED"));
 
         assertTrue(mapper.contains("o.is_deleted = 0"));
         assertTrue(mapper.contains("r.source_type = 'POST_OUTCOME'"));
         assertTrue(mapper.contains("resolution = 'PENDING'"));
         assertTrue(mapper.contains("base_version < p.version"));
         assertTrue(mapper.contains("freshness_status = 'AWAITING_AUTHOR_CONFIRMATION'"));
+        assertTrue(mapper.contains("p.author_id = #{uid}"));
         assertTrue(!mapper.contains("COALESCE(decision"));
 
         for (String type : new String[] {
@@ -53,25 +65,91 @@ class KnowledgeActionContractGuardTest {
     }
 
     @Test
-    void zeroCandidateRequestMustNotBeBoundAsSqlLimit() throws Exception {
-        assertUnbounded(KnowledgeActionMapper.class, "listSuggestionActions", Long.class, int.class);
-        assertUnbounded(KnowledgeActionMapper.class, "listStaleSuggestionActions", Long.class, int.class);
-        assertUnbounded(KnowledgeActionMapper.class, "listFreshnessActions", int.class);
-        assertUnbounded(KnowledgeActionMapper.class, "listOutcomeRevisitActions", Long.class, int.class);
-        assertUnbounded(PostReferenceMapper.class, "listBrokenOwned", Long.class, int.class);
-        assertUnbounded(PostKnowledgeRelationMapper.class, "listOwnedActions", Long.class, int.class);
-        assertUnbounded(PostKnowledgeRelationMapper.class, "listPendingReviewActions", int.class);
-        String maintenanceSql = sql(ContentMaintenanceTaskMapper.class,
-                "listKnowledgeActions", Long.class, int.class);
-        assertFalse(maintenanceSql.contains("limit #{limit}"));
-        assertTrue(maintenanceSql.contains("task_status in ('open', 'claimed', 'submitted')"));
+    void directKnowledgeActionQueriesMustBeUidScopedAndSqlBounded() throws Exception {
+        assertBounded(KnowledgeActionMapper.class, "listSuggestionActions", Long.class, int.class);
+        assertBounded(KnowledgeActionMapper.class, "listStaleSuggestionActions", Long.class, int.class);
+        assertBounded(KnowledgeActionMapper.class, "listFreshnessActions", Long.class, int.class);
+        assertBounded(KnowledgeActionMapper.class, "listOutcomeRevisitActions", Long.class, int.class);
+        assertBounded(PostReferenceMapper.class, "listBrokenOwned", Long.class, int.class);
+        assertBounded(PostKnowledgeRelationMapper.class, "listOwnedActions", Long.class, int.class);
+        assertBounded(PostKnowledgeRelationMapper.class, "listPendingReviewActions", int.class);
+        assertBounded(ContentMaintenanceTaskMapper.class, "listKnowledgeActions", Long.class, int.class);
+        assertKeysetBounded(KnowledgeActionMapper.class,
+                "listSuggestionActionsAfter",
+                Long.class, LocalDateTime.class, Long.class, int.class);
+        assertKeysetBounded(KnowledgeActionMapper.class,
+                "listStaleSuggestionActionsAfter",
+                Long.class, LocalDateTime.class, Long.class, int.class);
+        assertKeysetBounded(KnowledgeActionMapper.class,
+                "listFreshnessActionsAfter",
+                Long.class, LocalDateTime.class, Long.class, int.class);
+        assertKeysetBounded(KnowledgeActionMapper.class,
+                "listOutcomeRevisitActionsAfter",
+                Long.class, String.class, LocalDateTime.class, Long.class, int.class);
+        assertKeysetBounded(PostReferenceMapper.class,
+                "listBrokenOwnedAfter",
+                Long.class, LocalDateTime.class, Long.class, int.class);
+        assertKeysetBounded(PostKnowledgeRelationMapper.class,
+                "listOwnedActionsAfter",
+                Long.class, String.class, LocalDateTime.class, Long.class, int.class);
+        assertKeysetBounded(ContentMaintenanceTaskMapper.class,
+                "listKnowledgeActionsAfter",
+                Long.class, String.class, LocalDateTime.class, Long.class, int.class);
+
+        String freshnessSql = sql(KnowledgeActionMapper.class,
+                "listFreshnessActions", Long.class, int.class);
+        assertTrue(freshnessSql.contains("p.author_id = #{uid}"));
+        assertTrue(freshnessSql.contains("p.is_deleted = 0"));
+
+        String reviewSql = sql(PostKnowledgeRelationMapper.class,
+                "listPendingReviewActionsForDomainsAfter",
+                Long.class, List.class, String.class,
+                LocalDateTime.class, Long.class, int.class);
+        assertTrue(reviewSql.contains("source_extension.domain in"));
+        assertTrue(reviewSql.contains("r.proposer_uid &lt;&gt; #{uid}"));
+        assertTrue(reviewSql.indexOf("source_extension.domain in")
+                < reviewSql.indexOf("limit #{limit}"));
     }
 
-    private static void assertUnbounded(Class<?> mapperType, String methodName,
-                                        Class<?>... parameterTypes) throws Exception {
-        assertFalse(sql(mapperType, methodName, parameterTypes).contains("limit #{limit}"),
+    @Test
+    void dynamicKnowledgeActionQueriesMustBeWellFormedXml() {
+        for (Class<?> mapperType : List.of(
+                KnowledgeActionMapper.class,
+                PostReferenceMapper.class,
+                PostKnowledgeRelationMapper.class,
+                ContentMaintenanceTaskMapper.class
+        )) {
+            for (Method method : mapperType.getDeclaredMethods()) {
+                Select select = method.getAnnotation(Select.class);
+                if (select == null) {
+                    continue;
+                }
+                String script = String.join("\n", select.value()).trim();
+                if (!script.startsWith("<script>")) {
+                    continue;
+                }
+                assertDoesNotThrow(() -> parseXml(script),
+                        () -> mapperType.getSimpleName() + "." + method.getName()
+                                + " must remain valid MyBatis XML");
+            }
+        }
+    }
+
+    private static void assertBounded(Class<?> mapperType, String methodName,
+                                      Class<?>... parameterTypes) throws Exception {
+        assertTrue(sql(mapperType, methodName, parameterTypes).contains("limit #{limit}"),
                 () -> mapperType.getSimpleName() + "." + methodName
-                        + " must keep zero as the current all-candidates request");
+                        + " must enforce the caller-provided SQL limit");
+    }
+
+    private static void assertKeysetBounded(Class<?> mapperType, String methodName,
+                                            Class<?>... parameterTypes) throws Exception {
+        String query = sql(mapperType, methodName, parameterTypes);
+        assertTrue(query.contains("limit #{limit}"),
+                () -> mapperType.getSimpleName() + "." + methodName
+                        + " must enforce the caller-provided SQL limit");
+        assertTrue(query.contains("#{cursortime} is null"));
+        assertTrue(query.contains("< #{cursorid}") || query.contains("&lt; #{cursorid}"));
     }
 
     private static String sql(Class<?> mapperType, String methodName,
@@ -80,6 +158,13 @@ class KnowledgeActionContractGuardTest {
         assertNotNull(select, () -> mapperType.getSimpleName() + "." + methodName
                 + " must remain an annotated select");
         return String.join("\n", select.value()).toLowerCase(Locale.ROOT);
+    }
+
+    private static void parseXml(String script) throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setExpandEntityReferences(false);
+        factory.newDocumentBuilder().parse(new InputSource(new StringReader(script)));
     }
 
     private static int count(String source, String token) {

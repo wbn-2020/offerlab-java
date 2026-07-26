@@ -14,6 +14,7 @@ class PostSearchConsistencyGuardTest {
     void searchIndexMustDeleteStaleDocumentsAndFilterVisiblePosts() throws Exception {
         String indexer = read("src/main/java/com/offerlab/community/search/application/PostSearchIndexer.java");
         String listener = read("src/main/java/com/offerlab/community/search/application/PostSearchEventListener.java");
+        String consumer = read("src/main/java/com/offerlab/community/search/application/PostSearchEventConsumer.java");
         String retryService = read("src/main/java/com/offerlab/community/search/application/SearchIndexRetryService.java");
         String retryMapper = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/mapper/SearchIndexRetryTaskMapper.java");
         String retryPo = read("src/main/java/com/offerlab/community/search/infrastructure/persistence/po/SearchIndexRetryTaskPO.java");
@@ -41,9 +42,22 @@ class PostSearchConsistencyGuardTest {
                         && indexer.contains("\"synonyms\", text"),
                 "post_idx mapping must keep tags as nested before adding tag synonym fields");
         assertTrue(listener.contains("PostDeletedEvent"), "search listener must consume post delete events");
-        assertTrue(listener.contains("indexer.deletePost(event.getPostId())"), "delete event must remove the ES document");
-        assertTrue(listener.contains("retryService.enqueueIndex"), "index failures must enqueue durable retry tasks");
-        assertTrue(listener.contains("retryService.enqueueDelete"), "delete failures must enqueue durable retry tasks");
+        assertTrue(listener.contains("indexer.deletePost(postId)"), "delete event must remove the validated ES document");
+        assertTrue(listener.contains("retryService.enqueueIndexRequired"),
+                "local index failures must durably enqueue or propagate");
+        assertTrue(listener.contains("retryService.enqueueDeleteRequired"),
+                "local delete failures must durably enqueue or propagate");
+        assertTrue(consumer.contains("idempotentConsumer.consume"),
+                "Kafka search delivery must use the transactional consumer inbox");
+        assertTrue(consumer.contains("listener.handlePostDeletedSynchronously"),
+                "Kafka delete delivery must dispatch through the validated synchronous handler");
+        int inboxDispatch = consumer.indexOf("idempotentConsumer.consume");
+        assertTrue(inboxDispatch >= 0 && consumer.indexOf("ack.acknowledge()", inboxDispatch) > inboxDispatch,
+                "Kafka search events must only be acknowledged after inbox and handler completion");
+        String beforeInboxDispatch = consumer.substring(0, inboxDispatch);
+        assertTrue(!beforeInboxDispatch.contains("ack.acknowledge()")
+                        || beforeInboxDispatch.contains("if (envelope == null)"),
+                "only the null-envelope poison-pill skip may acknowledge before the inbox dispatch");
         assertTrue(postService.contains("PostDeletedEvent.builder()"), "post delete must publish a deletion event");
         assertTrue(postService.contains("events.publish(PostUpdatedEvent.builder()"), "post update must publish even when visibility/status changes");
         assertTrue(resolver.contains("PostDeletedEvent"), "outbox topic resolver must route post deleted events");

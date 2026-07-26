@@ -53,11 +53,19 @@ public class SearchIndexRetryService {
     }
 
     public void enqueueIndex(Long postId, Throwable cause) {
-        enqueue(OP_INDEX, postId, cause);
+        enqueue(OP_INDEX, postId, cause, false);
     }
 
     public void enqueueDelete(Long postId, Throwable cause) {
-        enqueue(OP_DELETE, postId, cause);
+        enqueue(OP_DELETE, postId, cause, false);
+    }
+
+    public void enqueueIndexRequired(Long postId, Throwable cause) {
+        enqueue(OP_INDEX, postId, cause, true);
+    }
+
+    public void enqueueDeleteRequired(Long postId, Throwable cause) {
+        enqueue(OP_DELETE, postId, cause, true);
     }
 
     public List<SearchIndexRetryTaskPO> listRecent(Integer status, int limit) {
@@ -185,11 +193,17 @@ public class SearchIndexRetryService {
         }
     }
 
-    private void enqueue(String operation, Long postId, Throwable cause) {
+    private void enqueue(String operation, Long postId, Throwable cause, boolean required) {
         if (postId == null || postId <= 0) {
+            if (required) {
+                throw new IllegalArgumentException("postId is required for search retry");
+            }
             return;
         }
         if (!tableReady()) {
+            if (required) {
+                throw new IllegalStateException("search index retry table is unavailable", cause);
+            }
             return;
         }
         SearchIndexRetryTaskPO task = new SearchIndexRetryTaskPO();
@@ -201,7 +215,10 @@ public class SearchIndexRetryService {
         task.setRetryCount(0);
         task.setNextRetryTime(LocalDateTime.now().plusSeconds(30));
         task.setLastError(shortMessage(cause));
-        taskMapper.upsertPending(task);
+        int updated = taskMapper.upsertPending(task);
+        if (required && updated <= 0) {
+            throw new IllegalStateException("search index retry task was not persisted", cause);
+        }
         log.warn("search index retry task enqueued: operation={} postId={}", operation, postId, cause);
     }
 

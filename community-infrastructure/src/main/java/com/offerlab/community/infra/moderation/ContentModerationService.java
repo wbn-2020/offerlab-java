@@ -6,8 +6,9 @@ import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueueUpsertRequestedEvent;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -21,7 +22,6 @@ import java.util.Objects;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ContentModerationService {
     private static final int KEYWORD_PAGE_SIZE = 500;
     private static final int MAX_ENABLED_KEYWORDS = 10_000;
@@ -52,6 +52,24 @@ public class ContentModerationService {
     private final ContentModerationMapper mapper;
     private final SnowflakeIdGenerator idGen;
     private final ApplicationEventPublisher events;
+    private final ObjectProvider<ContentModerationSourceAuthorizationHandler> sourceAuthorizationHandlers;
+
+    @Autowired
+    public ContentModerationService(ContentModerationMapper mapper,
+                                    SnowflakeIdGenerator idGen,
+                                    ApplicationEventPublisher events,
+                                    ObjectProvider<ContentModerationSourceAuthorizationHandler> sourceAuthorizationHandlers) {
+        this.mapper = mapper;
+        this.idGen = idGen;
+        this.events = events;
+        this.sourceAuthorizationHandlers = sourceAuthorizationHandlers;
+    }
+
+    public ContentModerationService(ContentModerationMapper mapper,
+                                    SnowflakeIdGenerator idGen,
+                                    ApplicationEventPublisher events) {
+        this(mapper, idGen, events, null);
+    }
 
     public ModerationKeywordHit findKeywordHit(Long hitId) {
         if (hitId == null || hitId <= 0) {
@@ -121,6 +139,21 @@ public class ContentModerationService {
     }
 
     public ModerationDecision checkContent(Long uid, String scope, String sourceType, Long sourceId, String... values) {
+        return checkContent(uid, scope, sourceType, sourceId, true, values);
+    }
+
+    public ModerationDecision checkNewSourceContent(Long uid, String scope, String sourceType, Long sourceId,
+                                                    String... values) {
+        return checkContent(uid, scope, sourceType, sourceId, false, values);
+    }
+
+    private ModerationDecision checkContent(Long uid, String scope, String sourceType, Long sourceId,
+                                            boolean authorizeExistingSource, String... values) {
+        String normalizedScope = normalizeScope(scope);
+        String normalizedSourceType = normalizeSourceType(sourceType);
+        if (authorizeExistingSource) {
+            requireSourceAuthorized(uid, normalizedScope, normalizedSourceType, sourceId);
+        }
         String text = values == null ? "" : String.join("\n", Arrays.stream(values)
                 .filter(Objects::nonNull)
                 .toList()).toLowerCase(Locale.ROOT);
@@ -129,8 +162,6 @@ public class ContentModerationService {
         }
         requireTableAvailable("t_moderation_keyword", "content keyword moderation");
         try {
-            String normalizedScope = normalizeScope(scope);
-            String normalizedSourceType = normalizeSourceType(sourceType);
             ModerationDecision reviewDecision = null;
             String contentSummary = summary(text);
             for (ModerationKeyword keyword : listEnabledKeywords(normalizedScope)) {
@@ -152,6 +183,15 @@ public class ContentModerationService {
             log.warn("content moderation keyword check failed closed: scope={}", scope, e);
             throw moderationUnavailable();
         }
+    }
+
+    private void requireSourceAuthorized(Long uid, String scope, String sourceType, Long sourceId) {
+        if (sourceId == null || sourceId <= 0 || sourceAuthorizationHandlers == null) {
+            return;
+        }
+        sourceAuthorizationHandlers.orderedStream()
+                .filter(handler -> handler.supports(scope, sourceType))
+                .forEach(handler -> handler.requireAuthorized(uid, sourceId));
     }
 
     private void recordHit(Long uid, String scope, String sourceType, Long sourceId,

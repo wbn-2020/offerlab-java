@@ -33,8 +33,8 @@ public class SnowflakeIdGenerator {
 
     @Autowired
     public SnowflakeIdGenerator(
-            @Value("${offerlab.id.snowflake.worker-id:1}") long workerId,
-            @Value("${offerlab.id.snowflake.datacenter-id:1}") long datacenterId) {
+            @Value("${offerlab.id.snowflake.worker-id}") long workerId,
+            @Value("${offerlab.id.snowflake.datacenter-id}") long datacenterId) {
         this.workerId = requireNodeId("worker-id", workerId, WORKER_ID_MASK);
         this.datacenterId = requireNodeId("datacenter-id", datacenterId, DATACENTER_ID_MASK);
     }

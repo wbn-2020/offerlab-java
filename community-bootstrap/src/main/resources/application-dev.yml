@@ -8,7 +8,7 @@ spring:
     username: ${DB_USERNAME:offerlab}
     password: ${DB_PASSWORD:offerlab123}
   flyway:
-    baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:true}
+    baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -30,7 +30,7 @@ springdoc:
 
 offerlab:
   jwt:
-    secret: ${JWT_SECRET:offerlab-local-dev-only-secret-key-change-before-shared-env-123456}
+    secret: ${JWT_SECRET}
   redis:
     pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}
   kafka:

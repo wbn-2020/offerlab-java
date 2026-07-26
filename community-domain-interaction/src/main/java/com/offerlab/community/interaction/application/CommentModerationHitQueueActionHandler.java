@@ -17,7 +17,6 @@ import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.domain.repository.PostRepository;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -36,7 +35,6 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
     private final PostCounterMapper postCounterMapper;
     private final PostCounterRedis postCounterRedis;
     private final AfterCommitExecutor afterCommit;
-    private final ApplicationEventPublisher events;
     private final PostRepository postRepo;
     private final DomainModeratorService domainModeratorService;
     private final EventPublisher eventPublisher;
@@ -46,7 +44,6 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
                                                   PostCounterMapper postCounterMapper,
                                                    PostCounterRedis postCounterRedis,
                                                    AfterCommitExecutor afterCommit,
-                                                   ApplicationEventPublisher events,
                                                    PostRepository postRepo,
                                                    DomainModeratorService domainModeratorService,
                                                    EventPublisher eventPublisher) {
@@ -55,7 +52,6 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
         this.postCounterMapper = postCounterMapper;
         this.postCounterRedis = postCounterRedis;
         this.afterCommit = afterCommit;
-        this.events = events;
         this.postRepo = postRepo;
         this.domainModeratorService = domainModeratorService;
         this.eventPublisher = eventPublisher;
@@ -98,7 +94,7 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
             postCounterMapper.incrComment(comment.getPostId(), 1);
             afterCommit.execute(() -> postCounterRedis.incrComment(comment.getPostId(), 1),
                     "post comment moderation approve counter:" + comment.getPostId());
-            events.publishEvent(CommentCreatedEvent.builder()
+            eventPublisher.publish(CommentCreatedEvent.builder()
                     .uid(comment.getAuthorId())
                     .postId(comment.getPostId())
                     .postAuthorId(comment.getPostAuthorId())
@@ -106,8 +102,8 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
                     .parentId(comment.getParentId())
                     .replyToUid(comment.getReplyToUid())
                     .content(comment.getContent())
-                     .timestamp(Instant.now().toEpochMilli())
-                     .build());
+                    .timestamp(Instant.now().toEpochMilli())
+                    .build());
         } else {
             eventPublisher.publish(CommentUnavailableEvent.builder()
                     .commentId(comment.getId())

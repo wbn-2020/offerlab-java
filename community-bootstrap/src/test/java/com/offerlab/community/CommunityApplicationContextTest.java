@@ -31,6 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
                 "spring.data.redis.password=",
                 "spring.data.redis.database=0",
                 "offerlab.jwt.secret=offerlab-context-test-secret-0123456789abcdef-0123456789abcdef",
+                "offerlab.id.snowflake.worker-id=1",
+                "offerlab.id.snowflake.datacenter-id=1",
                 "spring.autoconfigure.exclude=org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration,"
                         + "org.springframework.boot.actuate.autoconfigure.data.redis.RedisReactiveHealthContributorAutoConfiguration,"
                         + "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration,"

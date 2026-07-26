@@ -107,6 +107,7 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, Post.DOMAIN_CAREER);
 
@@ -133,6 +134,7 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, Post.DOMAIN_CAREER);
 
@@ -177,6 +179,7 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
 
@@ -214,6 +217,7 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
 
@@ -221,6 +225,110 @@ class FeedDomainFilterTest {
         assertEquals("following-db-fallback", page.getSource());
         assertTrue(page.getDegraded());
         assertEquals("FOLLOWING", page.getItems().get(0).getSourceType());
+    }
+
+    @Test
+    void emptyFollowingInboxFallsBackToDatabaseForUnfannedPosts() {
+        PostBriefDTO followed = post(951L, 1951L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(951L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
+        assertTrue(page.getDegraded());
+    }
+
+    @Test
+    void kafkaBackedEmptyInboxDoesNotTriggerRepeatedDatabaseScans() {
+        PostBriefDTO followed = post(961L, 1961L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(), postIds(page));
+    }
+
+    @Test
+    void disabledFeedConsumerUsesDatabaseFollowingFallback() {
+        PostBriefDTO followed = post(971L, 1971L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
+        facade.setFeedKafkaConsumerEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(971L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
+    }
+
+    @Test
+    void kafkaDisabledFeedKeepsDatabaseAsTheCorrectnessSourceWhenRedisHasData() {
+        PostBriefDTO fanned = post(981L, 1981L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new ScriptedFeedInboxRedis(List.of(tuple("981", 9810D))),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(fanned), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(981L), postIds(page));
+        assertEquals("FOLLOWING", page.getItems().get(0).getSourceType());
+        assertEquals("following-db-fallback", page.getSource());
+        assertTrue(page.getDegraded());
+    }
+
+    @Test
+    void databaseFollowingQueryDoesNotLoseOlderFollowedPostsBehindGlobalTraffic() {
+        List<PostBriefDTO> unrelatedLatest = new ArrayList<>();
+        for (long id = 10_000L; id < 11_100L; id++) {
+            unrelatedLatest.add(post(id, id + 50_000L, Post.DOMAIN_TECH));
+        }
+        PostBriefDTO olderFollowed = post(9_999L, 77L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(
+                        PageResult.of(unrelatedLatest, null, false),
+                        List.of(olderFollowed)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 20, null);
+
+        assertEquals(List.of(9_999L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
     }
 
     private static PostBriefDTO post(Long id, Long authorId, Integer domain) {
@@ -313,9 +421,15 @@ class FeedDomainFilterTest {
 
     private static class FakePostFacade implements PostFacade {
         private final PageResult<PostBriefDTO> latestPage;
+        private final List<PostBriefDTO> followingPosts;
 
         FakePostFacade(PageResult<PostBriefDTO> latestPage) {
+            this(latestPage, latestPage.getItems());
+        }
+
+        FakePostFacade(PageResult<PostBriefDTO> latestPage, List<PostBriefDTO> followingPosts) {
             this.latestPage = latestPage;
+            this.followingPosts = followingPosts;
         }
 
         @Override
@@ -343,6 +457,23 @@ class FeedDomainFilterTest {
                     .collect(java.util.stream.Collectors.groupingBy(
                             PostBriefDTO::getAuthorId,
                             java.util.stream.Collectors.counting()));
+        }
+
+        @Override
+        public List<PostBriefDTO> listFollowingPostsByKeyset(Long viewerUid, Integer domain,
+                                                             LocalDateTime cursorTime, Long cursorId, int size) {
+            return followingPosts.stream()
+                    .filter(post -> domain == null || java.util.Objects.equals(post.getDomain(), domain))
+                    .filter(post -> cursorTime == null
+                            || post.getCreateTime().isBefore(cursorTime)
+                            || (post.getCreateTime().equals(cursorTime)
+                            && cursorId != null
+                            && post.getId() < cursorId))
+                    .sorted(java.util.Comparator
+                            .comparing(PostBriefDTO::getCreateTime).reversed()
+                            .thenComparing(PostBriefDTO::getId, java.util.Comparator.reverseOrder()))
+                    .limit(size)
+                    .toList();
         }
 
         @Override public PostDTO getPost(Long postId) { throw unsupported(); }

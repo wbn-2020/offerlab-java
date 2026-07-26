@@ -85,6 +85,58 @@ class ReviewQueueServiceTest {
         assertEquals(77L, handler.operatorUid);
     }
 
+    @Test
+    void sourceFirstActionRunsBeforeQueueResolution() {
+        ReviewQueueMapperState mapperState = new ReviewQueueMapperState(1);
+        ReviewQueueItemPO item = queueItem(103L, "POST_PENDING_REVIEW", 9003L);
+        mapperState.itemsById.put(item.getId(), item);
+        SourceFirstRecordingHandler handler = new SourceFirstRecordingHandler(mapperState);
+        ReviewQueueService service = newService(mapperState, new MigrationCheckStub(true), List.of(handler));
+
+        service.approve(103L, 77L, "approved content", "CONFIRM");
+
+        assertEquals(0, handler.resolveCallsAtHandle);
+        assertEquals(1, mapperState.resolveCalls);
+        assertEquals(ReviewQueueMapper.STATUS_APPROVED, item.getQueueStatus());
+    }
+
+    @Test
+    void sourceFirstConflictLeavesQueueOpen() {
+        ReviewQueueMapperState mapperState = new ReviewQueueMapperState(1);
+        ReviewQueueItemPO item = queueItem(104L, "QUESTION_PENDING", 9004L);
+        mapperState.itemsById.put(item.getId(), item);
+        ReviewQueueService service = newService(
+                mapperState,
+                new MigrationCheckStub(true),
+                List.of(new FailingSourceFirstHandler())
+        );
+
+        BizException ex = assertThrows(
+                BizException.class,
+                () -> service.approve(104L, 77L, "stale question", "CONFIRM")
+        );
+
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), ex.getCode());
+        assertEquals(0, mapperState.resolveCalls);
+        assertEquals(ReviewQueueMapper.STATUS_PENDING, item.getQueueStatus());
+    }
+
+    @Test
+    void requiredSourceResolutionFailsWhenQueueCasDoesNotCloseAnOpenItem() {
+        ReviewQueueMapperState mapperState = new ReviewQueueMapperState(1);
+        ReviewQueueItemPO item = queueItem(105L, "QUESTION_PENDING", 9005L);
+        mapperState.itemsById.put(item.getId(), item);
+        mapperState.resolveBySourceResult = 0;
+        ReviewQueueService service = newService(mapperState, new MigrationCheckStub(true));
+
+        BizException ex = assertThrows(BizException.class, () -> service.resolveRequired(
+                "QUESTION_PENDING", 9005L, "approved", "question approved", "approved", null
+        ));
+
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), ex.getCode());
+        assertEquals(ReviewQueueMapper.STATUS_PENDING, item.getQueueStatus());
+    }
+
     private static ReviewQueueService newService(ReviewQueueMapperState mapperState,
                                                  MigrationCheckService migrationCheckService) {
         return newService(mapperState, migrationCheckService, List.of());
@@ -124,7 +176,7 @@ class ReviewQueueServiceTest {
                     case "claim", "release" -> 0;
                     case "resolve" -> state.resolve((Long) args[0], (String) args[1], (String) args[2],
                             (String) args[3], (Long) args[4]);
-                    case "resolveBySource" -> 0;
+                    case "resolveBySource" -> state.resolveBySourceResult;
                     case "toString" -> "ReviewQueueMapperStub";
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
@@ -180,6 +232,8 @@ class ReviewQueueServiceTest {
         private final int tableExists;
         private final Map<Long, ReviewQueueItemPO> itemsById = new LinkedHashMap<>();
         private int upsertCalls;
+        private int resolveCalls;
+        private int resolveBySourceResult;
 
         private ReviewQueueMapperState(int tableExists) {
             this.tableExists = tableExists;
@@ -194,6 +248,7 @@ class ReviewQueueServiceTest {
         }
 
         private int resolve(Long id, String status, String result, String note, Long operatorUid) {
+            resolveCalls++;
             ReviewQueueItemPO item = itemsById.get(id);
             if (item == null || !List.of(ReviewQueueMapper.STATUS_PENDING, ReviewQueueMapper.STATUS_CLAIMED)
                     .contains(item.getQueueStatus())) {
@@ -281,6 +336,49 @@ class ReviewQueueServiceTest {
             this.result = result;
             this.note = note;
             this.operatorUid = operatorUid;
+        }
+    }
+
+    private static final class SourceFirstRecordingHandler implements ReviewQueueSourceActionHandler {
+        private final ReviewQueueMapperState mapperState;
+        private int resolveCallsAtHandle = -1;
+
+        private SourceFirstRecordingHandler(ReviewQueueMapperState mapperState) {
+            this.mapperState = mapperState;
+        }
+
+        @Override
+        public boolean supports(String sourceType) {
+            return "POST_PENDING_REVIEW".equals(sourceType);
+        }
+
+        @Override
+        public boolean resolveSourceBeforeQueue() {
+            return true;
+        }
+
+        @Override
+        public void handle(String sourceType, Long sourceId, String status, String result, String note,
+                           Long operatorUid) {
+            resolveCallsAtHandle = mapperState.resolveCalls;
+        }
+    }
+
+    private static final class FailingSourceFirstHandler implements ReviewQueueSourceActionHandler {
+        @Override
+        public boolean supports(String sourceType) {
+            return "QUESTION_PENDING".equals(sourceType);
+        }
+
+        @Override
+        public boolean resolveSourceBeforeQueue() {
+            return true;
+        }
+
+        @Override
+        public void handle(String sourceType, Long sourceId, String status, String result, String note,
+                           Long operatorUid) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
         }
     }
 

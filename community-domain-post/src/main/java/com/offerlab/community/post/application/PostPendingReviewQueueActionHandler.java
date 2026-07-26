@@ -2,6 +2,8 @@ package com.offerlab.community.post.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -22,6 +24,11 @@ public class PostPendingReviewQueueActionHandler implements ReviewQueueSourceAct
     @Override
     public boolean supports(String sourceType) {
         return PostApplicationService.PENDING_REVIEW_SOURCE_TYPE.equals(normalize(sourceType));
+    }
+
+    @Override
+    public boolean resolveSourceBeforeQueue() {
+        return true;
     }
 
     @Override
@@ -51,14 +58,25 @@ public class PostPendingReviewQueueActionHandler implements ReviewQueueSourceAct
 
     private Integer expectedVersion(String extJson) {
         if (extJson == null || extJson.isBlank()) {
-            return null;
+            throw staleQueueItem();
         }
         try {
             JsonNode version = JSON.readTree(extJson).get("version");
-            return version != null && version.canConvertToInt() ? version.asInt() : null;
-        } catch (Exception ignored) {
-            return null;
+            if (version == null || !version.canConvertToInt() || version.asInt() < 0) {
+                throw staleQueueItem();
+            }
+            return version.asInt();
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw staleQueueItem();
         }
+    }
+
+    private BizException staleQueueItem() {
+        return new BizException(
+                ErrorCode.INVALID_STATUS.getCode(),
+                "审核任务缺少有效的帖子内容版本，请重新生成审核任务");
     }
 
     private static String normalize(String value) {

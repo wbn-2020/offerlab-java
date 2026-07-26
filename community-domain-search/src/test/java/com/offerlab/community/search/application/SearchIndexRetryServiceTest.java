@@ -1,5 +1,6 @@
 package com.offerlab.community.search.application;
 
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRebuildTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRetryTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRetryTaskPO;
@@ -13,6 +14,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SearchIndexRetryServiceTest {
 
@@ -78,6 +82,31 @@ class SearchIndexRetryServiceTest {
         assertEquals(0L, byStatus.get("pending"));
         assertEquals(0L, byStatus.get("failed"));
         assertEquals(0L, status.get("duePending"));
+    }
+
+    @Test
+    void requiredEnqueueFailsWhenRetryTableIsUnavailable() {
+        SearchIndexRetryService service = new SearchIndexRetryService(unavailableMapper(), null, null);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> service.enqueueIndexRequired(42L, new IllegalStateException("Elasticsearch down")));
+    }
+
+    @Test
+    void requiredEnqueueFailsWhenUpsertDoesNotPersistATask() {
+        SearchIndexRetryTaskMapper mapper = proxy(methodName -> switch (methodName) {
+            case "tableExists" -> 1;
+            case "upsertPending" -> 0;
+            default -> throw new UnsupportedOperationException(methodName);
+        });
+        SnowflakeIdGenerator idGenerator = mock(SnowflakeIdGenerator.class);
+        when(idGenerator.nextId()).thenReturn(100L);
+        SearchIndexRetryService service = new SearchIndexRetryService(mapper, idGenerator, null);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> service.enqueueDeleteRequired(42L, new IllegalStateException("Elasticsearch down")));
     }
 
     @Test

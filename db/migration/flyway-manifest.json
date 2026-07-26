@@ -7,7 +7,7 @@
     "core": {
       "location": "classpath:db/flyway/core",
       "autoMigrate": true,
-      "expectedMigrations": 66
+      "expectedMigrations": 68
     },
     "demo": {
       "location": "classpath:db/flyway/demo",
@@ -646,6 +646,24 @@
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260720.03__knowledge_lifecycle_backfill.sql",
       "sha256": "0d7f637241a8776ad5117a95a93a44374336174ad176361a904cb192494eccbd",
       "flywayChecksum": 663976230
+    },
+    {
+      "version": "20260726.01",
+      "description": "event_consumer_inbox",
+      "stream": "core",
+      "source": "db/migration/20260726_event_consumer_inbox.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260726.01__event_consumer_inbox.sql",
+      "sha256": "e5a02efa6da00619c8c4265ad41ec5b899e47e054f0da224fc7b4b7bd7bab32c",
+      "flywayChecksum": 1643631094
+    },
+    {
+      "version": "20260726.02",
+      "description": "query_path_indexes",
+      "stream": "core",
+      "source": "db/migration/20260726_query_path_indexes.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260726.02__query_path_indexes.sql",
+      "sha256": "d9a1ac75a5359fd6a85521048e2fccec16c7fce7784d58e8a149fb1dbb876cfd",
+      "flywayChecksum": 2049690688
     }
   ]
 }

@@ -1,7 +1,10 @@
 package com.offerlab.community.question.api.dto;
 
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+
+import java.time.LocalDateTime;
 
 @Data
 public class QuestionAdminUpdateCmd {
@@ -16,6 +19,8 @@ public class QuestionAdminUpdateCmd {
     private String interviewRound;
     private String difficulty;
     private Integer status;
+    @NotNull
+    private LocalDateTime expectedUpdateTime;
     @Size(max = 500)
     private String remark;
     @Size(max = 32)
@@ -31,7 +36,6 @@ public class QuestionAdminUpdateCmd {
                 || company != null
                 || position != null
                 || interviewRound != null
-                || difficulty != null
-                || status != null;
+                || difficulty != null;
     }
 }

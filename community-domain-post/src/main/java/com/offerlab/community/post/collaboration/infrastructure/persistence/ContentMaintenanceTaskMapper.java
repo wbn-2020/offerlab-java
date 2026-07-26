@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
@@ -144,9 +145,71 @@ public interface ContentMaintenanceTaskMapper {
             WHERE assignee_uid = #{uid}
               AND task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
             ORDER BY update_time DESC, id DESC
+            LIMIT #{limit}
             """)
     List<ContentMaintenanceTaskRow> listKnowledgeActions(@Param("uid") Long uid,
                                                          @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT id,
+                   domain,
+                   source_type AS sourceType,
+                   source_ref_id AS sourceRefId,
+                   source_post_id AS sourcePostId,
+                   created_by_uid AS createdByUid,
+                   assignee_uid AS assigneeUid,
+                   title,
+                   detail,
+                   task_status AS status,
+                   delivery_type AS deliveryType,
+                   delivery_ref_id AS deliveryRefId,
+                   delivery_post_id AS deliveryPostId,
+                   delivery_note AS deliveryNote,
+                   review_note AS reviewNote,
+                   claimed_at AS claimedAt,
+                   submitted_at AS submittedAt,
+                   reviewed_by_uid AS reviewedByUid,
+                   reviewed_at AS reviewedAt,
+                   closed_by_uid AS closedByUid,
+                   closed_at AS closedAt,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_collab_content_maintenance_task
+            WHERE assignee_uid = #{uid}
+              AND task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
+              <if test="status != null and status != ''">
+              AND task_status = #{status}
+              </if>
+              AND (
+                    #{cursorTime} IS NULL
+                    OR update_time &lt; #{cursorTime}
+                    OR (update_time = #{cursorTime} AND id &lt; #{cursorId})
+                  )
+            ORDER BY update_time DESC, id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<ContentMaintenanceTaskRow> listKnowledgeActionsAfter(
+            @Param("uid") Long uid,
+            @Param("status") String status,
+            @Param("cursorTime") LocalDateTime cursorTime,
+            @Param("cursorId") Long cursorId,
+            @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_collab_content_maintenance_task
+            WHERE assignee_uid = #{uid}
+              AND task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
+              <if test="status != null and status != ''">
+              AND task_status = #{status}
+              </if>
+            </script>
+            """)
+    long countKnowledgeActions(@Param("uid") Long uid,
+                               @Param("status") String status);
 
     @Select("""
             <script>

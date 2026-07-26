@@ -113,7 +113,7 @@ public class PostController {
         requireSafeExternalImageUrl(req.getCoverUrl());
         contentModerationService.requireUserCanPublish(uid);
         Long id = idGenerator.nextId();
-        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
+        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkNewSourceContent(
                 uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, id,
                 req.getTitle(), req.getContent());
         boolean reviewRequired = moderationDecision.reviewRequired()

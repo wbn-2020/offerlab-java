@@ -23,8 +23,13 @@ public class QuestionNotificationListener {
     private final NotificationRetryService retryService;
 
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onQuestionExtractionFinished(QuestionExtractionFinishedEvent event) {
+        handleQuestionExtractionFinishedSynchronously(event);
+    }
+
+    public void handleQuestionExtractionFinishedSynchronously(
+            QuestionExtractionFinishedEvent event) {
         if (event == null || event.getPostAuthorUid() == null || event.getPostId() == null) {
             return;
         }
@@ -32,8 +37,11 @@ public class QuestionNotificationListener {
         try {
             notificationFacade.notifySystem(event.getPostAuthorUid(), TARGET_POST, event.getPostId(), content);
         } catch (Exception e) {
-            retryService.enqueue("question extraction", event.getPostAuthorUid(), 0L, TYPE_SYSTEM,
-                    (int) TARGET_POST, event.getPostId(), content, e);
+            if (!retryService.enqueue("question extraction", event.getPostAuthorUid(), 0L, TYPE_SYSTEM,
+                    (int) TARGET_POST, event.getPostId(), content, e)) {
+                throw new IllegalStateException(
+                        "question extraction notification failed and retry task was not persisted", e);
+            }
         }
     }
 

@@ -17,6 +17,7 @@ import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -195,14 +196,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyLike(Long receiverUid, Long senderUid, Integer targetType, Long targetId) {
         create(receiverUid, senderUid, TYPE_LIKE, targetType, targetId,
                 Map.of("action", "like", "targetType", targetType, "targetId", targetId));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyCommentLike(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_LIKE, TARGET_COMMENT, commentId,
                 Map.of("action", "like", "targetType", TARGET_COMMENT, "targetId", commentId,
@@ -210,14 +211,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
                 Map.of("action", "comment", "postId", postId, "commentId", commentId));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyAnswerAccepted(Long receiverUid, Long senderUid, Long postId, Long commentId,
                                      Map<String, Object> content) {
         create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
@@ -229,7 +230,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyDiscussionFollowComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
                 Map.of("action", "discussion_follow_comment",
@@ -239,7 +240,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyDiscussionFollowQualityComment(Long receiverUid, Long senderUid, Long postId, Long commentId, String action) {
         String normalizedAction = normalizeDiscussionFollowQualityAction(action);
         if (normalizedAction == null) {
@@ -254,21 +255,21 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyFollower(Long receiverUid, Long senderUid) {
         create(receiverUid, senderUid, TYPE_FOLLOWER, TARGET_USER, senderUid,
                 Map.of("action", "follow", "userId", senderUid));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyFavorite(Long receiverUid, Long senderUid, Long postId) {
         create(receiverUid, senderUid, TYPE_FAVORITE, TARGET_POST, postId,
                 Map.of("action", "favorite", "postId", postId));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         Map<String, Object> content = commentId == null
                 ? Map.of("action", "mention", "postId", postId)
@@ -278,21 +279,21 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifySystem(Long receiverUid, Long targetType, Long targetId, Map<String, Object> content) {
         create(receiverUid, 0L, TYPE_SYSTEM, targetType == null ? null : targetType.intValue(), targetId,
                 content == null ? Map.of() : content);
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyReportReceipt(Long receiverUid, String sourceType, Long reportId, String userStatus, String targetPath) {
         create(receiverUid, 0L, TYPE_SYSTEM, null, reportId,
                 reportReceiptContent(sourceType, reportId, userStatus, targetPath));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyContactRequestReceived(Long receiverUid, Long requesterUid, Long requestId) {
         create(receiverUid, requesterUid, TYPE_SYSTEM, null, requestId,
                 contactRequestContent(ACTION_CONTACT_REQUEST_RECEIVED, requestId,
@@ -300,7 +301,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyContactRequestAccepted(Long requesterUid, Long receiverUid, Long requestId) {
         create(requesterUid, receiverUid, TYPE_SYSTEM, null, requestId,
                 contactRequestContent(ACTION_CONTACT_REQUEST_ACCEPTED, requestId,
@@ -308,7 +309,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyContactRequestRejected(Long requesterUid, Long receiverUid, Long requestId) {
         create(requesterUid, receiverUid, TYPE_SYSTEM, null, requestId,
                 contactRequestContent(ACTION_CONTACT_REQUEST_REJECTED, requestId,
@@ -348,7 +349,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
         }
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     void createFromRetryTask(Long receiverUid, Long senderUid, Integer notifType,
                              Integer targetType, Long targetId, Map<String, Object> content) {
         create(receiverUid, senderUid, notifType, targetType, targetId, content == null ? Map.of() : content);

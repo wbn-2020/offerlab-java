@@ -1,7 +1,6 @@
 package com.offerlab.community.feed.application;
 
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
-import com.offerlab.community.infra.mq.idempotent.IdempotentChecker;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.user.api.UserFacade;
@@ -19,19 +18,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FeedFanoutRetryTest {
 
     @Test
-    void partialInboxFailureReleasesIdempotencyAndRetryReplaysAllFollowers() {
-        RecordingIdempotentChecker checker = new RecordingIdempotentChecker();
+    void partialInboxFailureCanBeRetriedAndReplaysAllFollowers() {
         RecordingFeedInboxRedis feedRedis = new RecordingFeedInboxRedis(102L);
         FeedFanoutService service = new FeedFanoutService(
                 followerFacade(List.of(follower(1L, 101L), follower(2L, 102L), follower(3L, 103L))),
-                feedRedis,
-                checker
+                feedRedis
         );
 
         assertThrows(IllegalStateException.class,
                 () -> service.fanoutPostPublished(event(), "kafka:first"));
 
-        assertEquals(1, checker.releaseCount);
         assertEquals(List.of(101L, 102L), feedRedis.inboxAttempts);
 
         assertTrue(service.fanoutPostPublished(event(), "kafka:retry"));
@@ -39,6 +35,33 @@ class FeedFanoutRetryTest {
         assertEquals(List.of(101L, 102L, 101L, 102L, 103L), feedRedis.inboxAttempts);
         assertEquals(2, feedRedis.authorTimelineWrites);
         assertEquals(2, feedRedis.globalLatestWrites);
+    }
+
+    @Test
+    void repeatedFullFollowerPageFailsWhenTheCursorDoesNotAdvance() {
+        List<FollowCursorDTO> repeatedPage = new ArrayList<>();
+        for (long relationId = 2000L; relationId > 1000L; relationId--) {
+            repeatedPage.add(follower(relationId, relationId + 10_000L));
+        }
+        UserFacade userFacade = (UserFacade) Proxy.newProxyInstance(
+                UserFacade.class.getClassLoader(),
+                new Class<?>[]{UserFacade.class},
+                (proxy, method, args) -> {
+                    if ("getFollowerPage".equals(method.getName())) {
+                        return repeatedPage;
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        FeedFanoutService service = new FeedFanoutService(
+                userFacade,
+                new RecordingFeedInboxRedis(-1L)
+        );
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> service.fanoutPostPublished(event(), "kafka:repeated-page"));
+
+        assertTrue(error.getMessage().contains("cursor did not advance"));
     }
 
     private static FollowCursorDTO follower(Long relationId, Long uid) {
@@ -82,31 +105,6 @@ class FeedFanoutRetryTest {
             return 0;
         }
         return 0;
-    }
-
-    private static final class RecordingIdempotentChecker extends IdempotentChecker {
-
-        private boolean consumed;
-        private int releaseCount;
-
-        private RecordingIdempotentChecker() {
-            super(null);
-        }
-
-        @Override
-        public boolean tryConsume(String messageId, String consumerName) {
-            if (consumed) {
-                return false;
-            }
-            consumed = true;
-            return true;
-        }
-
-        @Override
-        public void release(String messageId, String consumerName) {
-            consumed = false;
-            releaseCount++;
-        }
     }
 
     private static final class RecordingFeedInboxRedis extends FeedInboxRedis {

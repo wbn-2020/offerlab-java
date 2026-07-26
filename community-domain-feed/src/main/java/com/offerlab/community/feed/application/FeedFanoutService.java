@@ -2,7 +2,6 @@ package com.offerlab.community.feed.application;
 
 import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
-import com.offerlab.community.infra.mq.idempotent.IdempotentChecker;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.user.api.UserFacade;
@@ -19,11 +18,21 @@ import java.util.List;
 public class FeedFanoutService {
 
     private static final int FANOUT_BATCH_SIZE = 1000;
-    private static final String CONSUMER_NAME = "feed-fanout";
 
     private final UserFacade userFacade;
     private final FeedInboxRedis feedRedis;
-    private final IdempotentChecker idempotentChecker;
+
+    static String idempotencyKey(PostPublishedEvent event) {
+        Long postId = event == null ? null : event.getPostId();
+        Long publishedAt = event == null ? null : event.getTimestamp();
+        if (postId == null || postId <= 0) {
+            throw new IllegalArgumentException("post.published event requires postId");
+        }
+        if (publishedAt == null || publishedAt <= 0) {
+            throw new IllegalArgumentException("post.published event requires timestamp");
+        }
+        return "post.published:" + postId + ":" + publishedAt;
+    }
 
     public boolean fanoutPostPublished(PostPublishedEvent event, String source) {
         Long postId = event == null ? null : event.getPostId();
@@ -36,13 +45,6 @@ public class FeedFanoutService {
             log.warn("feed fanout skipped: non-public post source={} postId={} authorId={} visibility={} status={}",
                     source, LogMask.id(postId), LogMask.id(authorId), event.getVisibility(), event.getPostStatus());
             return true;
-        }
-
-        String idempotentKey = "post.published:" + postId;
-        if (!idempotentChecker.tryConsume(idempotentKey, CONSUMER_NAME)) {
-            log.info("feed fanout skipped duplicate: source={} postId={} authorId={}",
-                    source, LogMask.id(postId), LogMask.id(authorId));
-            return false;
         }
 
         long followerCount = 0L;
@@ -81,15 +83,19 @@ public class FeedFanoutService {
                 if (nextCursor == null || nextCursor <= 0 || followers.size() < FANOUT_BATCH_SIZE) {
                     break;
                 }
+                if (cursor > 0 && nextCursor >= cursor) {
+                    throw new IllegalStateException(
+                            "feed fanout follower cursor did not advance: current="
+                                    + cursor + " next=" + nextCursor);
+                }
                 cursor = nextCursor;
             }
             log.info("feed fanout done: source={} postId={} authorId={} followers={} batches={} batchSize={}",
                     source, LogMask.id(postId), LogMask.id(authorId), followerCount, batches, FANOUT_BATCH_SIZE);
             return true;
         } catch (Exception e) {
-            idempotentChecker.release(idempotentKey, CONSUMER_NAME);
-            log.error("feed fanout failed: source={} postId={} authorId={} followers={} failedWrites={} retryReleased={}",
-                    source, LogMask.id(postId), LogMask.id(authorId), followerCount, failedWrites, true, e);
+            log.error("feed fanout failed: source={} postId={} authorId={} followers={} failedWrites={}",
+                    source, LogMask.id(postId), LogMask.id(authorId), followerCount, failedWrites, e);
             throw e;
         }
     }

@@ -3,6 +3,7 @@ package com.offerlab.community.question.application;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
@@ -12,6 +13,7 @@ import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
@@ -88,6 +90,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
     private static final int MAX_PREP_TARGETS_PER_USER = 20;
     private static final int MAX_PUBLIC_QUESTION_OFFSET = 10_000;
     private static final int MAX_ADMIN_QUESTION_OFFSET = 100_000;
+    static final String PENDING_REVIEW_SOURCE_TYPE = "QUESTION_PENDING";
     private static final String SOURCE_REMOVED_REVIEW_REASON = "来源帖子重提取未再包含该题";
     private static final String SOURCE_HIDDEN_REVIEW_REASON = "来源帖子当前不可见";
     private static final Set<String> TECHNICAL_KEYWORDS = Set.of(
@@ -683,6 +686,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (questionId == null || questionId <= 0 || cmd == null || !cmd.hasEditableField()) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        if (cmd.getStatus() != null) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "题目状态只能通过审核接口变更");
+        }
+        if (cmd.getExpectedUpdateTime() == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "缺少题目内容版本，请刷新后重试");
+        }
         List<InterviewQuestionPO> rows = questionMapper.selectVisibleByIds(List.of(questionId), true);
         if (rows.isEmpty()) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -708,10 +717,6 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (cmd.getDifficulty() != null) {
             update.setDifficulty(normalizeDifficulty(cmd.getDifficulty()));
         }
-        if (cmd.getStatus() != null) {
-            validateQuestionStatus(cmd.getStatus());
-            update.setStatus(cmd.getStatus());
-        }
         InterviewQuestionPO scoreBase = rows.get(0);
         scoreBase.setQuestionText(update.getQuestionText() == null ? scoreBase.getQuestionText() : update.getQuestionText());
         scoreBase.setCompany(update.getCompany() == null ? scoreBase.getCompany() : update.getCompany());
@@ -721,9 +726,19 @@ public class QuestionFacadeImpl implements QuestionFacade {
         scoreBase.setReferenceAnswer(update.getReferenceAnswer() == null ? scoreBase.getReferenceAnswer() : update.getReferenceAnswer());
         scoreBase.setSourceSnippet(update.getSourceSnippet() == null ? scoreBase.getSourceSnippet() : update.getSourceSnippet());
         update.setQualityScore(score(scoreBase));
-        questionMapper.updateAdmin(update);
+        int updated = questionMapper.updateAdminIfCurrent(update, cmd.getExpectedUpdateTime());
+        if (updated != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "题目内容或状态已更新，请刷新后重试");
+        }
+        List<InterviewQuestionPO> updatedRows = questionMapper.selectVisibleByIds(List.of(questionId), true);
+        if (updatedRows.isEmpty()) {
+            throw new BizException(ErrorCode.DATABASE_ERROR);
+        }
+        InterviewQuestionPO updatedQuestion = updatedRows.get(0);
+        publishPendingQuestionQueueItem(updatedQuestion);
+        evictQuestionDetail(questionId);
         afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index update:" + questionId);
-        return toAdminQuestionDtos(questionMapper.selectVisibleByIds(List.of(questionId), true), null).get(0);
+        return toAdminQuestionDtos(updatedRows, null).get(0);
     }
 
     @Override
@@ -733,20 +748,34 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (status == QuestionConstants.QUESTION_PENDING || expectedUpdateTime == null) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        resolvePendingQuestionStatus(questionId, status, expectedUpdateTime);
+        reviewQueuePublisher.resolveRequired(PENDING_REVIEW_SOURCE_TYPE, questionId,
+                status == QuestionConstants.QUESTION_APPROVED ? "approved" : "rejected",
+                status == QuestionConstants.QUESTION_APPROVED ? "question approved" : "question hidden",
+                "question review status=" + status,
+                UserContext.get());
+        return Map.of("questionId", questionId, "status", status);
+    }
+
+    @Transactional
+    public void resolvePendingQuestionReview(Long questionId, boolean approved, LocalDateTime expectedUpdateTime) {
+        if (expectedUpdateTime == null) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "审核任务缺少题目内容版本，请重新生成审核任务");
+        }
+        resolvePendingQuestionStatus(
+                questionId,
+                approved ? QuestionConstants.QUESTION_APPROVED : QuestionConstants.QUESTION_HIDDEN,
+                expectedUpdateTime
+        );
+    }
+
+    private void resolvePendingQuestionStatus(Long questionId, int status, LocalDateTime expectedUpdateTime) {
         int updated = questionMapper.reviewStatusIfPendingAndCurrent(questionId, status, expectedUpdateTime);
         if (updated == 0) {
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "题目内容或状态已更新，请刷新后重新审核");
         }
         evictQuestionDetail(questionId);
         afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index review:" + questionId);
-        if (status != QuestionConstants.QUESTION_PENDING) {
-            reviewQueuePublisher.resolve("QUESTION_PENDING", questionId,
-                    status == QuestionConstants.QUESTION_APPROVED ? "approved" : "rejected",
-                    status == QuestionConstants.QUESTION_APPROVED ? "question approved" : "question hidden",
-                    "question review status=" + status,
-                    null);
-        }
-        return Map.of("questionId", questionId, "status", status);
     }
 
     @Override
@@ -1166,6 +1195,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                     po,
                     existing != null,
                     resetToPending,
+                    existing == null ? null : existing.getUpdateTime(),
                     tagIds
             ));
             if (existing != null) {
@@ -1184,25 +1214,31 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (!retainedQuestionIds.isEmpty()) {
             questionTagMapper.deleteByQuestionIds(retainedQuestionIds);
         }
+        List<Long> pendingQueueQuestionIds = new ArrayList<>();
         for (QuestionMergeItem mergeItem : mergeItems) {
             InterviewQuestionPO po = mergeItem.question();
             if (mergeItem.existing()) {
-                int updated = questionMapper.updateExtractedByIdAndPostId(po, mergeItem.resetToPending());
+                int updated = questionMapper.updateExtractedByIdAndPostId(
+                        po,
+                        mergeItem.resetToPending(),
+                        mergeItem.expectedUpdateTime()
+                );
                 if (updated != 1) {
-                    throw new BizException(ErrorCode.DATABASE_ERROR);
+                    throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                            "题目已被其他操作更新，请重新执行题目提取");
                 }
             } else {
                 questionMapper.insert(po);
             }
             if (po.getStatus() != null
-                    && po.getStatus() == QuestionConstants.QUESTION_PENDING
-                    && (!mergeItem.existing() || mergeItem.resetToPending())) {
-                publishPendingQuestionQueueItem(po);
+                    && po.getStatus() == QuestionConstants.QUESTION_PENDING) {
+                pendingQueueQuestionIds.add(po.getId());
             }
             for (Long tagId : mergeItem.tagIds()) {
                 questionTagMapper.insertIgnore(idGen.nextId(), po.getId(), tagId);
             }
         }
+        publishPendingQuestionQueueItems(pendingQueueQuestionIds);
 
         List<InterviewQuestionPO> removedQuestions = List.copyOf(remainingOldQuestions.values());
         List<Long> removedQuestionIds = removedQuestions.stream()
@@ -1320,6 +1356,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
             InterviewQuestionPO question,
             boolean existing,
             boolean resetToPending,
+            LocalDateTime expectedUpdateTime,
             List<Long> tagIds
     ) {
     }
@@ -1419,8 +1456,8 @@ public class QuestionFacadeImpl implements QuestionFacade {
     }
 
     private void publishPendingQuestionQueueItem(InterviewQuestionPO question) {
-        if (question == null || question.getId() == null) {
-            return;
+        if (question == null || question.getId() == null || question.getUpdateTime() == null) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(), "待审核题目缺少内容版本");
         }
         String title = "待审知识卡：" + limit(clean(question.getQuestionText()), 160);
         String summary = String.join(" / ", List.of(
@@ -1429,22 +1466,47 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 "场景：" + clean(question.getPosition()),
                 "原因：" + clean(question.getQualityReason())
         )).trim();
+        ObjectNode ext = objectMapper.createObjectNode();
+        if (question.getSourcePostId() != null) {
+            ext.put("postId", question.getSourcePostId());
+        }
+        ext.put("expectedUpdateTime", question.getUpdateTime().toString());
         reviewQueuePublisher.reopen(new ReviewQueueItemCommand(
-                "QUESTION_PENDING",
+                PENDING_REVIEW_SOURCE_TYPE,
                 question.getId(),
                 title,
                 summary,
                 "medium",
                 question.getSourceAuthorUid(),
                 50,
-                "{\"postId\":" + question.getSourcePostId() + "}",
+                ext.toString(),
                 "question auto review pending"
         ));
     }
 
+    private void publishPendingQuestionQueueItems(Collection<Long> questionIds) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return;
+        }
+        List<Long> orderedIds = questionIds.stream().filter(Objects::nonNull).distinct().toList();
+        List<InterviewQuestionPO> persistedRows = questionMapper.selectBatchIds(orderedIds);
+        Map<Long, InterviewQuestionPO> persistedById = persistedRows == null
+                ? Map.of()
+                : persistedRows.stream().collect(Collectors.toMap(
+                InterviewQuestionPO::getId,
+                question -> question,
+                (left, right) -> left,
+                LinkedHashMap::new
+        ));
+        if (persistedById.size() != orderedIds.size()) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(), "待审核题目版本读取失败");
+        }
+        orderedIds.stream().map(persistedById::get).forEach(this::publishPendingQuestionQueueItem);
+    }
+
     private void closePendingQuestionQueueItem(Long questionId, String result, String note) {
         reviewQueuePublisher.resolve(
-                "QUESTION_PENDING",
+                PENDING_REVIEW_SOURCE_TYPE,
                 questionId,
                 "closed",
                 result,

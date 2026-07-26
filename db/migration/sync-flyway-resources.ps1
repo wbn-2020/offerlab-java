@@ -69,6 +69,14 @@ $initMirrorMappings = @(
   [pscustomobject]@{
     Source = Join-Path $sourceDir "20260720_knowledge_lifecycle_backfill.sql"
     Destination = Join-Path $repoRoot "db\init\27_knowledge_lifecycle_backfill.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260726_event_consumer_inbox.sql"
+    Destination = Join-Path $repoRoot "db\init\28_event_consumer_inbox.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260726_query_path_indexes.sql"
+    Destination = Join-Path $repoRoot "db\init\29_query_path_indexes.sql"
   }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"

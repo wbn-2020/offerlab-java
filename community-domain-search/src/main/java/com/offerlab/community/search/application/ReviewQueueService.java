@@ -156,6 +156,27 @@ public class ReviewQueueService implements ReviewQueuePublisher {
         }
     }
 
+    @Override
+    @Transactional
+    public void resolveRequired(String sourceType, Long sourceId, String status, String result,
+                                String note, Long operatorUid) {
+        if (!queueReady() || sourceId == null || sourceId <= 0) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(), "Review queue service is unavailable");
+        }
+        SourceResolveResult resolved = resolveSourceInternal(sourceType, sourceId, status, result, note, operatorUid);
+        if (resolved == null) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "Review queue item changed concurrently; refresh and retry");
+        }
+        if (operatorUid != null) {
+            auditService.recordRequired(operatorUid, "REVIEW_QUEUE_SOURCE_RESOLVE", "REVIEW_QUEUE",
+                    resolved.before().getId(), resolved.before(), resolved.after(), clean(note));
+        } else {
+            auditService.record(null, "SYSTEM_REVIEW_QUEUE_SOURCE_RESOLVE", "REVIEW_QUEUE",
+                    resolved.before().getId(), resolved.before(), resolved.after(), clean(note));
+        }
+    }
+
     private void resolveSourceRequired(String sourceType, Long sourceId, String status, String result,
                                        String note, Long operatorUid) {
         SourceResolveResult resolved = resolveSourceInternal(sourceType, sourceId, status, result, note, operatorUid);
@@ -177,7 +198,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     }
 
     private SourceResolveResult resolveSourceInternal(String sourceType, Long sourceId, String status, String result,
-                                                     String note, Long operatorUid) {
+                                                       String note, Long operatorUid) {
         if (!queueReady() || sourceId == null || sourceId <= 0) {
             return null;
         }
@@ -270,23 +291,26 @@ public class ReviewQueueService implements ReviewQueuePublisher {
         if (!OPEN_STATUSES.contains(before.getQueueStatus())) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
+        dispatchSourceAction(before, status, result, note, operatorUid, true);
         int updated = mapper.resolve(id, status, result, clean(note), operatorUid);
         if (updated == 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         ReviewQueueItemPO after = requireItem(id);
-        dispatchSourceAction(after, status, result, note, operatorUid);
+        dispatchSourceAction(after, status, result, note, operatorUid, false);
         auditService.recordRequired(operatorUid, action, "REVIEW_QUEUE", id, before, after, clean(note));
         return after;
     }
 
-    private void dispatchSourceAction(ReviewQueueItemPO item, String status, String result, String note, Long operatorUid) {
+    private void dispatchSourceAction(ReviewQueueItemPO item, String status, String result, String note,
+                                      Long operatorUid, boolean beforeQueueResolution) {
         if (item == null || item.getSourceId() == null || sourceActionHandlers == null || sourceActionHandlers.isEmpty()) {
             return;
         }
         String sourceType = item.getSourceType();
         for (ReviewQueueSourceActionHandler handler : sourceActionHandlers) {
-            if (handler.supports(sourceType)) {
+            if (handler.supports(sourceType)
+                    && handler.resolveSourceBeforeQueue() == beforeQueueResolution) {
                 handler.handle(sourceType, item.getSourceId(), status, result, note, operatorUid, item.getExtJson());
             }
         }

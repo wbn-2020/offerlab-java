@@ -1,5 +1,6 @@
 package com.offerlab.community.post.application;
 
+import com.offerlab.community.post.api.KnowledgeMaintenanceReadFacade;
 import com.offerlab.community.post.api.dto.KnowledgeMaintenanceSourceDTO;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskMapper;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskRow;
@@ -9,18 +10,25 @@ import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelatio
 import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelationRow;
 import com.offerlab.community.post.reference.infrastructure.persistence.PostReferenceMapper;
 import com.offerlab.community.post.reference.infrastructure.persistence.PostReferenceRows.ReferenceRow;
+import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.mapping.BoundSql;
+import org.apache.ibatis.mapping.SqlSource;
+import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PostKnowledgeMaintenanceReadServiceTest {
@@ -29,7 +37,7 @@ class PostKnowledgeMaintenanceReadServiceTest {
     private static final LocalDateTime BASE_TIME = LocalDateTime.of(2026, 7, 21, 12, 0);
 
     @Test
-    void zeroRequestsAllReferenceRelationAndActiveMaintenanceTaskCandidates() {
+    void boundedQueriesUseOneBatchPostLookupAcrossAllSources() {
         ReferenceRow reference = reference(201L, 1001L, 8);
         PostKnowledgeRelationRow ownedRelation = relation(202L, 1002L, UID, "REJECTED", 7);
         PostKnowledgeRelationRow pendingReview = relation(203L, 1003L, 99L, "PENDING", 6);
@@ -43,31 +51,35 @@ class PostKnowledgeMaintenanceReadServiceTest {
         AtomicInteger ownedRelationLimit = new AtomicInteger(-1);
         AtomicInteger pendingReviewLimit = new AtomicInteger(-1);
         AtomicInteger taskLimit = new AtomicInteger(-1);
+        AtomicInteger postBatchCalls = new AtomicInteger();
+        List<Integer> capturedDomains = new ArrayList<>();
 
         PostReferenceMapper referenceMapper = proxy(PostReferenceMapper.class, (method, args) -> {
-            if ("listBrokenOwned".equals(method)) {
+            if ("listBrokenOwnedAfter".equals(method)) {
                 assertEquals(UID, args[0]);
-                referenceLimit.set((Integer) args[1]);
+                referenceLimit.set((Integer) args[3]);
                 return List.of(reference);
             }
             return null;
         });
         PostKnowledgeRelationMapper relationMapper = proxy(PostKnowledgeRelationMapper.class, (method, args) -> {
-            if ("listOwnedActions".equals(method)) {
+            if ("listOwnedActionsAfter".equals(method)) {
                 assertEquals(UID, args[0]);
-                ownedRelationLimit.set((Integer) args[1]);
+                ownedRelationLimit.set((Integer) args[4]);
                 return List.of(ownedRelation);
             }
-            if ("listPendingReviewActions".equals(method)) {
-                pendingReviewLimit.set((Integer) args[0]);
+            if ("listPendingReviewActionsForDomainsAfter".equals(method)) {
+                assertEquals(UID, args[0]);
+                capturedDomains.addAll(castList(args[1]));
+                pendingReviewLimit.set((Integer) args[5]);
                 return List.of(pendingReview);
             }
             return null;
         });
         ContentMaintenanceTaskMapper taskMapper = proxy(ContentMaintenanceTaskMapper.class, (method, args) -> {
-            if ("listKnowledgeActions".equals(method)) {
+            if ("listKnowledgeActionsAfter".equals(method)) {
                 assertEquals(UID, args[0]);
-                taskLimit.set((Integer) args[1]);
+                taskLimit.set((Integer) args[4]);
                 return tasks;
             }
             return null;
@@ -82,11 +94,11 @@ class PostKnowledgeMaintenanceReadServiceTest {
                 referenceMapper,
                 relationMapper,
                 taskMapper,
-                postRepository(posts),
+                postRepository(posts, postBatchCalls),
                 allowingModeratorService()
         );
 
-        List<KnowledgeMaintenanceSourceDTO> items = service.listActions(UID, 0);
+        List<KnowledgeMaintenanceSourceDTO> items = service.listActions(UID, 25);
 
         assertEquals(6, items.size());
         assertEquals(List.of(
@@ -110,10 +122,111 @@ class PostKnowledgeMaintenanceReadServiceTest {
                 .filter(item -> item.getSourceKey().startsWith("MAINTENANCE_TASK:"))
                 .allMatch(item -> "/me/maintenance".equals(item.getCanonicalRoute())));
 
-        assertEquals(0, referenceLimit.get());
-        assertEquals(0, ownedRelationLimit.get());
-        assertEquals(0, pendingReviewLimit.get());
-        assertEquals(0, taskLimit.get());
+        assertEquals(25, referenceLimit.get());
+        assertEquals(25, ownedRelationLimit.get());
+        assertEquals(25, pendingReviewLimit.get());
+        assertEquals(25, taskLimit.get());
+        assertEquals(1, postBatchCalls.get());
+        assertEquals(List.of(Post.DOMAIN_TECH, Post.DOMAIN_CAREER), capturedDomains);
+    }
+
+    @Test
+    void maintenanceTaskKeysetCanReachRowsBeyondTwoHundred() {
+        List<ContentMaintenanceTaskRow> tasks = IntStream.rangeClosed(1, 251)
+                .mapToObj(index -> task(
+                        10_000L - index,
+                        "OPEN",
+                        -index))
+                .toList();
+        ContentMaintenanceTaskMapper taskMapper = proxy(ContentMaintenanceTaskMapper.class, (method, args) -> {
+            if (!"listKnowledgeActionsAfter".equals(method)) {
+                return null;
+            }
+            LocalDateTime cursorTime = (LocalDateTime) args[2];
+            Long cursorId = (Long) args[3];
+            int limit = (Integer) args[4];
+            return tasks.stream()
+                    .filter(row -> after(row.getUpdateTime(), row.getId(), cursorTime, cursorId))
+                    .limit(limit)
+                    .toList();
+        });
+        PostKnowledgeMaintenanceReadService service = new PostKnowledgeMaintenanceReadService(
+                proxy(PostReferenceMapper.class, (method, args) -> List.of()),
+                proxy(PostKnowledgeRelationMapper.class, (method, args) -> List.of()),
+                taskMapper,
+                postRepository(Map.of(), new AtomicInteger()),
+                moderatorService(List.of())
+        );
+
+        LocalDateTime cursorTime = null;
+        Integer cursorOrder = null;
+        Long cursorId = null;
+        Map<String, KnowledgeMaintenanceSourceDTO> allItems = new LinkedHashMap<>();
+        int pages = 0;
+        while (pages < 10) {
+            List<KnowledgeMaintenanceSourceDTO> candidates = service.listActions(
+                    UID,
+                    "MAINTENANCE_TASK",
+                    null,
+                    cursorTime,
+                    cursorOrder,
+                    cursorId,
+                    51);
+            pages++;
+            boolean hasMore = candidates.size() > 50;
+            List<KnowledgeMaintenanceSourceDTO> page = hasMore
+                    ? candidates.subList(0, 50)
+                    : candidates;
+            page.forEach(item -> allItems.put(item.getSourceKey(), item));
+            if (!hasMore) {
+                break;
+            }
+            KnowledgeMaintenanceSourceDTO last = page.get(page.size() - 1);
+            cursorTime = last.getUpdatedAt();
+            cursorOrder = KnowledgeMaintenanceReadFacade.SOURCE_ORDER_MAINTENANCE_TASK;
+            cursorId = Long.parseLong(last.getSourceKey().substring(
+                    last.getSourceKey().lastIndexOf(':') + 1));
+        }
+
+        assertEquals(6, pages);
+        assertEquals(251, allItems.size());
+        assertTrue(allItems.containsKey("MAINTENANCE_TASK:9749"));
+    }
+
+    @Test
+    void relationReviewPermissionPredicateIsAppliedBeforeLimit() throws Exception {
+        Select select = PostKnowledgeRelationMapper.class.getMethod(
+                        "listPendingReviewActionsForDomainsAfter",
+                        Long.class,
+                        List.class,
+                        String.class,
+                        LocalDateTime.class,
+                        Long.class,
+                        int.class)
+                .getAnnotation(Select.class);
+        String sql = String.join("\n", select.value()).toLowerCase();
+
+        assertTrue(sql.contains("source_extension.domain in"));
+        assertTrue(sql.contains("r.proposer_uid &lt;&gt; #{uid}"));
+        assertTrue(sql.indexOf("source_extension.domain in") < sql.indexOf("limit #{limit}"));
+        assertFalse(sql.contains("order by case risk_level"));
+
+        Configuration configuration = new Configuration();
+        SqlSource sqlSource = configuration.getLanguageDriver(null).createSqlSource(
+                configuration, String.join("\n", select.value()), Map.class);
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("uid", UID);
+        parameters.put("domains", List.of(Post.DOMAIN_TECH, Post.DOMAIN_CAREER));
+        parameters.put("status", null);
+        parameters.put("cursorTime", null);
+        parameters.put("cursorId", null);
+        parameters.put("limit", 26);
+        BoundSql boundSql = sqlSource.getBoundSql(parameters);
+        String rendered = boundSql.getSql().replaceAll("\\s+", " ").trim().toLowerCase();
+
+        assertTrue(rendered.contains("source_extension.domain in ( ? , ? )"));
+        assertTrue(rendered.contains("r.proposer_uid <> ?"));
+        assertTrue(rendered.endsWith("limit ?"));
     }
 
     private static ReferenceRow reference(Long id, Long postId, int minutes) {
@@ -161,22 +274,51 @@ class PostKnowledgeMaintenanceReadServiceTest {
                 .build();
     }
 
-    private static PostRepository postRepository(Map<Long, Post> posts) {
+    @SuppressWarnings("unchecked")
+    private static PostRepository postRepository(Map<Long, Post> posts, AtomicInteger batchCalls) {
         return proxy(PostRepository.class, (method, args) -> {
+            if ("batchFindByIds".equals(method)) {
+                batchCalls.incrementAndGet();
+                Map<Long, Post> selected = new LinkedHashMap<>();
+                for (Long id : (Collection<Long>) args[0]) {
+                    if (posts.containsKey(id)) {
+                        selected.put(id, posts.get(id));
+                    }
+                }
+                return selected;
+            }
             if ("findById".equals(method)) {
-                return Optional.ofNullable(posts.get((Long) args[0]));
+                throw new AssertionError("knowledge maintenance reads must not issue per-post queries");
             }
             return null;
         });
     }
 
     private static DomainModeratorService allowingModeratorService() {
+        return moderatorService(List.of(Post.DOMAIN_TECH, Post.DOMAIN_CAREER));
+    }
+
+    private static DomainModeratorService moderatorService(List<Integer> domains) {
         return new DomainModeratorService(null, null, null, null, null) {
             @Override
-            public boolean canModerateDomain(Long uid, Integer domain) {
-                return UID == uid && domain != null;
+            public List<Integer> listModeratableDomains(Long uid) {
+                return UID == uid ? domains : List.of();
             }
         };
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Integer> castList(Object value) {
+        return (List<Integer>) value;
+    }
+
+    private static boolean after(LocalDateTime updatedAt, Long id,
+                                 LocalDateTime cursorTime, Long cursorId) {
+        if (cursorTime == null) {
+            return true;
+        }
+        int timeCompare = updatedAt.compareTo(cursorTime);
+        return timeCompare < 0 || (timeCompare == 0 && id < cursorId);
     }
 
     @SuppressWarnings("unchecked")

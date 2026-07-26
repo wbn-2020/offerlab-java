@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
@@ -84,9 +85,62 @@ public interface PostReferenceMapper {
               AND reference_status = 'BROKEN'
               AND is_deleted = 0
             ORDER BY update_time DESC, id DESC
+            LIMIT #{limit}
             """)
     List<ReferenceRow> listBrokenOwned(@Param("ownerUid") Long ownerUid,
                                       @Param("limit") int limit);
+
+    @Select("""
+            SELECT r.id,
+                   r.post_id AS postId,
+                   r.owner_uid AS ownerUid,
+                   r.reference_type AS referenceType,
+                   r.title,
+                   r.url,
+                   r.normalized_url AS normalizedUrl,
+                   r.source_domain AS sourceDomain,
+                   r.note,
+                   r.broken_reason AS brokenReason,
+                   r.reference_status AS referenceStatus,
+                   r.sort_order AS sortOrder,
+                   r.revision,
+                   r.last_confirmed_at AS lastConfirmedAt,
+                   r.create_time AS createTime,
+                   r.update_time AS updateTime,
+                   r.is_deleted AS isDeleted
+            FROM t_post_reference r
+            JOIN t_post_main p
+              ON p.id = r.post_id
+             AND p.author_id = #{ownerUid}
+             AND p.is_deleted = 0
+            WHERE r.owner_uid = #{ownerUid}
+              AND r.reference_status = 'BROKEN'
+              AND r.is_deleted = 0
+              AND (
+                    #{cursorTime} IS NULL
+                    OR r.update_time < #{cursorTime}
+                    OR (r.update_time = #{cursorTime} AND r.id < #{cursorId})
+                  )
+            ORDER BY r.update_time DESC, r.id DESC
+            LIMIT #{limit}
+            """)
+    List<ReferenceRow> listBrokenOwnedAfter(@Param("ownerUid") Long ownerUid,
+                                           @Param("cursorTime") LocalDateTime cursorTime,
+                                           @Param("cursorId") Long cursorId,
+                                           @Param("limit") int limit);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_post_reference r
+            JOIN t_post_main p
+              ON p.id = r.post_id
+             AND p.author_id = #{ownerUid}
+             AND p.is_deleted = 0
+            WHERE r.owner_uid = #{ownerUid}
+              AND r.reference_status = 'BROKEN'
+              AND r.is_deleted = 0
+            """)
+    long countBrokenOwned(@Param("ownerUid") Long ownerUid);
 
     @Select("""
             SELECT id,

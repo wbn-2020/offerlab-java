@@ -35,7 +35,6 @@ public class JwtService {
     private static final int MIN_SECRET_BYTES = 32;
     private static final int MAX_TOKEN_LENGTH = 4096;
     private static final String REQUIRED_SECRET_PLACEHOLDER = "__offerlab_jwt_secret_required__";
-    private static final String LOCAL_DEV_DEFAULT_SECRET = "offerlab-local-dev-only-secret-key-change-before-shared-env-123456";
     private static final Set<String> INSECURE_NON_LOCAL_SECRET_SHA256 = Set.of(
             "dae579a33784e18ce50abcf993c7c4a8fbc7ef4517baafe9a93bb8455062130a",
             "ce880a4166d228c05c6c499983bad5a3af1bd4f9d674244b39d5eae99879e0c8",
@@ -79,7 +78,11 @@ public class JwtService {
     }
 
     private boolean requiresStrongSecret() {
-        return environment == null || !environment.matchesProfiles("local", "dev");
+        if (environment == null) {
+            return true;
+        }
+        String[] activeProfiles = environment.getActiveProfiles();
+        return activeProfiles.length != 1 || !"local".equalsIgnoreCase(activeProfiles[0]);
     }
 
     private SecretKey key() {

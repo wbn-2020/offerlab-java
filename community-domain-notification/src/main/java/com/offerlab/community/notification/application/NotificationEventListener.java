@@ -25,6 +25,7 @@ import com.offerlab.community.user.api.event.UserFollowedEvent;
 import com.offerlab.community.user.api.UserFacade;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
@@ -100,9 +101,22 @@ public class NotificationEventListener {
     private final CollaborationNeedFollowFacade collaborationNeedFollowFacade;
     private final NotificationRetryService retryService;
 
+    @Value("${offerlab.kafka.enabled:true}")
+    private boolean kafkaEnabled;
+
+    @Value("${offerlab.notification.kafka-consumer-enabled:true}")
+    private boolean kafkaConsumerEnabled = true;
+
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostPublished(PostPublishedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handlePostPublishedSynchronously(event);
+    }
+
+    public void handlePostPublishedSynchronously(PostPublishedEvent event) {
         if (!isPublicPublished(event)) {
             log.warn("skip post publish notifications for non-public post: postId={} visibility={} status={}",
                     event == null ? null : event.getPostId(),
@@ -118,6 +132,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostLiked(PostLikedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handlePostLikedSynchronously(event);
+    }
+
+    public void handlePostLikedSynchronously(PostLikedEvent event) {
         runQuietly(() -> notificationFacade.notifyLike(
                 event.getPostAuthorId(), event.getUid(), TARGET_POST, event.getPostId()),
                 "post like", event.getPostAuthorId(), event.getUid(), TYPE_LIKE, TARGET_POST, event.getPostId(),
@@ -127,6 +148,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentLiked(CommentLikedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handleCommentLikedSynchronously(event);
+    }
+
+    public void handleCommentLikedSynchronously(CommentLikedEvent event) {
         runQuietly(() -> notificationFacade.notifyCommentLike(
                 event.getCommentAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()),
                 "comment like", event.getCommentAuthorId(), event.getUid(), TYPE_LIKE, TARGET_COMMENT, event.getCommentId(),
@@ -137,6 +165,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentCreated(CommentCreatedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handleCommentCreatedSynchronously(event);
+    }
+
+    public void handleCommentCreatedSynchronously(CommentCreatedEvent event) {
         runQuietly(() -> notificationFacade.notifyComment(
                 event.getPostAuthorId(), event.getUid(), event.getPostId(), event.getCommentId()),
                 "post comment", event.getPostAuthorId(), event.getUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(),
@@ -161,6 +196,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentQualitySignalChanged(CommentQualitySignalChangedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handleCommentQualitySignalChangedSynchronously(event);
+    }
+
+    public void handleCommentQualitySignalChangedSynchronously(CommentQualitySignalChangedEvent event) {
         String action = actionForQualitySignal(event);
         if (action == null) {
             return;
@@ -175,6 +217,9 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onAnswerAccepted(AnswerAcceptedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
         if (!isValidAnswerAccepted(event)) {
             return;
         }
@@ -201,6 +246,9 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onContentSuggestionSubmitted(ContentSuggestionSubmittedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
         if (!isValidContentSuggestionSubmitted(event)) {
             return;
         }
@@ -227,6 +275,9 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onContentSuggestionDecided(ContentSuggestionDecidedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
         if (!isValidContentSuggestionDecided(event)) {
             return;
         }
@@ -253,6 +304,9 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCollaborationNeedStateChanged(CollaborationNeedStateChangedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
         try {
             handleCollaborationNeedStateChangedSynchronously(event);
         } catch (RuntimeException e) {
@@ -282,6 +336,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onUserFollowed(UserFollowedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handleUserFollowedSynchronously(event);
+    }
+
+    public void handleUserFollowedSynchronously(UserFollowedEvent event) {
         runQuietly(() -> notificationFacade.notifyFollower(
                 event.getFolloweeId(), event.getFollowerId()),
                 "user follow", event.getFolloweeId(), event.getFollowerId(), TYPE_FOLLOWER, TARGET_USER, event.getFollowerId(),
@@ -291,6 +352,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostFavorited(PostFavoritedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handlePostFavoritedSynchronously(event);
+    }
+
+    public void handlePostFavoritedSynchronously(PostFavoritedEvent event) {
         runQuietly(() -> notificationFacade.notifyFavorite(
                 event.getPostAuthorId(), event.getUid(), event.getPostId()),
                 "post favorite", event.getPostAuthorId(), event.getUid(), TYPE_FAVORITE, TARGET_POST, event.getPostId(),
@@ -300,6 +368,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onOperationCurationSelected(OperationCurationSelectedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handleOperationCurationSelectedSynchronously(event);
+    }
+
+    public void handleOperationCurationSelectedSynchronously(OperationCurationSelectedEvent event) {
         String skippedReason = operationCurationSkippedReason(event);
         if (skippedReason != null) {
             log.debug("operation curation notification skipped: reason={} authorUid={} contentId={}",
@@ -314,6 +389,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostReportReviewed(PostReportReviewedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handlePostReportReviewedSynchronously(event);
+    }
+
+    public void handlePostReportReviewedSynchronously(PostReportReviewedEvent event) {
         if (event == null || event.getReporterUid() == null || event.getReportId() == null) {
             return;
         }
@@ -327,6 +409,13 @@ public class NotificationEventListener {
     @Async("notificationAsyncExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCommentReportReviewed(CommentReportReviewedEvent event) {
+        if (!shouldHandleDurableLocalEvent()) {
+            return;
+        }
+        handleCommentReportReviewedSynchronously(event);
+    }
+
+    public void handleCommentReportReviewedSynchronously(CommentReportReviewedEvent event) {
         if (event == null || event.getReporterUid() == null || event.getReportId() == null) {
             return;
         }
@@ -395,7 +484,19 @@ public class NotificationEventListener {
         runQuietly(() -> notificationFacade.notifyReportReceipt(event.getReporterUid(), SOURCE_CONTACT_REQUEST_REPORT,
                         event.getReportId(), event.getUserStatus(), targetPath),
                 "contact request report reviewed", event.getReporterUid(), 0L,
-                TYPE_SYSTEM, null, event.getReportId(), content);
+                 TYPE_SYSTEM, null, event.getReportId(), content);
+    }
+
+    void setKafkaEnabled(boolean kafkaEnabled) {
+        this.kafkaEnabled = kafkaEnabled;
+    }
+
+    void setKafkaConsumerEnabled(boolean kafkaConsumerEnabled) {
+        this.kafkaConsumerEnabled = kafkaConsumerEnabled;
+    }
+
+    private boolean shouldHandleDurableLocalEvent() {
+        return !kafkaEnabled || !kafkaConsumerEnabled;
     }
 
     private boolean runQuietly(Runnable runnable, String scene, Long receiverUid, Long senderUid,

@@ -105,6 +105,58 @@ assert.match(syncScript, /Database init mirror drift detected/)
 const safetyScript = readFileSync(resolve(root, 'scripts/check-migration-safety.ps1'), 'utf8')
 assert.match(safetyScript, /canonical migration count does not match the manifest/)
 assert.doesNotMatch(safetyScript, /\$files\.Count -ne \d+/)
+for (const destructiveRule of [
+  /DROP\\s\+DATABASE/,
+  /DROP\\s\+INDEX/,
+  /MODIFY\\s\+/,
+  /CHANGE\\s\+/,
+]) {
+  assert.match(safetyScript, destructiveRule)
+}
+assert.match(
+  safetyScript,
+  /DROP\\s\+\(\?:COLUMN\\s\+/,
+  'migration safety must recognize the explicit DROP COLUMN form',
+)
+assert.match(
+  safetyScript,
+  /\(\?!INDEX\\b\|KEY\\b\|PRIMARY\\b\|FOREIGN\\b/,
+  'shorthand DROP detection must exclude index and constraint operations',
+)
+assert.match(safetyScript, /migration-safety:\\s\*allow/)
+assert.match(safetyScript, /unused migration safety rule/)
+
+const safetyPolicyTest = readFileSync(
+  resolve(root, 'scripts/test-migration-safety-policy.ps1'),
+  'utf8',
+)
+for (const fixture of [
+  'drop-database',
+  'drop-column',
+  'drop-column-shorthand',
+  'drop-index',
+  'modify-column',
+  'change-column',
+  'reviewed-drop-index',
+  'reviewed-modify',
+  'unused-directive',
+]) {
+  assert.match(safetyPolicyTest, new RegExp(`"${fixture}"`))
+}
+
+const eventConsumerInboxMigration = readFileSync(
+  resolve(root, 'db/migration/20260726_event_consumer_inbox.sql'),
+  'utf8',
+)
+assert.match(
+  eventConsumerInboxMigration,
+  /PRIMARY KEY\s*\(\s*consumer_name,\s*idempotency_key\s*\)/i,
+)
+assert.match(
+  eventConsumerInboxMigration,
+  /idx_event_consumer_inbox_created\s*\(\s*create_time,\s*id\s*\)/i,
+)
+assert.doesNotMatch(eventConsumerInboxMigration, /ON\s+DUPLICATE\s+KEY/i)
 
 const relationMigration = readFileSync(resolve(root, 'db/migration/20260530_relation_unique_keys.sql'), 'utf8')
 assert.match(relationMigration, /DROP INDEX `', p_index, '`, ADD /)
