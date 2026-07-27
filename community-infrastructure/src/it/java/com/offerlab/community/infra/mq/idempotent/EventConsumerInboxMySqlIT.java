@@ -7,11 +7,11 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.SqlSessionFactory;
-import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionTemplate;
+import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -124,7 +124,7 @@ class EventConsumerInboxMySqlIT {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.setEnvironment(new Environment(
                 "it",
-                new JdbcTransactionFactory(),
+                new SpringManagedTransactionFactory(),
                 dataSource));
         configuration.addMapper(EventConsumerInboxMapper.class);
         return new MybatisSqlSessionFactoryBuilder().build(configuration);
