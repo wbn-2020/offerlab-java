@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: wbn-2020/offerlab-vue
-          ref: ${{ vars.OFFERLAB_FRONTEND_REF || (github.ref_name == 'main' || github.ref_name == 'dev-v2') && github.ref_name || github.base_ref || 'dev-v2' }}
+          ref: ${{ vars.OFFERLAB_FRONTEND_REF || (github.head_ref == 'main' || github.head_ref == 'dev-v2') && github.head_ref || (github.ref_name == 'main' || github.ref_name == 'dev-v2') && github.ref_name || github.base_ref || 'dev-v2' }}
           path: offerlab-vue
 
       - name: Set up Java
@@ -46,6 +46,7 @@ jobs:
       - name: Validate migration assets and destructive SQL policy
         shell: pwsh
         run: |
+          node ./scripts/test-ci-workflow.mjs
           ./scripts/test-migration-content-hash.ps1
           ./scripts/check-migration-safety.ps1
           ./scripts/test-migration-safety-policy.ps1

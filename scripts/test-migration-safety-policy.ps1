@@ -26,9 +26,11 @@ function Invoke-PolicyCase {
     -MigrationDirectory $caseDirectory `
     -SkipManifestValidation `
     -SkipFlywaySync *> $null
-  if ($LASTEXITCODE -ne $ExpectedExitCode) {
-    throw "Migration safety case '$Name' expected exit $ExpectedExitCode, got $LASTEXITCODE"
+  $actualExitCode = $LASTEXITCODE
+  if ($actualExitCode -ne $ExpectedExitCode) {
+    throw "Migration safety case '$Name' expected exit $ExpectedExitCode, got $actualExitCode"
   }
+  $global:LASTEXITCODE = 0
 }
 
 try {

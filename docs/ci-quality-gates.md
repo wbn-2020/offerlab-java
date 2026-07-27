@@ -32,7 +32,7 @@ This document is platform neutral. The stages below can be mapped to GitHub Acti
 6. Cross-repository contracts
    - Backend and frontend CI explicitly check out the counterpart repository into sibling directories before running source-contract guards.
    - A workflow must never rely on an undeclared directory left by a developer machine.
-   - Stable branches use the matching counterpart branch and pull requests use their base branch. Other pushes fall back to `dev-v2`.
+   - Pull requests from `main` or `dev-v2` use the matching counterpart branch; other pull requests use their base branch. Stable-branch pushes use the matching branch, and other pushes fall back to `dev-v2`.
    - Set the repository variable `OFFERLAB_FRONTEND_REF` or `OFFERLAB_BACKEND_REF` when a coordinated contract branch must override that fallback.
 
 ## Frontend

@@ -33,6 +33,9 @@ $OutputEncoding = $Utf8NoBom
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 
+Write-Host "Running local baseline verification: CI workflow guard..."
+& node .\scripts\test-ci-workflow.mjs
+
 Write-Host "Running local baseline verification: migration safety check..."
 & .\scripts\check-migration-safety.ps1
 
