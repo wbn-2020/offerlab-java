@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IncentiveInvariantGuardTest {
 
     private static final String INCENTIVE_MAIN =
-            "../community-domain-incentive/src/main/java/com/offerlab/community/incentive";
+            "community-domain-incentive/src/main/java/com/offerlab/community/incentive";
 
     // ------------------------------------------------------------------
     // Invariant 1 + 3: reputation is never spent; SPEND is POINT-only.
@@ -80,7 +80,7 @@ class IncentiveInvariantGuardTest {
     void thereIsNoCashOutOrTransferSurface() throws Exception {
         // No method in the whole incentive domain may expose a cash-out / withdraw / transfer API.
         List<Path> javaFiles;
-        try (var stream = Files.walk(Path.of(INCENTIVE_MAIN))) {
+        try (var stream = Files.walk(RepositoryTestPaths.resolve(INCENTIVE_MAIN))) {
             javaFiles = stream
                     .filter(p -> p.toString().endsWith(".java"))
                     .toList();
@@ -127,7 +127,7 @@ class IncentiveInvariantGuardTest {
         }
 
         // No payment SDK may be pulled into the incentive module.
-        String incentivePom = read("../community-domain-incentive/pom.xml");
+        String incentivePom = read("community-domain-incentive/pom.xml");
         for (String paymentArtifact : List.of(
                 "alipay", "wechatpay", "wxpay", "stripe", "paypal", "unionpay",
                 "payment-sdk", "pay-sdk", "braintree", "adyen")) {
@@ -172,7 +172,7 @@ class IncentiveInvariantGuardTest {
     }
 
     private static String read(String path) throws Exception {
-        return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+        return Files.readString(RepositoryTestPaths.resolve(path), StandardCharsets.UTF_8);
     }
 
     private static void assertContains(String source, String needle, String message) {

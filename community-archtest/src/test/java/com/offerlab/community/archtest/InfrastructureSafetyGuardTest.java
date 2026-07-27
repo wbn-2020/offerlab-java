@@ -7,7 +7,6 @@ import org.redisson.api.RedissonClient;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.lang.reflect.Method;
 import java.time.Duration;
 
@@ -43,7 +42,7 @@ class InfrastructureSafetyGuardTest {
 
     @Test
     void outboxKafkaSendMustUseBoundedWait() throws Exception {
-        String source = Files.readString(Path.of("../community-infrastructure/src/main/java/com/offerlab/community/infra/mq/outbox/OutboxScheduler.java"),
+        String source = Files.readString(RepositoryTestPaths.resolve("community-infrastructure/src/main/java/com/offerlab/community/infra/mq/outbox/OutboxScheduler.java"),
                 StandardCharsets.UTF_8);
 
         assertTrue(source.contains("SEND_TIMEOUT_SECONDS"),

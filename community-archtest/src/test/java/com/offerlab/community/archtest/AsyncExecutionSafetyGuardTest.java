@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,8 +12,8 @@ class AsyncExecutionSafetyGuardTest {
 
     @Test
     void globalAsyncExecutionMustUseAnExplicitBoundedExecutorBaseline() throws Exception {
-        String application = read("../community-bootstrap/src/main/java/com/offerlab/community/CommunityApplication.java");
-        String asyncConfig = read("../community-bootstrap/src/main/java/com/offerlab/community/config/GlobalAsyncExecutionConfig.java");
+        String application = read("community-bootstrap/src/main/java/com/offerlab/community/CommunityApplication.java");
+        String asyncConfig = read("community-bootstrap/src/main/java/com/offerlab/community/config/GlobalAsyncExecutionConfig.java");
 
         assertTrue(application.contains("@EnableAsync"),
                 "community application must keep async processing enabled");
@@ -37,6 +36,6 @@ class AsyncExecutionSafetyGuardTest {
     }
 
     private static String read(String path) throws Exception {
-        return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+        return Files.readString(RepositoryTestPaths.resolve(path), StandardCharsets.UTF_8);
     }
 }

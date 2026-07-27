@@ -32,7 +32,6 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
@@ -181,11 +180,11 @@ class ProductionSecurityGuardTest {
 
     @Test
     void prodConfigMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
-        String prodConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
-        String baseConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
-        String devConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
-        String localConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-local.yml"), StandardCharsets.UTF_8);
-        String acceptanceEnv = Files.readString(Path.of("../.env.acceptance.example"), StandardCharsets.UTF_8);
+        String prodConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
+        String baseConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
+        String devConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
+        String localConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-local.yml"), StandardCharsets.UTF_8);
+        String acceptanceEnv = Files.readString(RepositoryTestPaths.resolve(".env.acceptance.example"), StandardCharsets.UTF_8);
 
         assertTrue(baseConfig.contains("api-docs:\n    path: /v3/api-docs\n    enabled: false") || baseConfig.contains("api-docs:\r\n    path: /v3/api-docs\r\n    enabled: false"), "base config must disable OpenAPI docs by default");
         assertTrue(baseConfig.contains("swagger-ui:\n    path: /swagger-ui.html\n    enabled: false") || baseConfig.contains("swagger-ui:\r\n    path: /swagger-ui.html\r\n    enabled: false"), "base config must disable Swagger UI by default");
@@ -227,7 +226,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void dockerComposeMustBeClearlyLocalOnly() throws Exception {
-        String compose = Files.readString(Path.of("../docker-compose.yml"), StandardCharsets.UTF_8);
+        String compose = Files.readString(RepositoryTestPaths.resolve("docker-compose.yml"), StandardCharsets.UTF_8);
 
         assertTrue(compose.contains("LOCAL DEVELOPMENT ONLY"), "docker-compose must warn that it is not production configuration");
         assertTrue(compose.contains("PLAINTEXT") && compose.contains("xpack.security.enabled: \"false\""),
