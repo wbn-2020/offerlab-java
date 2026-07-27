@@ -36,9 +36,10 @@ class ElasticsearchHttpClientIT {
                 "title", "Java Redis cursor consistency",
                 "visibility", "PUBLIC"
         )));
+        assertTrue(client.refreshIndex(index));
 
         assertTrue(client.search(index, Map.of("query", Map.of("match", Map.of("title", "Redis"))))
-                .map(json -> json.path("hits").path("total").path("value").asInt() >= 0)
+                .map(json -> json.path("hits").path("total").path("value").asInt() > 0)
                 .orElse(false));
         assertTrue(client.deleteDocument(index, "1001"));
         assertTrue(client.deleteDocument(index, "missing-id"), "delete must be idempotent when ES reports 404");
@@ -48,7 +49,7 @@ class ElasticsearchHttpClientIT {
     private static ElasticsearchHttpClient client() {
         ElasticsearchProperties properties = new ElasticsearchProperties();
         properties.setEnabled(true);
-        properties.setUrl(ELASTICSEARCH.getHttpHostAddress());
+        properties.setUrl("http://" + ELASTICSEARCH.getHttpHostAddress());
         properties.setPostIndex("post_idx_it");
         properties.setConnectTimeoutMillis(5_000);
         properties.setRequestTimeoutMillis(10_000);
