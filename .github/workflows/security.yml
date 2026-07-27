@@ -21,7 +21,7 @@ concurrency:
 jobs:
   dependency-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Check out source
@@ -62,7 +62,6 @@ jobs:
         if: >-
           always() &&
           steps.dependency_check_cache.outcome == 'success' &&
-          steps.dependency_check.outcome != 'cancelled' &&
           steps.dependency_check_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
