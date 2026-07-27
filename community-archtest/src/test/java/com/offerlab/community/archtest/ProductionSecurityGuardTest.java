@@ -179,25 +179,24 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
-    void prodConfigMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
-        String prodConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
+    void trackedSharedConfigsMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
         String baseConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
         String devConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
-        String localConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-local.yml"), StandardCharsets.UTF_8);
+        String acceptanceConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-acceptance.yml"), StandardCharsets.UTF_8);
         String acceptanceEnv = Files.readString(RepositoryTestPaths.resolve(".env.acceptance.example"), StandardCharsets.UTF_8);
 
         assertTrue(baseConfig.contains("api-docs:\n    path: /v3/api-docs\n    enabled: false") || baseConfig.contains("api-docs:\r\n    path: /v3/api-docs\r\n    enabled: false"), "base config must disable OpenAPI docs by default");
         assertTrue(baseConfig.contains("swagger-ui:\n    path: /swagger-ui.html\n    enabled: false") || baseConfig.contains("swagger-ui:\r\n    path: /swagger-ui.html\r\n    enabled: false"), "base config must disable Swagger UI by default");
         assertTrue(devConfig.contains("api-docs:\n    enabled: true") || devConfig.contains("api-docs:\r\n    enabled: true"), "dev profile must explicitly enable OpenAPI docs");
         assertTrue(devConfig.contains("swagger-ui:\n    enabled: true") || devConfig.contains("swagger-ui:\r\n    enabled: true"), "dev profile must explicitly enable Swagger UI");
-        assertTrue(prodConfig.contains("api-docs:\n    enabled: false") || prodConfig.contains("api-docs:\r\n    enabled: false"), "prod must disable OpenAPI docs");
-        assertTrue(prodConfig.contains("swagger-ui:\n    enabled: false") || prodConfig.contains("swagger-ui:\r\n    enabled: false"), "prod must disable Swagger UI");
-        assertFalse(prodConfig.contains("local-open-enabled: true"), "prod must not enable local-open admin bootstrap");
-        assertTrue(prodConfig.contains("secret: ${JWT_SECRET}"), "prod must require an external JWT secret");
-        assertTrue(prodConfig.contains("password: ${REDIS_PASSWORD}"), "prod must require an external Redis password without an empty default");
-        assertTrue(prodConfig.contains("bootstrap-servers: ${KAFKA_BROKERS}"), "prod must require explicit Kafka brokers");
-        assertTrue(prodConfig.contains("url: ${ELASTICSEARCH_URL}"), "prod must require an explicit Elasticsearch URL");
-        assertTrue(prodConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "prod must require explicit CORS origins");
+        assertTrue(acceptanceConfig.contains("api-docs:\n    enabled: false") || acceptanceConfig.contains("api-docs:\r\n    enabled: false"), "acceptance must disable OpenAPI docs");
+        assertTrue(acceptanceConfig.contains("swagger-ui:\n    enabled: false") || acceptanceConfig.contains("swagger-ui:\r\n    enabled: false"), "acceptance must disable Swagger UI");
+        assertFalse(acceptanceConfig.contains("local-open-enabled: true"), "acceptance must not enable local-open admin bootstrap");
+        assertTrue(baseConfig.contains("secret: ${JWT_SECRET}"), "shared config must require an external JWT secret");
+        assertTrue(baseConfig.contains("password: ${REDIS_PASSWORD}"), "shared config must require an external Redis password without an empty default");
+        assertTrue(baseConfig.contains("bootstrap-servers: ${KAFKA_BROKERS}"), "shared config must require explicit Kafka brokers");
+        assertTrue(baseConfig.contains("url: ${ELASTICSEARCH_URL}"), "shared config must require an explicit Elasticsearch URL");
+        assertTrue(acceptanceConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "acceptance must require explicit CORS origins");
         assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfigurationV2"),
                 "dev profile must exclude Redisson auto configuration so Redis outages do not block local startup");
         assertTrue(devConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}"),
@@ -214,10 +213,6 @@ class ProductionSecurityGuardTest {
                 "shared profiles must require an explicit Snowflake worker ID");
         assertTrue(baseConfig.contains("datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID}"),
                 "shared profiles must require an explicit Snowflake datacenter ID");
-        assertTrue(localConfig.contains("worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID:1}"),
-                "local profile may provide a single-node Snowflake worker ID");
-        assertTrue(localConfig.contains("datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID:1}"),
-                "local profile may provide a single-node Snowflake datacenter ID");
         assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_WORKER_ID=<0-31>"),
                 "acceptance template must document the required Snowflake worker ID");
         assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_DATACENTER_ID=<0-31>"),

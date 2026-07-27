@@ -23,12 +23,18 @@ class RepositoryTestPathsGuardTest {
         assertFalse(javaFiles.isEmpty(), "architecture test sources must be discoverable");
         String parentRelativeUnix = "\"" + ".." + "/";
         String parentRelativeWindows = "\"" + ".." + "\\";
+        String ignoredProductionConfig = "application-" + "prod.yml";
+        String ignoredLocalConfig = "application-" + "local.yml";
         for (Path javaFile : javaFiles) {
             String source = Files.readString(javaFile, StandardCharsets.UTF_8);
             assertFalse(source.contains(parentRelativeUnix),
                     () -> javaFile + " must resolve repository files through RepositoryTestPaths");
             assertFalse(source.contains(parentRelativeWindows),
                     () -> javaFile + " must not depend on a Windows parent-relative working directory");
+            assertFalse(source.contains(ignoredProductionConfig),
+                    () -> javaFile + " must not depend on an ignored production config");
+            assertFalse(source.contains(ignoredLocalConfig),
+                    () -> javaFile + " must not depend on an ignored local config");
         }
         assertTrue(javaFiles.contains(testSources.resolve(
                 "com/offerlab/community/archtest/ProductionSecurityGuardTest.java")));
