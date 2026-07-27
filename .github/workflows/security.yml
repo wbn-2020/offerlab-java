@@ -14,10 +14,14 @@ permissions:
   contents: read
   security-events: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   dependency-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Check out source
@@ -30,15 +34,22 @@ jobs:
           java-version: "17"
           cache: maven
 
-      - name: Cache Dependency-Check data
-        uses: actions/cache@v4
+      - name: Compute Dependency-Check cache epoch
+        id: dependency_check_cache_epoch
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Dependency-Check data
+        id: dependency_check_cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-data
-          key: dependency-check-${{ runner.os }}-${{ github.run_id }}
+          key: dependency-check-v12-${{ runner.os }}-${{ steps.dependency_check_cache_epoch.outputs.day }}
           restore-keys: |
-            dependency-check-${{ runner.os }}-
+            dependency-check-v12-${{ runner.os }}-
 
       - name: Run OWASP Dependency-Check
+        id: dependency_check
+        continue-on-error: true
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: >-
@@ -46,6 +57,17 @@ jobs:
           -Ddependency-check.failBuildOnCVSS=7.0
           ${{ secrets.NVD_API_KEY != '' && format('-DnvdApiKey={0}', secrets.NVD_API_KEY) || '' }}
           verify
+
+      - name: Save Dependency-Check data
+        if: >-
+          always() &&
+          steps.dependency_check_cache.outcome == 'success' &&
+          steps.dependency_check.outcome != 'cancelled' &&
+          steps.dependency_check_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: ${{ steps.dependency_check_cache.outputs.cache-primary-key }}
 
       - name: Upload audit reports
         if: always()
@@ -64,3 +86,9 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: target/dependency-check-report.sarif
+
+      - name: Enforce Dependency-Check result
+        if: always() && steps.dependency_check.outcome == 'failure'
+        run: |
+          echo "::error::OWASP Dependency-Check failed; inspect the uploaded reports."
+          exit 1
