@@ -403,6 +403,7 @@ public class MigrationCheckService {
                 "ends_at",
                 "preview_token",
                 "current_version",
+                "draft_revision",
                 "published_snapshot_json",
                 "rollback_snapshot_json",
                 "note",
@@ -416,6 +417,7 @@ public class MigrationCheckService {
                 "id",
                 "topic_id",
                 "section_title",
+                "section_key",
                 "source_type",
                 "source_id",
                 "section_status",
@@ -1689,6 +1691,8 @@ public class MigrationCheckService {
                 && columnExists("t_operation_slot_item", "active_guard")
                 && columnExists("t_operation_slot", "slot_status")
                 && columnExists("t_operation_topic", "topic_status")
+                && columnExists("t_operation_topic", "draft_revision")
+                && columnExists("t_operation_topic_section", "section_key")
                 && primaryKeyExists("t_operation_curation_item", "id")
                 && primaryKeyExists("t_operation_slot", "id")
                 && primaryKeyExists("t_operation_slot_item", "id")

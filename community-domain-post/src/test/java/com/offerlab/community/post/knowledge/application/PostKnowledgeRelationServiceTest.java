@@ -300,6 +300,17 @@ class PostKnowledgeRelationServiceTest {
         }
 
         @Override
+        public List<PostKnowledgeRelationRow> listPublicChainByPostId(
+                Long postId, boolean upstream, int limit) {
+            return listPublicByPostId(postId, Integer.MAX_VALUE).stream()
+                    .filter(row -> List.of("PREREQUISITE_OF", "CONTINUES", "SUPERSEDES")
+                            .contains(row.getRelationType()))
+                    .filter(row -> chainDirectionMatches(row, postId, upstream))
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
         public int reviewPending(Long id, String reviewStatus, Long reviewerUid, String reviewNote) {
             PostKnowledgeRelationRow row = rows.get(id);
             if (row == null || !"PENDING".equals(row.getReviewStatus())
@@ -311,6 +322,19 @@ class PostKnowledgeRelationServiceTest {
             row.setReviewNote(reviewNote);
             row.setReviewedAt(LocalDateTime.now());
             return 1;
+        }
+
+        private static boolean chainDirectionMatches(PostKnowledgeRelationRow row,
+                                                     Long postId,
+                                                     boolean upstream) {
+            if ("PREREQUISITE_OF".equals(row.getRelationType())) {
+                return upstream
+                        ? postId.equals(row.getTargetPostId())
+                        : postId.equals(row.getSourcePostId());
+            }
+            return upstream
+                    ? postId.equals(row.getSourcePostId())
+                    : postId.equals(row.getTargetPostId());
         }
 
         private static boolean afterCursor(PostKnowledgeRelationRow row,

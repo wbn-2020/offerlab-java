@@ -14,6 +14,7 @@ public class OperationTopicSectionPO {
     @TableId(type = IdType.INPUT)
     private Long id;
     private Long topicId;
+    private String sectionKey;
     private String sectionTitle;
     private String sourceType;
     private Long sourceId;

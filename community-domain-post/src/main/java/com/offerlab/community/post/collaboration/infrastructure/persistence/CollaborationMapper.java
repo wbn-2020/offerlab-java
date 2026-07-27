@@ -172,6 +172,22 @@ public interface CollaborationMapper {
 
     @Select("""
             <script>
+            SELECT COUNT(*)
+            FROM t_collab_content_need n
+            WHERE n.moderation_hidden = 0
+              <if test="domain != null">
+              AND n.domain = #{domain}
+              </if>
+              <if test="status != null and status != ''">
+              AND n.need_status = #{status}
+              </if>
+            </script>
+            """)
+    long countNeeds(@Param("domain") Integer domain,
+                    @Param("status") String status);
+
+    @Select("""
+            <script>
             SELECT n.id,
                    n.creator_uid AS creatorUid,
                    n.domain,
@@ -222,6 +238,20 @@ public interface CollaborationMapper {
 
     @Select("""
             <script>
+            SELECT COUNT(*)
+            FROM t_collab_content_need n
+            WHERE n.claimed_by_uid = #{uid}
+              AND n.moderation_hidden = 0
+              <if test="status != null and status != ''">
+              AND n.need_status = #{status}
+              </if>
+            </script>
+            """)
+    long countNeedsByClaimant(@Param("uid") Long uid,
+                              @Param("status") String status);
+
+    @Select("""
+            <script>
             SELECT n.id,
                    n.creator_uid AS creatorUid,
                    n.domain,
@@ -269,6 +299,20 @@ public interface CollaborationMapper {
                                                         @Param("status") String status,
                                                         @Param("cursor") long cursor,
                                                         @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_collab_content_need n
+            WHERE n.creator_uid = #{uid}
+              AND n.moderation_hidden = 0
+              <if test="status != null and status != ''">
+              AND n.need_status = #{status}
+              </if>
+            </script>
+            """)
+    long countNeedsByCreator(@Param("uid") Long uid,
+                             @Param("status") String status);
 
     @Select("""
             <script>

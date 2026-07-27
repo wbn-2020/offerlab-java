@@ -23,6 +23,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -205,7 +206,8 @@ public class OperationCurationController {
     @RateLimit(key = "'operation:admin:topic:preview:mark:' + #uid + ':' + #topicId", rate = 30, per = 60, failOpen = false)
     public Result<OperationTopicDTO> markPreview(@PathVariable Long topicId,
                                                  @Valid @RequestBody(required = false) NoteReq req) {
-        return Result.ok(operationCurationService.markPreview(topicId, requireOpsMutation(), req == null ? null : req.getNote()));
+        return Result.ok(operationCurationService.markPreview(topicId, requireOpsMutation(),
+                requireExpectedDraftRevision(req), req == null ? null : req.getNote()));
     }
 
     @PostMapping("/admin/topics/{topicId}/publish-check")
@@ -219,28 +221,32 @@ public class OperationCurationController {
     @RateLimit(key = "'operation:admin:topic:publish:' + #uid + ':' + #topicId", rate = 10, per = 60, failOpen = false)
     public Result<OperationTopicDTO> publishTopic(@PathVariable Long topicId,
                                                   @Valid @RequestBody(required = false) NoteReq req) {
-        return Result.ok(operationCurationService.publishTopic(topicId, requireOpsMutation(), requireCriticalNote(req)));
+        return Result.ok(operationCurationService.publishTopic(topicId, requireOpsMutation(),
+                requireExpectedDraftRevision(req), requireCriticalNote(req)));
     }
 
     @PostMapping("/admin/topics/{topicId}/offline")
     @RateLimit(key = "'operation:admin:topic:offline:' + #uid + ':' + #topicId", rate = 10, per = 60, failOpen = false)
     public Result<OperationTopicDTO> offlineTopic(@PathVariable Long topicId,
                                                   @Valid @RequestBody(required = false) NoteReq req) {
-        return Result.ok(operationCurationService.offlineTopic(topicId, requireOpsMutation(), requireCriticalNote(req)));
+        return Result.ok(operationCurationService.offlineTopic(topicId, requireOpsMutation(),
+                requireExpectedDraftRevision(req), requireCriticalNote(req)));
     }
 
     @PostMapping("/admin/topics/{topicId}/rollback")
     @RateLimit(key = "'operation:admin:topic:rollback:' + #uid + ':' + #topicId", rate = 10, per = 60, failOpen = false)
     public Result<OperationTopicDTO> rollbackTopic(@PathVariable Long topicId,
                                                    @Valid @RequestBody(required = false) NoteReq req) {
-        return Result.ok(operationCurationService.rollbackTopic(topicId, requireOpsMutation(), requireCriticalNote(req)));
+        return Result.ok(operationCurationService.rollbackTopic(topicId, requireOpsMutation(),
+                requireExpectedDraftRevision(req), requireCriticalNote(req)));
     }
 
     @PostMapping("/admin/topics/{topicId}/archive")
     @RateLimit(key = "'operation:admin:topic:archive:' + #uid + ':' + #topicId", rate = 10, per = 60, failOpen = false)
     public Result<OperationTopicDTO> archiveTopic(@PathVariable Long topicId,
                                                   @Valid @RequestBody(required = false) NoteReq req) {
-        return Result.ok(operationCurationService.archiveTopic(topicId, requireOpsMutation(), requireCriticalNote(req)));
+        return Result.ok(operationCurationService.archiveTopic(topicId, requireOpsMutation(),
+                requireExpectedDraftRevision(req), requireCriticalNote(req)));
     }
 
     @PublicApi
@@ -283,11 +289,22 @@ public class OperationCurationController {
                 req == null ? null : req.getConfirmationPhrase());
     }
 
+    private Integer requireExpectedDraftRevision(NoteReq req) {
+        if (req == null || req.getExpectedDraftRevision() == null) {
+            throw new com.offerlab.community.common.exception.BizException(
+                    com.offerlab.community.common.result.ErrorCode.PARAM_ERROR.getCode(),
+                    "expectedDraftRevision is required");
+        }
+        return req.getExpectedDraftRevision();
+    }
+
     @Data
     public static class NoteReq {
         @Size(max = 500)
         private String note;
         @Size(max = 64)
         private String confirmationPhrase;
+        @PositiveOrZero
+        private Integer expectedDraftRevision;
     }
 }

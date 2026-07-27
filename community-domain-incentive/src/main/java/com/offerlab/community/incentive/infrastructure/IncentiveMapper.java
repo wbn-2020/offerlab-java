@@ -161,7 +161,8 @@ public interface IncentiveMapper {
 
     @Select("""
             SELECT counter_date AS counterDate, daily_awarded AS dailyAwarded,
-                   lifetime_awarded AS lifetimeAwarded, version
+                   lifetime_awarded AS lifetimeAwarded, version,
+                   CURRENT_DATE AS dbToday
             FROM t_incentive_reward_guard
             WHERE recipient_uid = #{userId} AND rule_code = #{ruleCode} AND rule_version = #{ruleVersion}
             FOR UPDATE

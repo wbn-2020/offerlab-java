@@ -46,6 +46,7 @@ jobs:
       - name: Validate migration assets and destructive SQL policy
         shell: pwsh
         run: |
+          ./scripts/test-migration-content-hash.ps1
           ./scripts/check-migration-safety.ps1
           ./scripts/test-migration-safety-policy.ps1
 

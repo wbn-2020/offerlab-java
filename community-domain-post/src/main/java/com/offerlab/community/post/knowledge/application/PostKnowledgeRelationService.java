@@ -10,6 +10,8 @@ import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.post.api.dto.KnowledgeRiskLevel;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
+import com.offerlab.community.post.knowledge.api.KnowledgeThreadDTO;
+import com.offerlab.community.post.knowledge.api.KnowledgeThreadNodeDTO;
 import com.offerlab.community.post.knowledge.api.PostKnowledgeRelationCreateCmd;
 import com.offerlab.community.post.knowledge.api.PostKnowledgeRelationDTO;
 import com.offerlab.community.post.knowledge.api.PostKnowledgeRelationReviewStatus;
@@ -23,9 +25,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -36,6 +45,10 @@ public class PostKnowledgeRelationService {
     private static final int MAX_PUBLIC_LIMIT = 100;
     private static final int MAX_REASON_LENGTH = 2000;
     private static final int MAX_REVIEW_NOTE_LENGTH = 1000;
+    // Reading-thread bounds: a linear timeline, never an unbounded graph walk.
+    static final int MAX_THREAD_HOPS = 3;
+    static final int MAX_THREAD_NODES = 15;
+    private static final int THREAD_RELATIONS_PER_HOP = 50;
 
     private final PostKnowledgeRelationMapper mapper;
     private final PostRepository postRepository;
@@ -120,6 +133,170 @@ public class PostKnowledgeRelationService {
         return mapper.listPublicByPostId(normalizedPostId, clampLimit(limit)).stream()
                 .map(PostKnowledgeRelationService::toDto)
                 .toList();
+    }
+
+    /**
+     * Bounded read-only reading thread. Upstream follows "anchor has a
+     * prerequisite" links backwards ("read these first"); downstream follows
+     * continuation/supersession links forwards ("read these next"). Every hop
+     * reuses the public relation filter (APPROVED + VISIBLE + both posts
+     * publicly visible), so nothing pending, rejected, or hidden can appear.
+     */
+    public KnowledgeThreadDTO readingThread(Long postId) {
+        long anchorId = requireId(postId);
+        Post anchor = requirePost(anchorId);
+        if (!anchor.isVisibleTo(null, false)) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        Set<Long> visited = new HashSet<>();
+        visited.add(anchorId);
+        boolean[] truncated = {false};
+        List<KnowledgeThreadNodeDTO> upstream =
+                walk(anchorId, visited, truncated, true);
+        Collections.reverse(upstream);
+        List<KnowledgeThreadNodeDTO> downstream =
+                walk(anchorId, visited, truncated, false);
+        return KnowledgeThreadDTO.builder()
+                .anchorPostId(anchorId)
+                .upstream(upstream)
+                .downstream(downstream)
+                .truncated(truncated[0])
+                .build();
+    }
+
+    private List<KnowledgeThreadNodeDTO> walk(long anchorId,
+                                              Set<Long> visited,
+                                              boolean[] truncated,
+                                              boolean upstream) {
+        List<KnowledgeThreadNodeDTO> nodes = new ArrayList<>();
+        long currentId = anchorId;
+        for (int hop = 1; hop <= MAX_THREAD_HOPS; hop++) {
+            ThreadSelection selection = nextStep(currentId, visited, upstream);
+            if (selection.truncated()) {
+                truncated[0] = true;
+            }
+            Optional<ThreadStep> next = selection.step();
+            if (next.isEmpty()) {
+                return nodes;
+            }
+            if (visited.size() >= MAX_THREAD_NODES) {
+                truncated[0] = true;
+                return nodes;
+            }
+            ThreadStep step = next.get();
+            visited.add(step.postId());
+            nodes.add(KnowledgeThreadNodeDTO.builder()
+                    .postId(step.postId())
+                    .title(step.post().getTitle())
+                    .domain(step.post().getDomain())
+                    .relationType(step.relationType())
+                    .hop(hop)
+                    .build());
+            currentId = step.postId();
+        }
+        // Ran out of hop budget; report truncation only if the chain continues.
+        ThreadSelection continuation = nextStep(currentId, visited, upstream);
+        if (continuation.truncated() || continuation.step().isPresent()) {
+            truncated[0] = true;
+        }
+        return nodes;
+    }
+
+    /**
+     * Picks one deterministic chain neighbor of {@code fromId}. The mapper
+     * applies public visibility, chain type, and walk direction before LIMIT.
+     * More than one distinct neighbor is a branch: the newest edge is followed
+     * and the thread is marked truncated because the alternatives are omitted.
+     */
+    private ThreadSelection nextStep(long fromId, Set<Long> visited, boolean upstream) {
+        List<PostKnowledgeRelationRow> rows = mapper.listPublicChainByPostId(
+                fromId, upstream, THREAD_RELATIONS_PER_HOP + 1);
+        List<PostKnowledgeRelationRow> safeRows = rows == null ? List.of() : rows;
+        boolean queryTruncated = safeRows.size() > THREAD_RELATIONS_PER_HOP;
+        Map<Long, ThreadStep> candidates = new LinkedHashMap<>();
+        for (PostKnowledgeRelationRow row : safeRows.stream()
+                .limit(THREAD_RELATIONS_PER_HOP)
+                .toList()) {
+            PostKnowledgeRelationType type = parseType(row.getRelationType());
+            if (type == null) {
+                continue;
+            }
+            Long neighborId = chainNeighbor(row, type, fromId, upstream);
+            if (neighborId == null || visited.contains(neighborId)) {
+                continue;
+            }
+            if (candidates.containsKey(neighborId)) {
+                continue;
+            }
+            Optional<Post> neighbor = postRepository.findById(neighborId)
+                    .filter(post -> post.isVisibleTo(null, false));
+            if (neighbor.isEmpty()) {
+                continue;
+            }
+            candidates.put(neighborId, new ThreadStep(neighborId, neighbor.get(), type));
+        }
+        return new ThreadSelection(
+                candidates.values().stream().findFirst(),
+                queryTruncated || candidates.size() > 1);
+    }
+
+    /**
+     * Chain semantics per relation row {@code source -[type]-> target}:
+     * PREREQUISITE_OF: source must be read before target.
+     * CONTINUES / SUPERSEDES: source is the newer piece following target.
+     * Everything else (SUPPLEMENTS, CONTRADICTS, DUPLICATE_OF) is lateral and
+     * never joins the reading chain.
+     */
+    private static Long chainNeighbor(PostKnowledgeRelationRow row,
+                                      PostKnowledgeRelationType type,
+                                      long fromId,
+                                      boolean upstream) {
+        long sourceId = row.getSourcePostId();
+        long targetId = row.getTargetPostId();
+        boolean fromIsSource = fromId == sourceId;
+        boolean fromIsTarget = fromId == targetId;
+        if (!fromIsSource && !fromIsTarget) {
+            return null;
+        }
+        if (type == PostKnowledgeRelationType.PREREQUISITE_OF) {
+            // Reading order: source → target.
+            if (upstream && fromIsTarget) {
+                return sourceId;
+            }
+            if (!upstream && fromIsSource) {
+                return targetId;
+            }
+            return null;
+        }
+        if (type == PostKnowledgeRelationType.CONTINUES
+                || type == PostKnowledgeRelationType.SUPERSEDES) {
+            // Reading order: target → source (source is the follow-up).
+            if (upstream && fromIsSource) {
+                return targetId;
+            }
+            if (!upstream && fromIsTarget) {
+                return sourceId;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    private static PostKnowledgeRelationType parseType(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        try {
+            return PostKnowledgeRelationType.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private record ThreadStep(long postId, Post post, PostKnowledgeRelationType relationType) {
+    }
+
+    private record ThreadSelection(Optional<ThreadStep> step, boolean truncated) {
     }
 
     @Transactional

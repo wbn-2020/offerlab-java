@@ -1,6 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import {
+  migrationContentSha256,
+  normalizeMigrationContent,
+} from './migration-content-hash.mjs'
 
 const args = new Map()
 for (const arg of process.argv.slice(2)) {
@@ -57,10 +60,10 @@ const migrationAssetChecks = migrationManifest.migrations.map((migration) => {
   try {
     const source = readFileSync(new URL(`../${migration.source}`, import.meta.url))
     const resource = readFileSync(new URL(`../${migration.resource}`, import.meta.url))
-    const sha256 = createHash('sha256').update(source).digest('hex')
+    const sha256 = migrationContentSha256(source)
     ready = sha256 === migration.sha256
       && flywayChecksum(source) === migration.flywayChecksum
-      && source.equals(resource)
+      && normalizeMigrationContent(source) === normalizeMigrationContent(resource)
   } catch {
     ready = false
   }

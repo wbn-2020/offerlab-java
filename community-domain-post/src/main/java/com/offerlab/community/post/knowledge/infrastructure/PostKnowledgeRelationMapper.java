@@ -234,7 +234,49 @@ public interface PostKnowledgeRelationMapper {
             LIMIT #{limit}
             """)
     List<PostKnowledgeRelationRow> listPublicByPostId(@Param("postId") Long postId,
-                                                      @Param("limit") int limit);
+                                                       @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT r.*
+            FROM t_post_knowledge_relation r
+            JOIN t_post_main source_post
+              ON source_post.id = r.source_post_id
+             AND source_post.post_status = 1
+             AND source_post.visibility = 1
+             AND source_post.is_deleted = 0
+            JOIN t_post_main target_post
+              ON target_post.id = r.target_post_id
+             AND target_post.post_status = 1
+             AND target_post.visibility = 1
+             AND target_post.is_deleted = 0
+            WHERE r.relation_type IN ('PREREQUISITE_OF', 'CONTINUES', 'SUPERSEDES')
+              <choose>
+                <when test="upstream">
+                  AND (
+                        (r.relation_type = 'PREREQUISITE_OF' AND r.target_post_id = #{postId})
+                        OR (r.relation_type IN ('CONTINUES', 'SUPERSEDES')
+                            AND r.source_post_id = #{postId})
+                      )
+                </when>
+                <otherwise>
+                  AND (
+                        (r.relation_type = 'PREREQUISITE_OF' AND r.source_post_id = #{postId})
+                        OR (r.relation_type IN ('CONTINUES', 'SUPERSEDES')
+                            AND r.target_post_id = #{postId})
+                      )
+                </otherwise>
+              </choose>
+              AND r.review_status = 'APPROVED'
+              AND r.visibility_status = 'VISIBLE'
+              AND r.is_deleted = 0
+            ORDER BY r.create_time DESC, r.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<PostKnowledgeRelationRow> listPublicChainByPostId(@Param("postId") Long postId,
+                                                            @Param("upstream") boolean upstream,
+                                                            @Param("limit") int limit);
 
     @Update("""
             UPDATE t_post_knowledge_relation

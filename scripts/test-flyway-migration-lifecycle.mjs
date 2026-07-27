@@ -1,7 +1,10 @@
-import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import assert from 'node:assert/strict'
+import {
+  migrationContentSha256,
+  normalizeMigrationContent,
+} from './migration-content-hash.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const manifest = JSON.parse(readFileSync(resolve(root, 'db/migration/flyway-manifest.json'), 'utf8'))
@@ -11,13 +14,15 @@ const demoMigrations = migrations.filter(({ stream }) => stream === 'demo')
 
 assert.deepEqual(Object.keys(manifest), [
   'formatVersion',
+  'contentHashAlgorithm',
   'baselineVersion',
   'schemaHistoryTable',
   'generatedFrom',
   'streams',
   'migrations',
 ])
-assert.equal(manifest.formatVersion, 2)
+assert.equal(manifest.formatVersion, 3)
+assert.equal(manifest.contentHashAlgorithm, 'sha256-utf8-lf-no-bom-v1')
 assert.equal(manifest.baselineVersion, '0')
 assert.equal(manifest.schemaHistoryTable, 'flyway_schema_history')
 assert.equal(manifest.generatedFrom, 'db/migration/20*.sql')
@@ -57,15 +62,25 @@ for (const migration of migrations) {
   assert.match(migration.resource, /\/V\d{8}\.\d{2}__[a-z0-9_]+\.sql$/)
   const source = readFileSync(resolve(root, migration.source))
   const resource = readFileSync(resolve(root, migration.resource))
-  const sha256 = createHash('sha256').update(source).digest('hex')
+  const sha256 = migrationContentSha256(source)
   assert.equal(sha256, migration.sha256, `manifest checksum drift: ${migration.source}`)
   assert.equal(
     flywayChecksum(source),
     migration.flywayChecksum,
     `manifest Flyway checksum drift: ${migration.source}`,
   )
-  assert.deepEqual(resource, source, `Flyway resource drift: ${migration.resource}`)
+  assert.equal(
+    normalizeMigrationContent(resource),
+    normalizeMigrationContent(source),
+    `Flyway resource drift: ${migration.resource}`,
+  )
 }
+
+assert.equal(
+  migrationContentSha256(Buffer.from('\uFEFFSELECT 1;\r\n', 'utf8')),
+  migrationContentSha256(Buffer.from('SELECT 1;\n', 'utf8')),
+  'migration hashes must ignore UTF-8 BOM and newline representation',
+)
 
 for (const stream of ['core', 'demo']) {
   const directory = resolve(root, `community-bootstrap/src/main/resources/db/flyway/${stream}`)
@@ -100,7 +115,14 @@ assert.match(syncScript, /Tracked migration content changed/)
 assert.match(syncScript, /Flyway manifest drift detected/)
 assert.match(syncScript, /flywayChecksum/)
 assert.match(syncScript, /Get-FlywayChecksum/)
+assert.match(syncScript, /Get-MigrationContentSha256/)
 assert.match(syncScript, /Database init mirror drift detected/)
+
+const migrationHashPolicyTest = readFileSync(
+  resolve(root, 'scripts/test-migration-content-hash.ps1'),
+  'utf8',
+)
+assert.match(migrationHashPolicyTest, /LF, CRLF, and UTF-8 BOM variants/)
 
 const safetyScript = readFileSync(resolve(root, 'scripts/check-migration-safety.ps1'), 'utf8')
 assert.match(safetyScript, /canonical migration count does not match the manifest/)

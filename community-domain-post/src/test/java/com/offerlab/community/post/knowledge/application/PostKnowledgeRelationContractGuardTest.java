@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,7 +39,12 @@ class PostKnowledgeRelationContractGuardTest {
         assertFalse(service.contains("DomainModeratorService"));
 
         assertTrue(controller.contains("@PublicApi"));
-        assertTrue(count(controller, "@RateLimit") == 2);
+        // Every endpoint must be rate limited, however many endpoints exist.
+        int endpoints = count(controller, "@GetMapping") + count(controller, "@PostMapping")
+                + count(controller, "@PutMapping") + count(controller, "@DeleteMapping");
+        assertTrue(endpoints >= 2, "controller must expose the propose + public read endpoints");
+        assertEquals(endpoints, count(controller, "@RateLimit"),
+                "every knowledge-relation endpoint must carry @RateLimit");
         assertFalse(controller.contains("/review"));
         assertTrue(handler.contains("implements ReviewQueueSourceActionHandler"));
         assertTrue(resolver.contains("implements ReviewQueueSourceDomainResolver"));

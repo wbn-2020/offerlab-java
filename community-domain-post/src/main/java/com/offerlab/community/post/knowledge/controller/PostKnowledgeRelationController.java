@@ -4,6 +4,7 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.post.knowledge.api.KnowledgeThreadDTO;
 import com.offerlab.community.post.knowledge.api.PostKnowledgeRelationCreateCmd;
 import com.offerlab.community.post.knowledge.api.PostKnowledgeRelationDTO;
 import com.offerlab.community.post.knowledge.application.PostKnowledgeRelationService;
@@ -50,5 +51,15 @@ public class PostKnowledgeRelationController {
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
             HttpServletRequest request) {
         return Result.ok(service.listPublic(postId, limit));
+    }
+
+    @PublicApi
+    @GetMapping("/thread")
+    @RateLimit(key = "'public:post:knowledge-thread:' + #postId + ':' + #request.remoteAddr",
+            rate = 120, per = 60, failOpen = false)
+    public Result<KnowledgeThreadDTO> readingThread(
+            @PathVariable @Positive Long postId,
+            HttpServletRequest request) {
+        return Result.ok(service.readingThread(postId));
     }
 }

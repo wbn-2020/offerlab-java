@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "migration-content-hash.ps1")
+
 $sourceDir = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $sourceDir "..\.."))
 $resourceRoot = [System.IO.Path]::GetFullPath(
@@ -77,6 +79,10 @@ $initMirrorMappings = @(
   [pscustomobject]@{
     Source = Join-Path $sourceDir "20260726_query_path_indexes.sql"
     Destination = Join-Path $repoRoot "db\init\29_query_path_indexes.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260727_operation_topic_draft_revision.sql"
+    Destination = Join-Path $repoRoot "db\init\30_operation_topic_draft_revision.sql"
   }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"
@@ -220,7 +226,7 @@ $migrations = foreach ($sourceFile in $sourceFiles) {
   $flywayName = "V${version}__${description}.sql"
   $resourceRelative = "community-bootstrap/src/main/resources/db/flyway/$stream/$flywayName"
   $resourcePath = Join-Path $repoRoot ($resourceRelative.Replace("/", "\"))
-  $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFile.FullName).Hash.ToLowerInvariant()
+  $sourceHash = Get-MigrationContentSha256 -Path $sourceFile.FullName
   $flywayChecksum = Get-FlywayChecksum -Path $sourceFile.FullName
   if ($existingMigrationsBySource.ContainsKey($sourceRelative)) {
     $trackedMigration = $existingMigrationsBySource[$sourceRelative]
@@ -244,7 +250,7 @@ $migrations = foreach ($sourceFile in $sourceFiles) {
     if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
       throw "Flyway resource is missing: $resourceRelative"
     }
-    $resourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $resourcePath).Hash.ToLowerInvariant()
+    $resourceHash = Get-MigrationContentSha256 -Path $resourcePath
     if ($resourceHash -ne $sourceHash) {
       throw "Flyway resource drift detected: $resourceRelative"
     }
@@ -283,8 +289,8 @@ $initMirrorMappings | ForEach-Object {
     if (-not (Test-Path -LiteralPath $_.Destination -PathType Leaf)) {
       throw "Database init mirror is missing: $($_.Destination)"
     }
-    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.Source).Hash
-    $destinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.Destination).Hash
+    $sourceHash = Get-MigrationContentSha256 -Path $_.Source
+    $destinationHash = Get-MigrationContentSha256 -Path $_.Destination
     if ($sourceHash -ne $destinationHash) {
       throw "Database init mirror drift detected: $($_.Destination)"
     }
@@ -292,7 +298,8 @@ $initMirrorMappings | ForEach-Object {
 }
 
 $manifest = [ordered]@{
-  formatVersion = 2
+  formatVersion = 3
+  contentHashAlgorithm = "sha256-utf8-lf-no-bom-v1"
   baselineVersion = "0"
   schemaHistoryTable = "flyway_schema_history"
   generatedFrom = "db/migration/20*.sql"

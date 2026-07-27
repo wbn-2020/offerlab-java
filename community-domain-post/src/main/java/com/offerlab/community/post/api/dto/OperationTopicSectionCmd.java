@@ -6,6 +6,8 @@ import lombok.Data;
 @Data
 public class OperationTopicSectionCmd {
     @Size(max = 64)
+    private String sectionKey;
+    @Size(max = 64)
     private String title;
     private String sourceType;
     private Long sourceId;

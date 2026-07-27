@@ -13,6 +13,7 @@ import java.util.List;
 @AllArgsConstructor
 public class OperationTopicSectionDTO {
     private Long id;
+    private String sectionKey;
     private String title;
     private String sourceType;
     private Long sourceId;

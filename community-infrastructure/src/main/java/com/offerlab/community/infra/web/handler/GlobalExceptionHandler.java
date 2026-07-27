@@ -8,6 +8,11 @@ import com.offerlab.community.infra.trace.TraceContext;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -19,8 +24,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientException;
 
 @Slf4j
 @RestControllerAdvice
@@ -59,7 +64,8 @@ public class GlobalExceptionHandler {
                 || ErrorCode.INVALID_STATUS.getCode().equals(code)) {
             return HttpStatus.BAD_REQUEST;
         }
-        if (ErrorCode.DUPLICATE_OPERATION.getCode().equals(code)) {
+        if (ErrorCode.DUPLICATE_OPERATION.getCode().equals(code)
+                || ErrorCode.CONCURRENT_MODIFICATION.getCode().equals(code)) {
             return HttpStatus.CONFLICT;
         }
         if (ErrorCode.DATABASE_ERROR.getCode().equals(code)
@@ -88,27 +94,55 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<Result<?>> handleDataAccess(DataAccessException e) {
-        log.error("[db]", e);
         String traceId = TraceContext.ensure();
+        boolean retryable = retryableDatabaseFailure(e);
+        HttpStatus status = retryable
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.INTERNAL_SERVER_ERROR;
+        // Diagnostics stay server-side and are correlated through traceId.
+        log.error("[db] category={} retryable={} capability={} traceId={}",
+                databaseFailureCategory(e, retryable), retryable, affectedCapability(e), traceId, e);
         Result<?> r = Result.builder()
                 .code(ErrorCode.DATABASE_ERROR.getCode())
-                .message("Database is temporarily unavailable. Please try again later.")
-                .data(databaseDiagnostic(e, traceId))
+                .message(retryable
+                        ? "Database is temporarily unavailable. Please try again later."
+                        : "Request could not be completed.")
                 .traceId(traceId)
                 .build();
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(r);
+        return ResponseEntity.status(status).body(r);
     }
 
-    private Map<String, Object> databaseDiagnostic(DataAccessException e, String traceId) {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("errorCategory", schemaIssue(e) ? "SCHEMA_MISMATCH" : "DATABASE_ERROR");
-        data.put("schemaIssue", schemaIssue(e));
-        data.put("exceptionType", e == null ? null : e.getClass().getSimpleName());
-        data.put("affectedCapability", affectedCapability(e));
-        data.put("migrationHint", "Run scripts/check-schema-readiness.mjs and apply the missing db/migration scripts after explicit confirmation.");
-        data.put("recommendedAction", "Check /api/v1/ops/migration/status, then apply the listed migrations before retrying the user action.");
-        data.put("traceId", traceId);
-        return data;
+    private boolean retryableDatabaseFailure(Throwable e) {
+        if (e instanceof DataIntegrityViolationException
+                || e instanceof InvalidDataAccessResourceUsageException) {
+            return false;
+        }
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof TransientDataAccessException
+                    || current instanceof RecoverableDataAccessException
+                    || current instanceof DataAccessResourceFailureException
+                    || current instanceof SQLTransientException
+                    || current instanceof SQLRecoverableException) {
+                return true;
+            }
+            Throwable cause = current.getCause();
+            if (cause == current) {
+                break;
+            }
+            current = cause;
+        }
+        return false;
+    }
+
+    private String databaseFailureCategory(Throwable e, boolean retryable) {
+        if (schemaIssue(e)) {
+            return "SQL_OR_SCHEMA_ERROR";
+        }
+        if (e instanceof DataIntegrityViolationException) {
+            return "DATA_INTEGRITY_ERROR";
+        }
+        return retryable ? "TRANSIENT_DATABASE_ERROR" : "PERMANENT_DATABASE_ERROR";
     }
 
     private boolean schemaIssue(Throwable e) {

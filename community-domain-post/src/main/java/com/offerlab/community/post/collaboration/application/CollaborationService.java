@@ -71,12 +71,15 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         String activeStatus = optionalStatus(status,
                 "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
         int pageSize = pageSize(size);
+        long total = mapper.countNeeds(activeDomain, activeStatus);
         List<NeedRow> rows = mapper.listNeeds(activeDomain, activeStatus, viewerUid, safeCursor(cursor), pageSize + 1);
         Map<Integer, Boolean> moderation = new HashMap<>();
-        return page(rows, pageSize,
+        PageResult<NeedDTO> result = page(rows, pageSize,
                 row -> toNeed(row, viewerUid,
                         canManageCached(row.getCreatorUid(), viewerUid, row.getDomain(), moderation)),
                 NeedRow::getId);
+        result.setTotal(total);
+        return result;
     }
 
     public PageResult<NeedDTO> listMyClaimedNeeds(Long uid, String status, long cursor, int size) {
@@ -84,12 +87,15 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         String activeStatus = optionalStatus(status,
                 "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
         int pageSize = pageSize(size);
+        long total = mapper.countNeedsByClaimant(uid, activeStatus);
         List<NeedRow> rows = mapper.listNeedsByClaimant(uid, activeStatus, safeCursor(cursor), pageSize + 1);
         Map<Integer, Boolean> moderation = new HashMap<>();
-        return page(rows, pageSize,
+        PageResult<NeedDTO> result = page(rows, pageSize,
                 row -> toNeed(row, uid,
                         canManageCached(row.getCreatorUid(), uid, row.getDomain(), moderation)),
                 NeedRow::getId);
+        result.setTotal(total);
+        return result;
     }
 
     public PageResult<NeedDTO> listMyCreatedNeeds(Long uid, String status, long cursor, int size) {
@@ -97,8 +103,12 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         String activeStatus = optionalStatus(status,
                 "OPEN", "CLAIMED", "SUBMITTED", "COMPLETED", "CLOSED", "MERGED");
         int pageSize = pageSize(size);
+        long total = mapper.countNeedsByCreator(uid, activeStatus);
         List<NeedRow> rows = mapper.listNeedsByCreator(uid, activeStatus, safeCursor(cursor), pageSize + 1);
-        return page(rows, pageSize, row -> toNeed(row, uid, true), NeedRow::getId);
+        PageResult<NeedDTO> result =
+                page(rows, pageSize, row -> toNeed(row, uid, true), NeedRow::getId);
+        result.setTotal(total);
+        return result;
     }
 
     public PageResult<NeedDTO> listMyFollowedNeeds(Long uid, String status, long cursor, int size) {

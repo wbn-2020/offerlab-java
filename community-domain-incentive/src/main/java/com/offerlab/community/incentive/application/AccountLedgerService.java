@@ -666,10 +666,7 @@ public class AccountLedgerService {
             throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
                     "reward guard projection is missing");
         }
-        LocalDate counterDate = guard.get("counterDate") instanceof java.sql.Date sqlDate
-                ? sqlDate.toLocalDate()
-                : guard.get("counterDate") instanceof LocalDate date ? date : LocalDate.MIN;
-        long daily = LocalDate.now().equals(counterDate) ? number(guard.get("dailyAwarded")) : 0;
+        long daily = dailyAwardedFor(guard);
         long lifetime = number(guard.get("lifetimeAwarded"));
         if ((rule.getDailyUserCap() > 0
                 && exceedsCap(daily, rule.getRewardAmount(), rule.getDailyUserCap()))
@@ -1161,6 +1158,27 @@ public class AccountLedgerService {
 
     private static long number(Object value) {
         return value instanceof Number number ? number.longValue() : 0;
+    }
+
+    /**
+     * Daily totals roll on the DATABASE day (incrementRewardGuard writes
+     * CURRENT_DATE), so the read side must compare against the same clock.
+     * The JVM clock is only a fallback when the projection row did not report
+     * the DB day (audit item 5.7: JVM/DB timezone skew over- or under-counted
+     * awards near midnight).
+     */
+    static long dailyAwardedFor(Map<String, Object> guard) {
+        LocalDate counterDate = guardDate(guard.get("counterDate"), LocalDate.MIN);
+        LocalDate dbToday = guardDate(guard.get("dbToday"), null);
+        LocalDate today = dbToday != null ? dbToday : LocalDate.now();
+        return today.equals(counterDate) ? number(guard.get("dailyAwarded")) : 0;
+    }
+
+    private static LocalDate guardDate(Object value, LocalDate fallback) {
+        if (value instanceof java.sql.Date sqlDate) {
+            return sqlDate.toLocalDate();
+        }
+        return value instanceof LocalDate date ? date : fallback;
     }
 
     private static int reconciliationLimit(Integer requestedLimit) {

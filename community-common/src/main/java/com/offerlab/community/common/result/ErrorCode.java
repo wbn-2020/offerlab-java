@@ -23,6 +23,7 @@ public enum ErrorCode {
     // 业务错误 3xxxx
     DUPLICATE_OPERATION(30001, "重复操作"),
     INVALID_STATUS(30002, "状态不合法"),
+    CONCURRENT_MODIFICATION(30003, "资源已被其他操作修改，请刷新后重试"),
     USER_NOT_FOUND(30101, "用户不存在"),
     USER_ALREADY_EXISTS(30102, "用户已存在"),
     PASSWORD_ERROR(30103, "密码错误"),

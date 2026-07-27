@@ -1,5 +1,6 @@
 {
-  "formatVersion": 2,
+  "formatVersion": 3,
+  "contentHashAlgorithm": "sha256-utf8-lf-no-bom-v1",
   "baselineVersion": "0",
   "schemaHistoryTable": "flyway_schema_history",
   "generatedFrom": "db/migration/20*.sql",
@@ -7,7 +8,7 @@
     "core": {
       "location": "classpath:db/flyway/core",
       "autoMigrate": true,
-      "expectedMigrations": 68
+      "expectedMigrations": 69
     },
     "demo": {
       "location": "classpath:db/flyway/demo",
@@ -23,7 +24,7 @@
       "stream": "core",
       "source": "db/migration/20260524_ops_governance.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260524.01__ops_governance.sql",
-      "sha256": "3e5e89b3f90e4a3a50cb1c55cec207ce9ae110b0982075d45bc1cde9936cbc41",
+      "sha256": "edd65cad3c610879a77db4f81e527206f9ebe3994fe1cb1571a779fabb026293",
       "flywayChecksum": -254425770
     },
     {
@@ -32,7 +33,7 @@
       "stream": "core",
       "source": "db/migration/20260527_question_mistake_reason.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260527.01__question_mistake_reason.sql",
-      "sha256": "2039f550f9314c480733f6baa5c9972054c202b2944f03fb6d14dd92ef13631a",
+      "sha256": "db2816607d9380494e0b97a18ed989a47e9c3568f709d0945b0c92fe1ee9626e",
       "flywayChecksum": 1073714696
     },
     {
@@ -41,7 +42,7 @@
       "stream": "core",
       "source": "db/migration/20260528_mock_interview.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260528.01__mock_interview.sql",
-      "sha256": "e460fb619a3cd2bef39a1335cc4cc4af04a5d094a30fe8d33202975afd8ea35f",
+      "sha256": "53d33235c350f21f403baf9d68e97ed6d607f0b771790fee5b7058f6da87d6bb",
       "flywayChecksum": 12556059
     },
     {
@@ -50,7 +51,7 @@
       "stream": "core",
       "source": "db/migration/20260528_mock_interview_snapshot.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260528.02__mock_interview_snapshot.sql",
-      "sha256": "8e84cccb79cb2bc8abd05c7c501489eaf7f61a21c6a164454298e4336942e633",
+      "sha256": "f7c654e924031eeb999cd539a084963d147a225d0c31bac2bbdc7ac5cf46e7f6",
       "flywayChecksum": -700590507
     },
     {
@@ -59,7 +60,7 @@
       "stream": "core",
       "source": "db/migration/20260529_moderation_keyword_hit.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260529.01__moderation_keyword_hit.sql",
-      "sha256": "e39e2cc052434a10b386370dc52bf0343785caf26e6becf1164583833374881a",
+      "sha256": "ba96c5f11dd031568aca2334bc922bbe595219b8372896d74aea1fdce62b1c8c",
       "flywayChecksum": 457903092
     },
     {
@@ -68,7 +69,7 @@
       "stream": "core",
       "source": "db/migration/20260529_question_canonical_index.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260529.02__question_canonical_index.sql",
-      "sha256": "d223571bb58fd26e8609338e2673e0bf9ac52f5dea6f2e720c33948d54363da9",
+      "sha256": "0ab82a9b5eda9e6a4f1cc211262f751db30a111ec016b0a71c9aefec2f22e6ce",
       "flywayChecksum": 118765249
     },
     {
@@ -77,7 +78,7 @@
       "stream": "core",
       "source": "db/migration/20260529_question_review_schedule.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260529.03__question_review_schedule.sql",
-      "sha256": "4fd95a3c2dbc0cdd1d43a33446af191dcfe33acfe2c718ed1f2ed430827585a4",
+      "sha256": "6293207ca9c6e40fadf4972c146be0aab279382765e274be1b030dda451a7163",
       "flywayChecksum": 1235074085
     },
     {
@@ -86,7 +87,7 @@
       "stream": "core",
       "source": "db/migration/20260529_question_structured_fields.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260529.04__question_structured_fields.sql",
-      "sha256": "af7a1f91b77171c74c0f4179907b9323853b8859726558a8392f37542b4e66ba",
+      "sha256": "8f2cf6a61677345d4482fa831d29c93e547b501e83e9f5369b9d22f7b56c8cf2",
       "flywayChecksum": 1545676908
     },
     {
@@ -95,7 +96,7 @@
       "stream": "core",
       "source": "db/migration/20260530_mock_interview_ai_review.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.01__mock_interview_ai_review.sql",
-      "sha256": "b00a18542868270038e3ede5269cf143c0cbebbb9c0960ee4d573bc54c18c817",
+      "sha256": "116cb6b4ff0567bbeeb3fe10e579823c7e3d8fea7d9be7c04e1900ce883eec8c",
       "flywayChecksum": -1842749225
     },
     {
@@ -104,7 +105,7 @@
       "stream": "core",
       "source": "db/migration/20260530_notification_dedup_key.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.02__notification_dedup_key.sql",
-      "sha256": "aec697e2f39edf55f78a00833b213a1964bfcb1224074eadef16b438c3a1a77f",
+      "sha256": "8f13f6cef13e8ed8deca95caffe5d12b86aa03df2062a672dfc4d66b40335c3b",
       "flywayChecksum": 536300780
     },
     {
@@ -113,7 +114,7 @@
       "stream": "core",
       "source": "db/migration/20260530_notification_preferences.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.03__notification_preferences.sql",
-      "sha256": "42954871c1f06b80ce4e2397fb822766d36c269de3b950a96141c4f3d97de3f3",
+      "sha256": "8016db78d01ce3a15cacb015d0aa7fa26836273ae906cf929d66881a024b1856",
       "flywayChecksum": 473356727
     },
     {
@@ -122,7 +123,7 @@
       "stream": "core",
       "source": "db/migration/20260530_notification_retry_task.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.04__notification_retry_task.sql",
-      "sha256": "552589ab3c3791871a5b06144c8588a34db5fed1dec640dde66fd81e37fe31c3",
+      "sha256": "5f7aa4fd5439e98c6d2b73cead8b32080747e80c32bc5b6bdb781cf2e7f2d51d",
       "flywayChecksum": -534386430
     },
     {
@@ -131,7 +132,7 @@
       "stream": "core",
       "source": "db/migration/20260530_outbox_claim_lock.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.05__outbox_claim_lock.sql",
-      "sha256": "98fbd2d9dc7178596b0c93ec2e7354a735537827afbad1a221cc17e13a8f73fc",
+      "sha256": "342a62a7d136e63609196657513f52e28eaf46b870a711455d0155a3ae01b5ff",
       "flywayChecksum": 1714763290
     },
     {
@@ -140,7 +141,7 @@
       "stream": "core",
       "source": "db/migration/20260530_post_draft.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.06__post_draft.sql",
-      "sha256": "35ca3c75f0d355b53d1703ff83911b567ea293f521c7a6338acd4a544a955ba4",
+      "sha256": "9edf529594c28006c53c40e3fc584f9de3f9e1373fa788577f85b7ea57ec4cc7",
       "flywayChecksum": -2097678995
     },
     {
@@ -149,7 +150,7 @@
       "stream": "core",
       "source": "db/migration/20260530_post_version_history.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.07__post_version_history.sql",
-      "sha256": "57a412133f2e7e46128184b65d7e6d884ab57a10654243597888c6ffc84f6116",
+      "sha256": "4846d7b579be662b45690681398c91f79d668fa9cc47ea4cc9129fa2bde4aaee",
       "flywayChecksum": -841949636
     },
     {
@@ -158,7 +159,7 @@
       "stream": "core",
       "source": "db/migration/20260530_prep_target_schedule.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.08__prep_target_schedule.sql",
-      "sha256": "76524db8ebf03e8a714e17c969934f16c2dea023cd805fca8503ac417acbf082",
+      "sha256": "0711be9336653354565bedd4973c1ae880e0f9143839039c0324815fb81db5de",
       "flywayChecksum": -1104850441
     },
     {
@@ -167,7 +168,7 @@
       "stream": "core",
       "source": "db/migration/20260530_relation_unique_keys.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.09__relation_unique_keys.sql",
-      "sha256": "52c66d5814c492ad546fa6ba0ef36d3900668b676358947e0233ef995f36aee2",
+      "sha256": "8938bfc454cd52b29b80d79a420f02eed6fcf4951a2dcedcb0ca9c9734d90f90",
       "flywayChecksum": 130875041
     },
     {
@@ -176,7 +177,7 @@
       "stream": "core",
       "source": "db/migration/20260530_search_analytics.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.10__search_analytics.sql",
-      "sha256": "0b0a2084741d494eadb88e3fcf8b6fc354910cb0019c2d51fd37c5f0d33ab306",
+      "sha256": "829baf2b56e3fbaaca4da76180b25c470820dedd042efe6f53986c6b2fd73575",
       "flywayChecksum": -695205850
     },
     {
@@ -185,7 +186,7 @@
       "stream": "core",
       "source": "db/migration/20260530_search_index_retry_task.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260530.11__search_index_retry_task.sql",
-      "sha256": "988fe12a8118a21a2095ddae3ab7d7ac5bdea92000ee6bb241346a930ad73614",
+      "sha256": "14e9c60120772211bea39cea16f6f4f15f32c4de94bb43b935f210637b6fc3e7",
       "flywayChecksum": 440115537
     },
     {
@@ -203,7 +204,7 @@
       "stream": "core",
       "source": "db/migration/20260601_mock_interview_ai_review_status.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260601.02__mock_interview_ai_review_status.sql",
-      "sha256": "b05eed5e7e3cf2c1bb124d49398b56bf1d261f1c72c10a7aac5e5032f175d310",
+      "sha256": "6263257625112e0635252def6cad5e02702c55c0afe5152b38e1eba9062fcb94",
       "flywayChecksum": -1711960504
     },
     {
@@ -212,7 +213,7 @@
       "stream": "core",
       "source": "db/migration/20260601_question_index_retry_task.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260601.03__question_index_retry_task.sql",
-      "sha256": "3f20a1c29cb286f1759617835018d01c600a94d662df54d2cced791220363ac4",
+      "sha256": "0eebfc2059b4a544443faa76a94200620aa2b449a3719ce15bab5bfc247b08a3",
       "flywayChecksum": -1989815383
     },
     {
@@ -221,7 +222,7 @@
       "stream": "core",
       "source": "db/migration/20260601_question_index_task.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260601.04__question_index_task.sql",
-      "sha256": "8aeb82afda2d20006c25328c85df78214b218944a39b65649a4a80ebcdab1edd",
+      "sha256": "2bbf35c0667ec72a1d18950f9e1c655b60d3e60eb84ef39eb1f9dad9a3ec6787",
       "flywayChecksum": 296098111
     },
     {
@@ -239,7 +240,7 @@
       "stream": "core",
       "source": "db/migration/20260605_ai_extract_task_metrics.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260605.01__ai_extract_task_metrics.sql",
-      "sha256": "2dce17e7155f060bc6856fa0f5cad069968d6f9caaf6979220f0333659d2ddb4",
+      "sha256": "0d883a2fc5b4f97c26e15ad7dc6789412089faa0225b0ab63c7d412618440bb4",
       "flywayChecksum": 1254147221
     },
     {
@@ -248,7 +249,7 @@
       "stream": "core",
       "source": "db/migration/20260608_community_topics.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260608.01__community_topics.sql",
-      "sha256": "7172b8685718a9aa68717b46cc79a28311204c29cfb792235461d2207a4d426b",
+      "sha256": "1d8860fa90cce77a2160ec0e70731b45b47872cad96c3ada0b924b29ea5a036a",
       "flywayChecksum": -1477696737
     },
     {
@@ -257,7 +258,7 @@
       "stream": "core",
       "source": "db/migration/20260608_mock_interview_ai_review_transparency.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260608.02__mock_interview_ai_review_transparency.sql",
-      "sha256": "6ea21691c0886ddf4246b101692abfb4e9240993e379ccd4fc2b4a9b0641a8d2",
+      "sha256": "0f29b47a12212bdd030fbbb0c50d024390a69effc841a2810d8ef342fe5464be",
       "flywayChecksum": 1635813226
     },
     {
@@ -266,7 +267,7 @@
       "stream": "core",
       "source": "db/migration/20260608_review_queue.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260608.03__review_queue.sql",
-      "sha256": "867a1d2827672a3e522fc6dd157c59e6e5ca554a5a2d15705370ac44b187b8c6",
+      "sha256": "0b8a2f15529f4430c5af133333b3368fbe62fa3ee1a23e1d4f816c3296038994",
       "flywayChecksum": 793510403
     },
     {
@@ -275,7 +276,7 @@
       "stream": "core",
       "source": "db/migration/20260608_tag_governance.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260608.04__tag_governance.sql",
-      "sha256": "7eeee4357e126406c5b9faa7420e6f2015785cd046e889d0c96e00d4d0c33cde",
+      "sha256": "207599ed7c8b5c92338c1209c5104ca1925705b52b0441b017d75af1486ab76d",
       "flywayChecksum": 415561465
     },
     {
@@ -293,7 +294,7 @@
       "stream": "core",
       "source": "db/migration/20260615_interview_material_pack.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260615.01__interview_material_pack.sql",
-      "sha256": "99e82008b0c49cfc7057efc0aea8cb37f37b24baee25aee12a1658c835c95396",
+      "sha256": "8441b72caedd9c5f2712a035a4f22af08292aab222dfc4dd58a10cceb9b169f1",
       "flywayChecksum": 985094985
     },
     {
@@ -302,7 +303,7 @@
       "stream": "core",
       "source": "db/migration/20260617_domain_moderators.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260617.01__domain_moderators.sql",
-      "sha256": "f08f17588858deb69c2e8ff48fe94e56743db3050c73d6cc3b556bcbf0cbfbb2",
+      "sha256": "8cb79a30634728bf762b825e9935e0a770ff7f8a03558ea6c55030fb43a79481",
       "flywayChecksum": 1270052096
     },
     {
@@ -311,7 +312,7 @@
       "stream": "core",
       "source": "db/migration/20260618_post_extension_domain_index.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260618.01__post_extension_domain_index.sql",
-      "sha256": "bd51f44dda5d8cfa935f58e015b2197a68907d4c3fc88bca0226c1aa57a8226a",
+      "sha256": "1b9fbb455ef7dded5ef904f0e0cb0396abbadae040410c5e0a85e20eb8ca5d68",
       "flywayChecksum": 237012590
     },
     {
@@ -320,7 +321,7 @@
       "stream": "core",
       "source": "db/migration/20260623_domain_config.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260623.01__domain_config.sql",
-      "sha256": "52ecd1c26c12502c4ce824bfce7e9c18e23de5ef8a1b742b886118d10179d1b6",
+      "sha256": "84e4f486cd0c7f9bab0c39f47fcca89a980f8d2e86ab1be9d52e7b2ea9d64707",
       "flywayChecksum": 1514828426
     },
     {
@@ -329,7 +330,7 @@
       "stream": "core",
       "source": "db/migration/20260623_growth_event.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260623.02__growth_event.sql",
-      "sha256": "b4f9f692d45f7303806024c7472aa8b3b95229e32241c2dfe022e57fb7fe2e90",
+      "sha256": "e4b57e0076082393cf37420843e9a6674145510dc08a812dd6e7b48555e07103",
       "flywayChecksum": -1019806089
     },
     {
@@ -338,7 +339,7 @@
       "stream": "core",
       "source": "db/migration/20260623_user_task_state.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260623.03__user_task_state.sql",
-      "sha256": "6181ca61959a608e29b4dcbcd3bcec0050e6101cfc8bd8e502f4b4a0931a5042",
+      "sha256": "c1baef0b9a35e0b54f6a73ece43961a915fcf4427a5f577c94ac913363dc6fbb",
       "flywayChecksum": -1552710792
     },
     {
@@ -347,7 +348,7 @@
       "stream": "core",
       "source": "db/migration/20260624_content_assist_ai.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260624.01__content_assist_ai.sql",
-      "sha256": "fc431711975896024ca3cf76c5399f8fad98f6283e92940bb3e0eafafe2f9edd",
+      "sha256": "aae810013ac39ab64e02f015b3a303cda22c27c6e08e5638cc42bb2199abf98e",
       "flywayChecksum": 1529498508
     },
     {
@@ -356,7 +357,7 @@
       "stream": "core",
       "source": "db/migration/20260624_content_series.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260624.02__content_series.sql",
-      "sha256": "2aa6c608e2ba3ba56065a78839dffd6c449d268c4edbe75b82731210ab7cb402",
+      "sha256": "153253355b64aca19109371fcaa8211c6e7fb4e4f034d8fab408dd8018d24d2f",
       "flywayChecksum": 353018000
     },
     {
@@ -365,7 +366,7 @@
       "stream": "core",
       "source": "db/migration/20260624_expert_certification.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260624.03__expert_certification.sql",
-      "sha256": "e038edfd38f93bb482c4f11a7e793373f84a1989de7eb9be288b75b697cda687",
+      "sha256": "f2699b2eccd79871c8ee5a72eaff0501f231468b62098cd86292e65767fa8b09",
       "flywayChecksum": -45330063
     },
     {
@@ -374,7 +375,7 @@
       "stream": "core",
       "source": "db/migration/20260624_new_creator_support_stats.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260624.04__new_creator_support_stats.sql",
-      "sha256": "4d001459dd2c2aed6426f8ed885edc8fa90bc926d9a889b1fa95fb08eeb2cbd4",
+      "sha256": "15ec823b9b6efe1d103839de83a51cd38cabc0e7d1543cb42d6734ab7b4c38b7",
       "flywayChecksum": -186210953
     },
     {
@@ -401,7 +402,7 @@
       "stream": "core",
       "source": "db/migration/20260704_public_visibility_indexes.sql",
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260704.01__public_visibility_indexes.sql",
-      "sha256": "08a607149ca965f2fe07cf9d256dd870bfee6a21fce9f602f0e009fc144b29d6",
+      "sha256": "9faebcb70289bbe49c6e75897eae689430b1ad7e8cefe443e39797aec1ac2144",
       "flywayChecksum": -185159808
     },
     {
@@ -664,6 +665,15 @@
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260726.02__query_path_indexes.sql",
       "sha256": "d9a1ac75a5359fd6a85521048e2fccec16c7fce7784d58e8a149fb1dbb876cfd",
       "flywayChecksum": 2049690688
+    },
+    {
+      "version": "20260727.01",
+      "description": "operation_topic_draft_revision",
+      "stream": "core",
+      "source": "db/migration/20260727_operation_topic_draft_revision.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260727.01__operation_topic_draft_revision.sql",
+      "sha256": "9e69e0375b96829870a04a029132f50b57a1d02bbb53f7fddc280e05d81386a4",
+      "flywayChecksum": -302949504
     }
   ]
 }

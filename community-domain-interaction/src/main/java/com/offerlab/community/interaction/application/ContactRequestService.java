@@ -324,7 +324,11 @@ public class ContactRequestService {
     }
 
     private Long createReportForContactRequest(Long receiverUid, ContactRequestPO po, ContactRequestReportCmd cmd) {
-        validateSourceBinding(po.getRequesterUid(), receiverUid, po.getSourceType(), po.getSourceId());
+        // Reporting must stay possible even after the source post/comment was
+        // deleted or made private: the binding was validated when the request was
+        // created, and report() has already verified the caller is the receiver.
+        // Re-checking source visibility here only lets abusers dodge reports by
+        // removing the source afterwards.
         String reason = clean(cmd == null ? null : cmd.getReason(), MAX_REPORT_REASON_LENGTH, "CONTACT_REQUEST_ABUSE");
         String detail = contactReportDetail(po, cmd == null ? null : cmd.getDetail());
         contentModerationService.requireContentAllowed(receiverUid, ContentModerationService.SCOPE_REPORT, reason, detail);
