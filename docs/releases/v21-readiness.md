@@ -14,17 +14,17 @@
 
 1. 已绑定到冻结基线 `25d2cef` 的 GitHub Actions 成功事实。
 2. 2026-07-28 在 V21 当前工作树上实际执行的 Maven、migration 和 workflow Guard 结果。
-3. 需要在 V21 最终提交和 pull request 上刷新的 Git/CI 证据。
+3. V21 draft PR 上的 Git/CI 证据；最新 head、run 和 artifact 由 GitHub PR checks 与共享 V21 台账记录。
 4. 没有真实环境而保持 `BLOCKED` 的动态场景。
 
-本轮已运行 Maven 和一次性静态检查；没有启动应用、数据库、容器、浏览器或其他常驻服务。当前工作树结果只能支持本地静态结论，不能替代最终 pull request CI 或动态验收。
+本轮已运行 Maven 和一次性静态检查；没有启动应用、数据库、容器、浏览器或其他常驻服务。当前工作树结果可支持静态结论，pull request CI 负责重新验证最终 head；两者都不能替代动态验收。
 
 状态判定：
 
 | 对象 | 当前状态 | 说明 |
 |---|---|---|
 | 冻结生产代码基线 `25d2cef` | `STATIC_VERIFIED` | 同 SHA 的 Backend CI 与 Dependency Audit 已成功 |
-| V21 后端交付分支 | `LOCAL_STATIC_VERIFIED` | 当前工作树 Maven、migration Guard 和静态范围验证已通过；最终提交 SHA 与分支 CI 待补 |
+| V21 后端交付分支 | `STATIC_VERIFIED_WITH_PR_CI` | 当前工作树 Maven、migration Guard 和静态范围验证已通过；最新 PR #18 checks 与共享 V21 台账记录最终 head CI |
 | 动态验收 | `BLOCKED` | 本任务未配置或启动真实依赖环境 |
 | 发布决策 | `PASS_WITH_BLOCKERS` | 可交付静态证据，不等于允许发布 |
 
@@ -46,8 +46,8 @@
 | `origin/dev-v2` | `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
 | V21 分支起点差异 | 空，分支从冻结基线原样创建 |
 | 整理前工作区 | clean |
-| V21 本地分支 upstream | 未设置 |
-| 远端同名 V21 分支 | 证据收集时不存在 |
+| V21 本地分支 upstream | `origin/feature/v21-release-readiness` |
+| 远端同名 V21 分支 | 已创建，通过 draft PR #18 对齐 `dev-v2` |
 
 V21 方案中的冻结 PR 为后端 PR #17。GitHub API 在 `2026-07-28T17:04:28+08:00` 前后的观察结果为：
 
@@ -59,21 +59,21 @@ V21 方案中的冻结 PR 为后端 PR #17。GitHub API 在 `2026-07-28T17:04:28
 | Head SHA | `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
 | URL | `https://github.com/wbn-2020/offerlab-java/pull/17` |
 
-以上 PR 状态是带时间点的历史观察。主 Agent 必须在 V21 最终交付前重新确认 PR #17 的 HEAD 未被 V21 提交扩展。
+以上 PR 状态是带时间点的历史观察。最终交付前后的复核结果由共享 V21 台账记录；若 PR #17 的 HEAD 被 V21 提交扩展，本 readiness 结论立即失效。
 
 ### 2.2 V21 分支与 PR
 
 | 字段 | 当前证据 |
 |---|---|
 | 初始 V21 evidence commit | `251715fcf2213ed69d16f2960b16811ee33a9b5a` |
-| 最终分支 HEAD | 由 V21 PR #18 head 元数据记录；生产代码保持 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
+| 最终分支 HEAD | 以 V21 PR #18 head 元数据为准；生产代码保持 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
 | 提交时间 | 由 V21 分支 Git commit 元数据记录 |
 | V21 PR 编号 | `#18`，draft/open |
 | V21 PR 范围 | `feature/v21-release-readiness -> dev-v2` |
-| 本地/远端同步 | 初始 push 后均为 `251715fcf2213ed69d16f2960b16811ee33a9b5a`；本文刷新后以 PR #18 head 为准 |
+| 本地/远端同步 | 本地分支跟踪 `origin/feature/v21-release-readiness`；最终一致性以 PR #18 head 和 `git status --short --branch` 复核为准 |
 | 最终工作区状态 | 每次提交后复核 clean |
 | `git diff --name-status 25d2cef...HEAD` | 仅 `A docs/releases/v21-readiness.md` |
-| PR #17 复核时间与 Head SHA | 2026-07-28 已复核为 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf`，最终推送后再次复核 |
+| PR #17 复核时间与 Head SHA | 2026-07-28 推送前后均复核为 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf`；最新复核见共享 V21 台账 |
 
 ## 3. 无生产改动声明
 
@@ -448,11 +448,11 @@ V21 决策：使用等价生产基线豁免。V21 后端差异仅允许为本文
 | R13 | JAR、SBOM、checksum artifact | 由 draft PR #18 最终 head Backend CI 记录 |
 | R14 | Dependency Audit | 等价基线豁免：V21 后端仅文档差异，沿用 `25d2cef` 成功 run `30296061545` |
 | R15 | PR #17 未被扩展 | 2026-07-28 初次复核通过；V21 推送后再次复核 |
-| R16 | 独立 QA 结论 | `PASS_WITH_BLOCKERS`；无 P0；readiness 事实矛盾已修正；PR CI 与动态场景仍为 blocker |
+| R16 | 独立 QA 结论 | `PASS_WITH_BLOCKERS`；无 P0；readiness 事实矛盾已修正；最终 head PR CI 必须保持绿色，动态场景仍为 blocker |
 
 填写规则：
 
-- 第 5.1 节的 885 个测试只属于当前工作树本地结果，不得写成最终提交的 GitHub CI 或 Failsafe 结果。
+- 第 5.1 节的 885 个测试只属于当前工作树本地结果，不得写成 GitHub CI 的 Failsafe 结果；GitHub CI 的单元、Failsafe 与 artifact 证据必须引用对应 run 日志。
 - 不得把 `30296061502` 写成 V21 最终提交的新 CI；只能作为 `25d2cef` 基线证据或明确的等价基线。
 - 所有 run 必须同时记录 `head_sha`，仅记录 workflow 名称或绿色截图不合格。
 - 失败后重试时保留失败 run ID 和重试原因，不能只保留最后一次成功。
