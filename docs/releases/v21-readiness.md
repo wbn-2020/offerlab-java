@@ -61,16 +61,18 @@ V21 方案中的冻结 PR 为后端 PR #17。GitHub API 在 `2026-07-28T17:04:28
 
 以上 PR 状态是带时间点的历史观察。主 Agent 必须在 V21 最终交付前重新确认 PR #17 的 HEAD 未被 V21 提交扩展。
 
-### 2.2 最终分支占位
+### 2.2 V21 分支与 PR
 
-| 字段 | 主 Agent 填写 |
+| 字段 | 当前证据 |
 |---|---|
-| 最终分支 HEAD | 由 V21 PR head 元数据记录；生产代码保持 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
-| 提交时间 | 由包含本文的 Git commit 元数据记录 |
-| V21 PR 编号 | `PENDING_CREATION` |
+| 初始 V21 evidence commit | `251715fcf2213ed69d16f2960b16811ee33a9b5a` |
+| 最终分支 HEAD | 由 V21 PR #18 head 元数据记录；生产代码保持 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
+| 提交时间 | 由 V21 分支 Git commit 元数据记录 |
+| V21 PR 编号 | `#18`，draft/open |
 | V21 PR 范围 | `feature/v21-release-readiness -> dev-v2` |
-| 最终工作区状态 | `[clean / 非 clean 及原因]` |
-| `git diff --name-status 25d2cef...HEAD` | 预期仅 `A docs/releases/v21-readiness.md`，提交后复核 |
+| 本地/远端同步 | 初始 push 后均为 `251715fcf2213ed69d16f2960b16811ee33a9b5a`；本文刷新后以 PR #18 head 为准 |
+| 最终工作区状态 | 每次提交后复核 clean |
+| `git diff --name-status 25d2cef...HEAD` | 仅 `A docs/releases/v21-readiness.md` |
 | PR #17 复核时间与 Head SHA | 2026-07-28 已复核为 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf`，最终推送后再次复核 |
 
 ## 3. 无生产改动声明
@@ -431,7 +433,7 @@ V21 决策：使用等价生产基线豁免。V21 后端差异仅允许为本文
 
 | 编号 | 必填项 | 占位 |
 |---|---|---|
-| R1 | 最终 V21 SHA | 由 V21 PR head 记录；生产代码 SHA 固定为 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
+| R1 | 最终 V21 SHA | 由 draft PR #18 head 记录；生产代码 SHA 固定为 `25d2cef8b5f91ea85d3cae721878a63cdfa812bf` |
 | R2 | 最终差异仅本文 | `PASSED`；提交前 staged name-status 仅 `A docs/releases/v21-readiness.md` |
 | R3 | Java/Maven 版本 | `Amazon Corretto 17.0.19 / Maven 3.9.9 / Windows 11 amd64` |
 | R4 | `git diff --check` | `PASSED`；2026-07-28 提交前 `git diff --cached --check` exit 0，仅 LF/CRLF 工作副本提示 |
@@ -439,11 +441,11 @@ V21 决策：使用等价生产基线豁免。V21 后端差异仅允许为本文
 | R6 | 当前工作树 `mvn -B -ntp test` | `2026-07-28 18:03:16 +08:00；885/0/0/0；PASSED` |
 | R7 | post 定向测试 | `NOT_NEEDED：根级全量 Reactor 已覆盖 community-domain-post` |
 | R8 | analytics 定向测试 | `NOT_NEEDED：根级全量 Reactor 已覆盖 community-domain-analytics` |
-| R9 | 当前 SHA Backend CI | `PENDING_PR_CI` |
+| R9 | 当前 SHA Backend CI | draft PR #18 的最终 head checks 为权威证据；run/head SHA 写入共享 V21 台账 |
 | R10 | CI 实际前端合同 SHA | 预期 `dev-v2@6b92237c4c1c500ab0fbf53c76634dfbb80ba536`，以 CI 日志为准 |
-| R11 | Failsafe 结果 | `PENDING_PR_CI` |
-| R12 | 测试报告 artifact | `PENDING_PR_CI` |
-| R13 | JAR、SBOM、checksum artifact | `PENDING_PR_CI` |
+| R11 | Failsafe 结果 | 由 draft PR #18 最终 head Backend CI 记录 |
+| R12 | 测试报告 artifact | 由 draft PR #18 最终 head Backend CI 记录 |
+| R13 | JAR、SBOM、checksum artifact | 由 draft PR #18 最终 head Backend CI 记录 |
 | R14 | Dependency Audit | 等价基线豁免：V21 后端仅文档差异，沿用 `25d2cef` 成功 run `30296061545` |
 | R15 | PR #17 未被扩展 | 2026-07-28 初次复核通过；V21 推送后再次复核 |
 | R16 | 独立 QA 结论 | `PASS_WITH_BLOCKERS`；无 P0；readiness 事实矛盾已修正；PR CI 与动态场景仍为 blocker |
