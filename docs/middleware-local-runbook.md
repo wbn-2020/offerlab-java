@@ -9,21 +9,25 @@ PATH edits, registry entries, or Git hooks without explicit confirmation.
 OfferLab reads its local middleware defaults from:
 
 - `community-bootstrap/src/main/resources/application.yml`
+- `community-bootstrap/src/main/resources/application-local.yml`
 - `community-bootstrap/src/main/resources/application-dev.yml`
 
-Effective local defaults:
+Effective `local` profile defaults:
 
 | Dependency | App setting | Default |
 | --- | --- | --- |
 | Redis | `spring.data.redis.host`, `spring.data.redis.port` | `localhost:6379` |
-| Kafka | `offerlab.kafka.enabled`, `spring.kafka.bootstrap-servers` / `KAFKA_BROKERS` | enabled in `dev`; `localhost:9092` |
-| Elasticsearch | `offerlab.elasticsearch.enabled`, `offerlab.elasticsearch.url` / `ELASTICSEARCH_URL` | enabled in `dev`; `http://127.0.0.1:9200` |
-| Realtime WebSocket | `offerlab.realtime.websocket-enabled` | disabled in `dev` |
+| Redis Pub/Sub | `offerlab.redis.pubsub-enabled` | disabled |
+| Kafka | `offerlab.kafka.enabled`, `spring.kafka.bootstrap-servers` / `KAFKA_BROKERS` | disabled; endpoint defaults to `localhost:9092` when enabled |
+| Kafka Admin | `spring.kafka.admin.auto-create` | disabled with the same `OFFERLAB_KAFKA_ENABLED` switch |
+| Elasticsearch | `offerlab.elasticsearch.enabled`, `offerlab.elasticsearch.url` / `ELASTICSEARCH_URL` | disabled; endpoint defaults to `http://127.0.0.1:9200` when enabled |
+| Realtime WebSocket | `offerlab.realtime.websocket-enabled` | disabled |
 | MySQL | `spring.datasource.url` | `jdbc:mysql://localhost:3306/offerlab` |
 
-For a full local Kafka and Elasticsearch chain, these variables are now optional
-in `dev` because the local defaults are enabled. Set them only when overriding
-the default endpoint in the foreground PowerShell session that starts the backend:
+The `dev` profile keeps Kafka and Elasticsearch enabled for the existing
+full-middleware workflow. Prefer the `local` profile for a lightweight run.
+Enable optional middleware explicitly in the foreground PowerShell session only
+when that integration is under test:
 
 ```powershell
 $env:OFFERLAB_KAFKA_ENABLED = "true"

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.regex.Pattern;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class QuestionDemoSeedGuardTest {
@@ -25,7 +26,8 @@ class QuestionDemoSeedGuardTest {
         assertTrue(seed.contains("INSERT INTO t_user_question_progress"), "seed must include user progress for /me/prep");
         assertTrue(seed.contains("answer_draft") && seed.contains("star_story"), "seed must include answer draft and STAR fields");
         assertTrue(seed.contains("INSERT INTO t_mock_interview_session"), "seed should include a demo mock interview summary");
-        assertTrue(seed.contains("娣辨祴绉戞妧"), "seed must support the demo company prep route");
+        assertTrue(seed.contains("深测科技"), "seed must support the demo company prep route");
+        assertFalse(seed.contains("娣辨祴绉戞妧"), "seed must not regress to the old mojibake company name");
 
         assertTrue(count(seed, "SHA2\\('offerlab-demo-question-") >= 8,
                 "seed must keep at least eight demo interview questions");
@@ -69,11 +71,13 @@ class QuestionDemoSeedGuardTest {
         assertTrue(script.contains("verify-demo-question-data"),
                 "script name or output should make the check discoverable");
         assertTrue(script.contains("admin-email") && script.contains("'admin'"),
-                "visibility script must default to the real retest admin account");
+                "visibility script must retain an explicit account override and legacy fallback");
         assertTrue(script.contains("demo.admin@offerlab.local"),
                 "visibility script must fall back to the fresh-init demo account");
-        assertTrue(script.contains("retestEmails") && script.contains("retest_user"),
-                "visibility script must report the actual retest account used for prep data");
+        assertTrue(script.contains("seed_owner") && script.contains("target.id = 990300000000000001"),
+                "visibility script must discover the deterministic prep owner");
+        assertTrue(script.contains("requested_user") && script.contains("retest_user"),
+                "visibility script must report the requested or discovered retest account");
         assertTrue(script.contains("visible_question_total"),
                 "visibility script must verify public question visibility");
         assertTrue(script.contains("admin_prep_targets"),

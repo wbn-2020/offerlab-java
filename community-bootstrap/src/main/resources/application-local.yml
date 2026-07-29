@@ -1,0 +1,51 @@
+# local profile overrides.
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+
+spring:
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/offerlab?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:offerlab}
+    password: ${DB_PASSWORD:offerlab-local-db-change-me}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:offerlab-local-redis-change-me}
+      database: ${REDIS_DATABASE:0}
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    admin:
+      auto-create: ${OFFERLAB_KAFKA_ENABLED:false}
+
+logging:
+  level:
+    com.offerlab.community: ${OFFERLAB_LOG_LEVEL:INFO}
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+offerlab:
+  id:
+    snowflake:
+      worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID:1}
+      datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID:1}
+  admin:
+    local-open-enabled: ${OFFERLAB_ADMIN_LOCAL_OPEN_ENABLED:false}
+  jwt:
+    secret: ${JWT_SECRET:offerlab-local-dev-only-secret-key-change-before-shared-env-123456}
+  redis:
+    pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}
+  kafka:
+    enabled: ${OFFERLAB_KAFKA_ENABLED:false}
+  elasticsearch:
+    enabled: ${ELASTICSEARCH_ENABLED:false}
+    url: ${ELASTICSEARCH_URL:http://127.0.0.1:9200}
+  realtime:
+    websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}

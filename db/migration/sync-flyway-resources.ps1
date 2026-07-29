@@ -7,6 +7,111 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "migration-content-hash.ps1")
 
+function Replace-LiteralOnce {
+  param(
+    [Parameter(Mandatory = $true)][string] $Content,
+    [Parameter(Mandatory = $true)][string] $Before,
+    [Parameter(Mandatory = $true)][string] $After,
+    [Parameter(Mandatory = $true)][string] $Label
+  )
+
+  $start = $Content.IndexOf($Before, [System.StringComparison]::Ordinal)
+  if ($start -lt 0) {
+    throw "Immutable demo migration is missing expected $Label."
+  }
+  $duplicate = $Content.IndexOf(
+    $Before,
+    $start + $Before.Length,
+    [System.StringComparison]::Ordinal
+  )
+  if ($duplicate -ge 0) {
+    throw "Immutable demo migration contains duplicate $Label."
+  }
+
+  return $Content.Substring(0, $start) + $After + $Content.Substring($start + $Before.Length)
+}
+
+function ConvertTo-FreshInitDemoSeed {
+  param([Parameter(Mandatory = $true)][string] $Content)
+
+  $result = (ConvertTo-NormalizedNewlines $Content).TrimEnd([char[]]"`n")
+  $legacyAuthorGuard = ConvertTo-NormalizedNewlines @'
+SET @community_demo_uid := COALESCE(
+    (SELECT id FROM t_user_account WHERE email = 'demo.author@offerlab.local' AND is_deleted = 0 LIMIT 1),
+    (SELECT id FROM t_user_account WHERE email = 'admin' AND is_deleted = 0 LIMIT 1),
+    (SELECT id FROM t_user_account WHERE is_deleted = 0 ORDER BY id LIMIT 1)
+);
+
+SET @community_seed_guard_sql := IF(
+    @community_demo_uid IS NULL,
+    'SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ''community seed requires an existing active author''',
+    'DO 0'
+);
+PREPARE community_seed_guard_stmt FROM @community_seed_guard_sql;
+EXECUTE community_seed_guard_stmt;
+DEALLOCATE PREPARE community_seed_guard_stmt;
+'@
+  $legacyAuthorGuard = $legacyAuthorGuard.TrimEnd([char[]]"`n")
+  $freshAuthorGuard = ConvertTo-NormalizedNewlines @'
+-- Keep community demo content on the same reserved identity. In particular,
+-- never fall back to a real admin or the first active account when the local
+-- demo identity has been explicitly promoted to demo.admin.
+SET @community_demo_uid := @offerlab_demo_user_uid;
+
+SET @community_seed_identity_conflicts := IF(
+    @community_demo_uid IS NULL OR NOT EXISTS (
+        SELECT 1
+        FROM t_user_account
+        WHERE id = @community_demo_uid
+          AND is_deleted = 0
+    ),
+    1,
+    0
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_demo_author', @community_seed_identity_conflicts);
+'@
+  $freshAuthorGuard = $freshAuthorGuard.TrimEnd([char[]]"`n")
+  $result = Replace-LiteralOnce `
+    -Content $result `
+    -Before $legacyAuthorGuard `
+    -After $freshAuthorGuard `
+    -Label "community demo author guard"
+
+  $guardOverrides = @(
+    [pscustomobject]@{ Diagnostic = "tag"; Assertion = "community_tag_identity" },
+    [pscustomobject]@{ Diagnostic = "topic"; Assertion = "community_topic_identity" },
+    [pscustomobject]@{ Diagnostic = "topic tag"; Assertion = "community_topic_tag_identity" },
+    [pscustomobject]@{ Diagnostic = "post"; Assertion = "community_post_identity" },
+    [pscustomobject]@{ Diagnostic = "post tag"; Assertion = "community_post_tag_identity" }
+  )
+  foreach ($override in $guardOverrides) {
+    $legacyGuard = ConvertTo-NormalizedNewlines @"
+SET @community_seed_guard_sql := IF(
+    @community_seed_identity_conflicts > 0,
+    'SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ''community seed $($override.Diagnostic) identity conflict''',
+    'DO 0'
+);
+PREPARE community_seed_guard_stmt FROM @community_seed_guard_sql;
+EXECUTE community_seed_guard_stmt;
+DEALLOCATE PREPARE community_seed_guard_stmt;
+"@
+    $legacyGuard = $legacyGuard.TrimEnd([char[]]"`n")
+    $freshGuard = ConvertTo-NormalizedNewlines @"
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('$($override.Assertion)', @community_seed_identity_conflicts);
+"@
+    $freshGuard = $freshGuard.TrimEnd([char[]]"`n")
+    $result = Replace-LiteralOnce `
+      -Content $result `
+      -Before $legacyGuard `
+      -After $freshGuard `
+      -Label "community demo $($override.Diagnostic) guard"
+  }
+
+  return "$result`nDROP TEMPORARY TABLE offerlab_demo_seed_assertion;"
+}
+
 $sourceDir = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $sourceDir "..\.."))
 $resourceRoot = [System.IO.Path]::GetFullPath(
@@ -322,7 +427,7 @@ $manifest = [ordered]@{
 $demoSeedText = ConvertTo-NormalizedNewlines(
   [System.IO.File]::ReadAllText($demoSeedSourcePath, [System.Text.Encoding]::UTF8)
 )
-$demoSeedBody = $demoSeedText.TrimEnd([char[]]"`n")
+$demoSeedBody = ConvertTo-FreshInitDemoSeed -Content $demoSeedText
 $generatedSeedBlock = "$generatedSeedStart`n$demoSeedBody`n$generatedSeedEnd"
 
 if (-not (Test-Path -LiteralPath $initSeedPath -PathType Leaf)) {

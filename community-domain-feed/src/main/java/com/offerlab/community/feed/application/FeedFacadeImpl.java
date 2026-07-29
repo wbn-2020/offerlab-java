@@ -837,8 +837,10 @@ public class FeedFacadeImpl implements FeedFacade {
                 ? 0D
                 : Math.max(0D, 72D - Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
         double tagBonus = post.getTags() == null ? 0D : Math.min(post.getTags().size(), 3) * 1.5D;
-        double preferencePenalty = reducedDomains != null
-                && reducedDomains.contains(effectiveDomain(post.getDomain()))
+        Integer recommendationDomain = effectiveDomain(post.getDomain());
+        double preferencePenalty = recommendationDomain != null
+                && reducedDomains != null
+                && reducedDomains.contains(recommendationDomain)
                 ? LESS_LIKE_THIS_PENALTY
                 : 0D;
         return heat + recency + tagBonus + intentScore(post, intent)
