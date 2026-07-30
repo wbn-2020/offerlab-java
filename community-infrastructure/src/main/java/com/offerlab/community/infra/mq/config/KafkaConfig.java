@@ -31,6 +31,7 @@ import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
 import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.util.backoff.ExponentialBackOff;
+import org.springframework.util.backoff.FixedBackOff;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 
@@ -53,7 +54,7 @@ public class KafkaConfig {
     private final ObjectMapper objectMapper;
 
     @Value("${offerlab.kafka.listener-concurrency:1}")
-    private int listenerConcurrency;
+    private int listenerConcurrency = 1;
 
     /**
      * 生产者工厂配置
@@ -177,6 +178,25 @@ public class KafkaConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);  // 手动立即提交
         factory.setBatchListener(false);  // 单条消息处理
         factory.setCommonErrorHandler(kafkaErrorHandler(deadLetterKafkaTemplate()));
+        return factory;
+    }
+
+    /**
+     * DLT records are already the final durable handoff for a failed search event. If persisting
+     * the recovery task fails, retain the original DLT offset for retry instead of committing it
+     * into an unconsumed ".DLT.DLT" topic.
+     */
+    @Bean("postSearchDeadLetterKafkaListenerContainerFactory")
+    public ConcurrentKafkaListenerContainerFactory<String, EventEnvelope<?>>
+    postSearchDeadLetterKafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, EventEnvelope<?>> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        factory.setConcurrency(listenerConcurrency);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setBatchListener(false);
+        factory.setCommonErrorHandler(new DefaultErrorHandler(
+                new FixedBackOff(1_000L, FixedBackOff.UNLIMITED_ATTEMPTS)));
         return factory;
     }
 

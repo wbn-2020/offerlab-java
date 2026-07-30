@@ -180,6 +180,11 @@ class AdminPermissionServiceTest {
             }
 
             @Override
+            public List<Long> lockEnabledAdminUids() {
+                return List.of();
+            }
+
+            @Override
             public int countAdminRows() {
                 return 0;
             }

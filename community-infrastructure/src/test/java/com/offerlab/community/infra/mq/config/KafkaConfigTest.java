@@ -7,7 +7,9 @@ import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Serializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.SerializationUtils;
@@ -71,6 +73,18 @@ class KafkaConfigTest {
                 .build();
         String json = new String(valueSerializer.serialize("events.DLT", event), StandardCharsets.UTF_8);
         assertTrue(json.contains("\"messageId\":\"m1\""));
+    }
+
+    @Test
+    void postSearchDltFactoryUsesTheSharedConsumerContract() {
+        KafkaConfig config = config();
+
+        ConcurrentKafkaListenerContainerFactory<String, EventEnvelope<?>> factory =
+                config.postSearchDeadLetterKafkaListenerContainerFactory();
+
+        assertNotNull(factory.getConsumerFactory());
+        assertEquals(ContainerProperties.AckMode.MANUAL_IMMEDIATE,
+                factory.getContainerProperties().getAckMode());
     }
 
     private KafkaConfig config() {

@@ -92,8 +92,8 @@ public class CommentModerationHitQueueActionHandler implements ReviewQueueSource
         }
         if (approved) {
             postCounterMapper.incrComment(comment.getPostId(), 1);
-            afterCommit.execute(() -> postCounterRedis.incrComment(comment.getPostId(), 1),
-                    "post comment moderation approve counter:" + comment.getPostId());
+            afterCommit.execute(() -> postCounterRedis.evict(comment.getPostId()),
+                    "post comment moderation approve counter invalidation:" + comment.getPostId());
             eventPublisher.publish(CommentCreatedEvent.builder()
                     .uid(comment.getAuthorId())
                     .postId(comment.getPostId())

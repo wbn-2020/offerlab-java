@@ -3,6 +3,7 @@ package com.offerlab.community.user.application;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
 import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.domain.model.User;
@@ -35,6 +36,7 @@ public class ContactRequestSettingsService {
     private final UserPrivacySettingMapper privacySettingMapper;
     private final ContentModerationService contentModerationService;
     private final UserCacheService userCacheService;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public ContactRequestSettingsDTO getSettings(Long uid) {
@@ -61,7 +63,8 @@ public class ContactRequestSettingsService {
         } else {
             privacySettingMapper.insert(po);
         }
-        userCacheService.evictBrief(uid);
+        afterCommit.execute(() -> userCacheService.evictBrief(uid),
+                "contact request settings cache eviction:" + uid);
         return toDTO(po);
     }
 

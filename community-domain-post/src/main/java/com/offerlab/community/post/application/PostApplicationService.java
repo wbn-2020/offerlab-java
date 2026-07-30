@@ -306,7 +306,7 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
 
     public void incrView(Long postId) {
         counterMapper.incrView(postId, 1);
-        afterCommit.execute(() -> postCounterRedis.incrView(postId, 1), "post view counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post view counter invalidation:" + postId);
     }
 
     private String mergeDomainToExtJson(String extJson, Integer domain) {

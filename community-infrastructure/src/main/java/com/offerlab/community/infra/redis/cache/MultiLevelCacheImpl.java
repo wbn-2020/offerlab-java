@@ -43,6 +43,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
     private static final Duration MAX_TTL_JITTER = Duration.ofMinutes(5);
     private static final Duration MIN_TTL = Duration.ofSeconds(1);
+    private static final Duration EPOCH_TTL = Duration.ofHours(2);
     private static final int LOCAL_LOCK_STRIPES = 256;
     private static final ReentrantLock[] LOCAL_LOAD_LOCKS = createLocalLocks();
 
@@ -172,8 +173,10 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
             if (redisson != null) {
                 distributedLock = redisson.getLock(CacheKeyBuilder.cacheLock(key));
                 if (distributedLock != null) {
-                    distributedLock.lockInterruptibly(30, TimeUnit.SECONDS);
-                    distributedLocked = true;
+                    distributedLocked = distributedLock.tryLock(3, 30, TimeUnit.SECONDS);
+                    if (!distributedLocked) {
+                        log.warn("Timed out waiting for distributed cache eviction lock, keyRef={}", safeCacheKey(key));
+                    }
                 }
             }
         } catch (InterruptedException e) {
@@ -186,6 +189,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
         ReentrantLock localLock = localLoadLock(key);
         localLock.lock();
         try {
+            advanceEpoch(key);
             CacheEvictListener.invalidateGlobalL1(key);
             try {
                 redisTemplate.delete(key);
@@ -214,6 +218,7 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
 
     @Override
     public void put(String key, V value, Duration ttl) {
+        advanceEpoch(key);
         if (value == null) {
             // 缓存空值，短 TTL 防穿透
             CacheEvictListener.putGlobalL1(key, NULL_MARKER, NULL_MARKER.length());
@@ -266,7 +271,12 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
                         safeCacheKey(key), e.getMessage());
             }
 
+            long epochBeforeLoad = currentEpoch(key);
             V value = loader.apply(key);
+            if (!isCurrentEpoch(key, epochBeforeLoad)) {
+                log.debug("Skipping stale cache write after eviction or replacement, keyRef={}", safeCacheKey(key));
+                return value;
+            }
             var l1Cache = CacheEvictListener.getGlobalL1Cache();
             boolean loadedNull = value == null;
             if (loadedNull) {
@@ -332,6 +342,30 @@ public class MultiLevelCacheImpl<V> implements MultiLevelCache<V> {
         } catch (Exception e) {
             log.error("Failed to deserialize cached value, type={}", type.getName(), e);
             return null;
+        }
+    }
+
+    private long currentEpoch(String key) {
+        try {
+            String value = redisTemplate.opsForValue().get(CacheKeyBuilder.cacheEpoch(key));
+            return value == null ? 0L : Long.parseLong(value);
+        } catch (Exception e) {
+            log.debug("Cache epoch read degraded, keyRef={}: {}", safeCacheKey(key), e.getMessage());
+            return 0L;
+        }
+    }
+
+    private boolean isCurrentEpoch(String key, long expected) {
+        return currentEpoch(key) == expected;
+    }
+
+    private void advanceEpoch(String key) {
+        try {
+            String epochKey = CacheKeyBuilder.cacheEpoch(key);
+            redisTemplate.opsForValue().increment(epochKey);
+            redisTemplate.expire(epochKey, EPOCH_TTL);
+        } catch (Exception e) {
+            log.debug("Cache epoch update degraded, keyRef={}: {}", safeCacheKey(key), e.getMessage());
         }
     }
 

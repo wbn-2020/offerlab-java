@@ -10,6 +10,7 @@ import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
@@ -55,6 +56,7 @@ public class PostReportService {
     private final ReviewQueuePublisher reviewQueuePublisher;
     private final DomainModeratorService domainModeratorService;
     private final EventPublisher events;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Long reportPost(Long postId, Long reporterUid, String reason, String detail) {
@@ -260,8 +262,14 @@ public class PostReportService {
                 throw new BizException(ErrorCode.INVALID_STATUS);
             }
         }
-        postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
-        postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        evictPostDetailAfterCommit(postId);
+    }
+
+    private void evictPostDetailAfterCommit(Long postId) {
+        afterCommit.execute(() -> {
+            postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
+            postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        }, "post report detail eviction:" + postId);
     }
 
     private int clampLimit(int limit) {

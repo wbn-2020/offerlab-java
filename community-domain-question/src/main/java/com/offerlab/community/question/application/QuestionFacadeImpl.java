@@ -951,10 +951,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
             }
         }
-        evictQuestionCachesByCompany(canonical);
-        if (old != null) {
-            evictQuestionCachesByCompany(old.getCanonicalCompany());
+        Set<String> affectedCompanies = new LinkedHashSet<>();
+        affectedCompanies.add(canonical);
+        if (old != null && old.getCanonicalCompany() != null) {
+            affectedCompanies.add(old.getCanonicalCompany());
         }
+        scheduleCompanyCacheEvictions(affectedCompanies, "company alias cache:" + po.getId());
         return toCompanyAliasDto(companyAliasMapper.selectById(po.getId()));
     }
 
@@ -967,7 +969,11 @@ public class QuestionFacadeImpl implements QuestionFacade {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         companyAliasMapper.updateStatus(id, normalized);
-        evictQuestionCachesByCompany(old.getCanonicalCompany());
+        Set<String> affectedCompanies = new LinkedHashSet<>();
+        if (old.getCanonicalCompany() != null) {
+            affectedCompanies.add(old.getCanonicalCompany());
+        }
+        scheduleCompanyCacheEvictions(affectedCompanies, "company alias status cache:" + id);
         return Map.of("id", id, "status", normalized);
     }
 
@@ -1089,7 +1095,10 @@ public class QuestionFacadeImpl implements QuestionFacade {
             return;
         }
         String company = extValue(post.getExtJson(), "company");
-        evictQuestionCachesByCompany(company);
+        if (company == null || company.isBlank()) {
+            return;
+        }
+        scheduleCompanyCacheEvictions(List.of(company), "post question cache eviction:" + post.getId());
     }
 
     private List<ExtractedQuestion> extractQuestions(PostDTO post) {

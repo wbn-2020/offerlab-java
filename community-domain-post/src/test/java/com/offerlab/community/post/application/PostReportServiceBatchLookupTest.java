@@ -34,6 +34,7 @@ class PostReportServiceBatchLookupTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
 

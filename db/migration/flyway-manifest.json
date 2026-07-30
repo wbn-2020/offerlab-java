@@ -8,7 +8,7 @@
     "core": {
       "location": "classpath:db/flyway/core",
       "autoMigrate": true,
-      "expectedMigrations": 69
+      "expectedMigrations": 71
     },
     "demo": {
       "location": "classpath:db/flyway/demo",
@@ -674,6 +674,24 @@
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260727.01__operation_topic_draft_revision.sql",
       "sha256": "9e69e0375b96829870a04a029132f50b57a1d02bbb53f7fddc280e05d81386a4",
       "flywayChecksum": -302949504
+    },
+    {
+      "version": "20260730.01",
+      "description": "moderation_keyword_seed",
+      "stream": "core",
+      "source": "db/migration/20260730_moderation_keyword_seed.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260730.01__moderation_keyword_seed.sql",
+      "sha256": "2f66b2e694cf5641ab179018930e8ec258709cc6d55a6f664ab1035a2977cb16",
+      "flywayChecksum": -231645189
+    },
+    {
+      "version": "20260730.02",
+      "description": "disable_unfulfillable_benefits",
+      "stream": "core",
+      "source": "db/migration/20260730_disable_unfulfillable_benefits.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260730.02__disable_unfulfillable_benefits.sql",
+      "sha256": "1ed72887cbfa7dacd3928a491ba3661cadc1a9b2a1a12802804c3a20409f36c1",
+      "flywayChecksum": -1807396240
     }
   ]
 }

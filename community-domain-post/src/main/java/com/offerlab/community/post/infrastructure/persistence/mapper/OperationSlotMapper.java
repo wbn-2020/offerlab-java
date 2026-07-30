@@ -5,6 +5,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.OperationSlotPO
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -35,9 +36,47 @@ public interface OperationSlotMapper extends BaseMapper<OperationSlotPO> {
     OperationSlotPO selectByCode(@Param("slotCode") String slotCode);
 
     @Select("""
+            SELECT *
+            FROM t_operation_slot
+            WHERE is_deleted = 0
+              AND id = #{slotId}
+            FOR UPDATE
+            """)
+    OperationSlotPO selectByIdForUpdate(@Param("slotId") Long slotId);
+
+    @Select("""
+            SELECT *
+            FROM t_operation_slot
+            WHERE is_deleted = 0
+              AND slot_code = #{slotCode}
+            FOR UPDATE
+            """)
+    OperationSlotPO selectByCodeForUpdate(@Param("slotCode") String slotCode);
+
+    @Select("""
             SELECT COUNT(*)
             FROM t_operation_slot
             WHERE is_deleted = 0
             """)
     long countActiveRows();
+
+    @Update("""
+            UPDATE t_operation_slot
+            SET rollback_snapshot_json = #{rollbackSnapshotJson},
+                slot_status = #{slotStatus},
+                current_version = #{nextVersion},
+                published_snapshot_json = #{publishedSnapshotJson},
+                updated_by = #{operatorUid},
+                update_time = NOW(3)
+            WHERE id = #{slotId}
+              AND is_deleted = 0
+              AND COALESCE(current_version, 0) = #{expectedVersion}
+            """)
+    int publishIfCurrentVersion(@Param("slotId") Long slotId,
+                                @Param("expectedVersion") int expectedVersion,
+                                @Param("nextVersion") int nextVersion,
+                                @Param("slotStatus") String slotStatus,
+                                @Param("rollbackSnapshotJson") String rollbackSnapshotJson,
+                                @Param("publishedSnapshotJson") String publishedSnapshotJson,
+                                @Param("operatorUid") Long operatorUid);
 }

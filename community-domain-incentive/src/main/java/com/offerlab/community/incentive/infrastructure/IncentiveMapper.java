@@ -917,11 +917,17 @@ public interface IncentiveMapper {
     @Select("""
             SELECT * FROM t_virtual_benefit_catalog
             WHERE enabled = 1
+              AND benefit_code IN ('AI_ASSIST_QUOTA', 'COLLECTION_ORGANIZATION_QUOTA')
             ORDER BY update_time DESC, id DESC LIMIT #{offset}, #{limit}
             """)
     List<BenefitPO> selectBenefits(@Param("offset") int offset, @Param("limit") int limit);
 
-    @Select("SELECT COUNT(*) FROM t_virtual_benefit_catalog WHERE enabled = 1")
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_virtual_benefit_catalog
+            WHERE enabled = 1
+              AND benefit_code IN ('AI_ASSIST_QUOTA', 'COLLECTION_ORGANIZATION_QUOTA')
+            """)
     long countBenefits();
 
     @Select("""

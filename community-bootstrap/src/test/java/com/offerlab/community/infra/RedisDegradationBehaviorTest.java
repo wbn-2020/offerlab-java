@@ -35,7 +35,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.when;
 
 class RedisDegradationBehaviorTest {
@@ -44,6 +44,7 @@ class RedisDegradationBehaviorTest {
     void postCounterFallsBackWhenRedisIsUnavailable() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         when(redisTemplate.opsForHash()).thenThrow(redisDown());
+        when(redisTemplate.opsForValue()).thenThrow(redisDown());
         PostCounterRedis counterRedis = new PostCounterRedis(redisTemplate);
 
         assertDoesNotThrow(() -> counterRedis.incrView(1L, 1));
@@ -55,20 +56,21 @@ class RedisDegradationBehaviorTest {
     }
 
     @Test
-    void postCounterWritesRefreshExpiry() {
+    void postCounterUsesAtomicFillAndInvalidationScripts() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
-        org.springframework.data.redis.core.HashOperations<String, Object, Object> hashOps = mock(
-                org.springframework.data.redis.core.HashOperations.class);
-        org.mockito.Mockito.doReturn(hashOps).when(redisTemplate).opsForHash();
+        ValueOperations<String, String> valueOps = mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
         PostCounterRedis counterRedis = new PostCounterRedis(redisTemplate);
 
         counterRedis.init(11L);
         counterRedis.incrView(11L, 1);
         counterRedis.fillFromDb(11L, 1, 2, 3, 4, 5);
 
-        verify(redisTemplate, org.mockito.Mockito.times(3))
-                .expire(eq("post:counter:11"), any(Duration.class));
+        long scriptCalls = mockingDetails(redisTemplate).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("execute"))
+                .count();
+        assertEquals(3L, scriptCalls);
     }
 
     @Test

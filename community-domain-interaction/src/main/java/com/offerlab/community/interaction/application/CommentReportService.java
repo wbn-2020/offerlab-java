@@ -322,7 +322,7 @@ public class CommentReportService {
             return;
         }
         postCounterMapper.incrComment(postId, -hiddenCount);
-        afterCommit.execute(() -> postCounterRedis.incrComment(postId, -hiddenCount), "post comment hide counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post comment hide counter invalidation:" + postId);
         events.publish(CommentUnavailableEvent.builder()
                 .commentId(comment.getId())
                 .postId(postId)

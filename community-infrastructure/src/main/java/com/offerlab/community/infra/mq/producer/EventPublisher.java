@@ -8,7 +8,6 @@ import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,8 +16,9 @@ import java.time.LocalDateTime;
 /**
  * Publishes domain events to the transactional outbox and the local Spring event bus.
  *
- * <p>When {@code offerlab.kafka.enabled=false}, the outbox/Kafka path is skipped while the
- * local Spring event is still published so in-process consumers keep working.</p>
+ * <p>When {@code offerlab.kafka.enabled=false}, messages remain pending in the transactional
+ * outbox while local Spring consumers keep working. Re-enabling Kafka resumes delivery without
+ * losing events produced during the local-only interval.</p>
  */
 @Slf4j
 @Component
@@ -29,19 +29,15 @@ public class EventPublisher {
     private final OutboxMessageMapper outboxMapper;
     private final EventTopicResolver topicResolver;
     private final ObjectMapper objectMapper;
-    private final Environment environment;
-
     /**
-     * Publishes a domain event and persists an outbox message when Kafka is enabled.
+     * Publishes a domain event and always persists an outbox message.
      *
      * @param event event object
      */
     @Transactional
     public void publish(Object event) {
         try {
-            if (isKafkaEnabled()) {
-                persistOutbox(event);
-            }
+            persistOutbox(event);
 
             // 同时发布 Spring 本地事件，保持现有 FeedFanoutListener 工作
             delegate.publishEvent(event);
@@ -89,10 +85,6 @@ public class EventPublisher {
         outboxMapper.insert(outbox);
         log.debug("outbox message saved: topic={} aggregateId={} messageId={} registered={}",
                 mapping.topic, mapping.aggregateId, envelope.getMessageId(), mapping.registered);
-    }
-
-    private boolean isKafkaEnabled() {
-        return environment.getProperty("offerlab.kafka.enabled", Boolean.class, true);
     }
 
     private static String safeEventType(Object event) {
