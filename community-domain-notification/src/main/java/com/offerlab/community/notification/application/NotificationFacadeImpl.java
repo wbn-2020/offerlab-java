@@ -6,16 +6,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.notification.api.dto.NotificationReadAllResultDTO;
 import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationAggregateWindow;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationMessagePO;
+import com.offerlab.community.notification.realtime.NotificationRealtimeCapability;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,7 +41,6 @@ import java.util.stream.Collectors;
 public class NotificationFacadeImpl implements NotificationFacade {
 
     private static final int REALTIME_POLL_INTERVAL_SECONDS = 20;
-    private static final boolean WEBSOCKET_TRANSPORT_AVAILABLE = false;
     private static final long AGGREGATION_WINDOW_MINUTES = 30L;
     private static final int MAX_READ_BATCH_SIZE = 200;
     private static final int MARK_ALL_READ_BATCH_SIZE = 500;
@@ -68,6 +70,12 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
     private final UserFacade userFacade;
+    @Autowired(required = false)
+    private AfterCommitExecutor afterCommitExecutor;
+    @Autowired(required = false)
+    private NotificationRealtimePublisher realtimePublisher;
+    @Autowired(required = false)
+    private NotificationRealtimeCapability realtimeCapability;
     private volatile Boolean messageTableReadyCache;
     private volatile Boolean dedupKeyColumnReadyCache;
 
@@ -144,7 +152,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .latestUnreadAt(latestUnread == null ? null : latestUnread.getCreateTime())
                 .serverTime(System.currentTimeMillis())
                 .pollIntervalSeconds(REALTIME_POLL_INTERVAL_SECONDS)
-                .websocketEnabled(WEBSOCKET_TRANSPORT_AVAILABLE)
+                .websocketEnabled(realtimeCapability != null && realtimeCapability.isWebSocketAvailable())
                 .build();
     }
 
@@ -155,11 +163,14 @@ public class NotificationFacadeImpl implements NotificationFacade {
         if (normalizedNotifIds.isEmpty() || !messageTableReady()) {
             return;
         }
-        mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
+        int updated = mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
                 .eq(NotificationMessagePO::getReceiverUid, uid)
                 .eq(NotificationMessagePO::getIsDeleted, 0)
                 .in(NotificationMessagePO::getId, normalizedNotifIds)
                 .set(NotificationMessagePO::getIsRead, 1));
+        if (updated > 0) {
+            publishUnreadCountAfterCommit(uid);
+        }
     }
 
     @Override
@@ -184,6 +195,9 @@ public class NotificationFacadeImpl implements NotificationFacade {
             capped = batches >= MAX_MARK_ALL_READ_BATCHES;
         }
         long remainingUnread = getUnreadCount(uid);
+        if (updatedCount > 0) {
+            publishUnreadCountAfterCommit(uid);
+        }
         if (capped && remainingUnread > 0) {
             log.warn("mark all notifications as read capped, uid={}, batchSize={}, maxBatches={}",
                     LogMask.id(uid), MARK_ALL_READ_BATCH_SIZE, MAX_MARK_ALL_READ_BATCHES);
@@ -346,7 +360,28 @@ public class NotificationFacadeImpl implements NotificationFacade {
         int inserted = mapper.insertIgnore(po);
         if (inserted <= 0) {
             log.debug("duplicate notification skipped: dedupKey={}", LogMask.key(po.getDedupKey()));
+            return;
         }
+        publishNotificationAfterCommit(po.getReceiverUid(), po.getId());
+    }
+
+    private void publishNotificationAfterCommit(Long receiverUid, Long notificationId) {
+        if (receiverUid == null || notificationId == null
+                || afterCommitExecutor == null || realtimePublisher == null) {
+            return;
+        }
+        afterCommitExecutor.execute(() -> realtimePublisher.publishNotification(
+                receiverUid, notificationId, getUnreadCountByType(receiverUid)),
+                "notification realtime publish");
+    }
+
+    private void publishUnreadCountAfterCommit(Long receiverUid) {
+        if (receiverUid == null || afterCommitExecutor == null || realtimePublisher == null) {
+            return;
+        }
+        afterCommitExecutor.execute(() -> realtimePublisher.publishUnreadCount(
+                receiverUid, getUnreadCountByType(receiverUid)),
+                "notification unread count publish");
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

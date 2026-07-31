@@ -34,10 +34,10 @@ class NotificationRealtimeGuardTest {
         assertTrue(facade.contains("getUnreadCountByType(uid)"), "status must reuse canonical unread counters");
         assertTrue(facade.contains("mapper.selectLatestUnread(uid)"), "status must include latest unread change marker");
         assertTrue(facade.contains("REALTIME_POLL_INTERVAL_SECONDS"), "status must return a controlled polling interval");
-        assertTrue(facade.contains("WEBSOCKET_TRANSPORT_AVAILABLE = false"),
-                "status must be based on an implemented transport, not only a configuration switch");
-        assertTrue(facade.contains("websocketEnabled(WEBSOCKET_TRANSPORT_AVAILABLE)"),
-                "status must expose the actual server transport capability");
+        assertTrue(facade.contains("NotificationRealtimeCapability"),
+                "status must depend on an implemented transport capability");
+        assertTrue(facade.contains("realtimeCapability != null && realtimeCapability.isWebSocketAvailable()"),
+                "status must expose the enabled endpoint capability rather than only a configuration switch");
         assertTrue(mapper.contains("selectLatestUnread"), "mapper must fetch the latest unread notification");
         assertTrue(mapper.contains("AND is_read = 0"), "latest marker must only inspect unread notifications");
         assertTrue(mapper.contains("AND is_deleted = 0"), "latest marker must ignore deleted notifications");
