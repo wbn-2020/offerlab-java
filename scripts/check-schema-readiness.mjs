@@ -10,13 +10,17 @@ for (const arg of process.argv.slice(2)) {
   const match = arg.match(/^--([^=]+)=(.*)$/)
   if (match) args.set(match[1], match[2])
 }
+if (args.has('password')) {
+  console.error('--password is not supported because process arguments are observable. Use OFFERLAB_DB_PASSWORD, DB_PASSWORD, or DB_URL.')
+  process.exit(2)
+}
 
 const jdbc = parseJdbcUrl(process.env.DB_URL)
 const config = {
   host: args.get('host') || process.env.OFFERLAB_DB_HOST || jdbc.host || '127.0.0.1',
   port: args.get('port') || process.env.OFFERLAB_DB_PORT || jdbc.port || '3306',
   user: args.get('user') || process.env.OFFERLAB_DB_USER || process.env.DB_USERNAME || jdbc.user || 'offerlab',
-  password: args.get('password') || process.env.OFFERLAB_DB_PASSWORD || process.env.DB_PASSWORD || jdbc.password || 'offerlab123',
+  password: process.env.OFFERLAB_DB_PASSWORD || process.env.DB_PASSWORD || jdbc.password || '',
   database: args.get('database') || process.env.OFFERLAB_DB_NAME || jdbc.database || 'offerlab',
   json: process.argv.includes('--json'),
 }

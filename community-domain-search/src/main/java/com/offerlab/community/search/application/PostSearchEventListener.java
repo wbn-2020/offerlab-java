@@ -5,7 +5,6 @@ import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PostUpdatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -18,17 +17,8 @@ public class PostSearchEventListener {
     private final PostSearchIndexer indexer;
     private final SearchIndexRetryService retryService;
 
-    @Value("${offerlab.kafka.enabled:true}")
-    private boolean kafkaEnabled;
-
-    @Value("${offerlab.search.kafka-consumer-enabled:true}")
-    private boolean kafkaConsumerEnabled = true;
-
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostPublished(PostPublishedEvent event) {
-        if (kafkaOwnsDelivery()) {
-            return;
-        }
         try {
             handlePostPublishedSynchronously(event);
         } catch (Exception e) {
@@ -39,9 +29,6 @@ public class PostSearchEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostUpdated(PostUpdatedEvent event) {
-        if (kafkaOwnsDelivery()) {
-            return;
-        }
         try {
             handlePostUpdatedSynchronously(event);
         } catch (Exception e) {
@@ -52,9 +39,6 @@ public class PostSearchEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostDeleted(PostDeletedEvent event) {
-        if (kafkaOwnsDelivery()) {
-            return;
-        }
         try {
             handlePostDeletedSynchronously(event);
         } catch (Exception e) {
@@ -76,18 +60,6 @@ public class PostSearchEventListener {
         if (!indexer.deletePost(postId)) {
             throw new IllegalStateException("post search delete returned false: postId=" + postId);
         }
-    }
-
-    void setKafkaEnabled(boolean kafkaEnabled) {
-        this.kafkaEnabled = kafkaEnabled;
-    }
-
-    void setKafkaConsumerEnabled(boolean kafkaConsumerEnabled) {
-        this.kafkaConsumerEnabled = kafkaConsumerEnabled;
-    }
-
-    private boolean kafkaOwnsDelivery() {
-        return kafkaEnabled && kafkaConsumerEnabled;
     }
 
     private void indexPost(Long postId, String operation) {

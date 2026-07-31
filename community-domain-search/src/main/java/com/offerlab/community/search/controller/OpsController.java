@@ -50,6 +50,7 @@ import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.ConsumerGroupListing;
 import org.springframework.core.env.Environment;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -344,15 +345,19 @@ public class OpsController {
     }
 
     @PostMapping("/admins/{uid}/status")
+    @Transactional
     public Result<Map<String, Object>> updateAdminStatus(@PathVariable @Positive Long uid,
                                                         @Valid @RequestBody AdminStatusRequest request) {
         Long operatorUid = UserContext.require();
         adminPermissionService.requireAdmin(operatorUid);
         String roleCode = normalizeRoleCode(request.roleCode());
         int enabled = Boolean.TRUE.equals(request.enabled()) ? 1 : 0;
-        if (enabled == 0 && AdminPermissionService.ROLE_ADMIN.equals(roleCode)
-                && Objects.equals(uid, operatorUid) && adminRoleMapper.countEnabledAdmins() <= 1) {
-            throw new BizException(ErrorCode.INVALID_STATUS);
+        if (enabled == 0 && AdminPermissionService.ROLE_ADMIN.equals(roleCode)) {
+            List<Long> lockedEnabledAdminUids = adminRoleMapper.lockEnabledAdminUids();
+            if (lockedEnabledAdminUids.contains(uid) && lockedEnabledAdminUids.size() <= 1) {
+                throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                        "at least one enabled ADMIN role must remain");
+            }
         }
         String auditRemark = RiskConfirmation.requireCritical(request.auditRemark(), request.confirmationPhrase());
         adminAuditService.requireWritable("ADMIN_ROLE_STATUS", "ADMIN_ROLE", uid + ":" + roleCode);

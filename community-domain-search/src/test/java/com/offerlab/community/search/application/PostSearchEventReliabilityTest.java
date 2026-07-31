@@ -20,27 +20,24 @@ import static org.mockito.Mockito.when;
 class PostSearchEventReliabilityTest {
 
     @Test
-    void localAfterCommitPathIsDisabledWhenKafkaOwnsDelivery() {
+    void localAfterCommitPathIndexesEvenWhenKafkaOwnsDelivery() {
         PostSearchIndexer indexer = mock(PostSearchIndexer.class);
         SearchIndexRetryService retryService = mock(SearchIndexRetryService.class);
         PostSearchEventListener listener = new PostSearchEventListener(indexer, retryService);
-        listener.setKafkaEnabled(true);
+        when(indexer.indexPost(42L)).thenReturn(true);
 
         listener.onPostPublished(PostPublishedEvent.builder().postId(42L).build());
 
-        verify(indexer, never()).indexPost(42L);
-        verify(retryService, never()).enqueueIndex(42L, null);
+        verify(indexer).indexPost(42L);
+        verify(retryService, never()).enqueueIndexRequired(anyLong(), any());
     }
 
     @Test
-    void localAfterCommitPathRunsWhenSearchConsumerIsDisabled() {
+    void localAfterCommitPathDoesNotDependOnSearchConsumerState() {
         PostSearchIndexer indexer = mock(PostSearchIndexer.class);
         when(indexer.indexPost(42L)).thenReturn(true);
         PostSearchEventListener listener = new PostSearchEventListener(
                 indexer, mock(SearchIndexRetryService.class));
-        listener.setKafkaEnabled(true);
-        listener.setKafkaConsumerEnabled(false);
-
         listener.onPostPublished(PostPublishedEvent.builder().postId(42L).build());
 
         verify(indexer).indexPost(42L);
@@ -83,6 +80,24 @@ class PostSearchEventReliabilityTest {
         consumer.onMessage(null, ack);
 
         verify(indexer, never()).indexPost(anyLong());
+        verify(ack).acknowledge();
+    }
+
+    @Test
+    void deadLetterPostEventIsPersistedForSearchRecoveryBeforeAcknowledging() {
+        SearchIndexRetryService retryService = mock(SearchIndexRetryService.class);
+        PostSearchDeadLetterConsumer consumer = new PostSearchDeadLetterConsumer(retryService);
+        Acknowledgment ack = mock(Acknowledgment.class);
+        EventEnvelope<PostPublishedEvent> envelope = EventEnvelope.<PostPublishedEvent>builder()
+                .messageId("dlt-message-42")
+                .eventType("POST_PUBLISHED")
+                .sourceId("42")
+                .payload(PostPublishedEvent.builder().postId(42L).build())
+                .build();
+
+        consumer.onMessage(envelope, ack);
+
+        verify(retryService).enqueueIndexRequired(anyLong(), any());
         verify(ack).acknowledge();
     }
 

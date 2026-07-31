@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -204,6 +205,50 @@ class FeedDomainFilterTest {
         assertEquals(List.of(932L, 931L), postIds(page));
         assertEquals("RECOMMEND", page.getItems().get(0).getSourceType());
         assertEquals("RULE_MATCH", page.getItems().get(0).getReasonCode());
+    }
+
+    @Test
+    void recommendFeedHandlesTwentyMixedDomainCandidatesAndKeepsKnownDomainPenalty() {
+        List<PostBriefDTO> candidates = new ArrayList<>();
+        for (int index = 0; index < 20; index++) {
+            Integer domain = switch (index) {
+                case 0 -> null;
+                case 1 -> 999;
+                case 2 -> Post.DOMAIN_TECH;
+                default -> Post.DOMAIN_CAREER;
+            };
+            candidates.add(post(1_000L + index, 2_000L + index, domain));
+        }
+        PageResult<PostBriefDTO> candidatePage = PageResult.of(candidates, null, false);
+        FeedFacadeImpl noPreferenceFacade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of()),
+                new FakePostFacade(candidatePage),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> noPreferencePage = assertDoesNotThrow(
+                () -> noPreferenceFacade.getRecommendFeed(7L, null, 20, null));
+
+        assertEquals(20, noPreferencePage.getItems().size());
+        assertTrue(postIds(noPreferencePage).containsAll(List.of(1_000L, 1_001L)));
+
+        FeedFacadeImpl reducedTechFacade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of(Post.DOMAIN_TECH)),
+                new FakePostFacade(candidatePage),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> reducedTechPage = assertDoesNotThrow(
+                () -> reducedTechFacade.getRecommendFeed(7L, null, 20, null));
+
+        assertEquals(20, reducedTechPage.getItems().size());
+        assertEquals(1_002L, postIds(reducedTechPage).get(19));
     }
 
     @Test

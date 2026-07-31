@@ -25,6 +25,15 @@ class RepositoryTestPathsGuardTest {
         String parentRelativeWindows = "\"" + ".." + "\\";
         String ignoredProductionConfig = "application-" + "prod.yml";
         String ignoredLocalConfig = "application-" + "local.yml";
+        String sharedLocalConfig = "community-bootstrap/src/main/resources/" + ignoredLocalConfig;
+        String gitignore = Files.readString(RepositoryTestPaths.resolve(".gitignore"), StandardCharsets.UTF_8);
+        boolean localConfigIsShared = gitignore.lines()
+                .map(String::trim)
+                .anyMatch(("!" + sharedLocalConfig)::equals);
+        if (localConfigIsShared) {
+            assertTrue(Files.isRegularFile(RepositoryTestPaths.resolve(sharedLocalConfig)),
+                    "the shared local profile must exist when it is explicitly unignored");
+        }
         for (Path javaFile : javaFiles) {
             String source = Files.readString(javaFile, StandardCharsets.UTF_8);
             assertFalse(source.contains(parentRelativeUnix),
@@ -33,8 +42,12 @@ class RepositoryTestPathsGuardTest {
                     () -> javaFile + " must not depend on a Windows parent-relative working directory");
             assertFalse(source.contains(ignoredProductionConfig),
                     () -> javaFile + " must not depend on an ignored production config");
-            assertFalse(source.contains(ignoredLocalConfig),
-                    () -> javaFile + " must not depend on an ignored local config");
+            if (source.contains(ignoredLocalConfig)) {
+                assertTrue(localConfigIsShared,
+                        () -> javaFile + " must not depend on an ignored local config");
+                assertFalse(source.replace(sharedLocalConfig, "").contains(ignoredLocalConfig),
+                        () -> javaFile + " may only reference the precisely shared local profile");
+            }
         }
         assertTrue(javaFiles.contains(testSources.resolve(
                 "com/offerlab/community/archtest/ProductionSecurityGuardTest.java")));

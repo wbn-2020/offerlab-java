@@ -6,8 +6,6 @@ import com.offerlab.community.infra.mq.outbox.OutboxMessage;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.core.env.MapPropertySource;
-import org.springframework.core.env.StandardEnvironment;
 
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -22,15 +20,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EventPublisherTest {
 
     @Test
-    void kafkaDisabledPublishesLocalEventWithoutCreatingUndeliverableOutboxRows() {
+    void kafkaDisabledStillPersistsOutboxBeforePublishingLocalEvent() {
         AtomicReference<OutboxMessage> inserted = new AtomicReference<>();
         List<Object> localEvents = new ArrayList<>();
-        EventPublisher publisher = publisher(false, inserted, localEvents);
+        EventPublisher publisher = publisher(inserted, localEvents);
         PostPublishedEvent event = new PostPublishedEvent(42L);
 
         publisher.publish(event);
 
-        assertEquals(null, inserted.get());
+        assertEquals("post.published", inserted.get().getTopic());
+        assertEquals(OutboxMessageMapper.STATUS_PENDING, inserted.get().getMsgStatus());
         assertEquals(1, localEvents.size());
         assertSame(event, localEvents.get(0));
     }
@@ -39,7 +38,7 @@ class EventPublisherTest {
     void kafkaEnabledPersistsOutboxBeforePublishingLocalEvent() throws Exception {
         AtomicReference<OutboxMessage> inserted = new AtomicReference<>();
         List<Object> localEvents = new ArrayList<>();
-        EventPublisher publisher = publisher(true, inserted, localEvents);
+        EventPublisher publisher = publisher(inserted, localEvents);
         PostPublishedEvent event = new PostPublishedEvent(42L, 7L);
 
         publisher.publish(event);
@@ -58,14 +57,8 @@ class EventPublisherTest {
         assertSame(event, localEvents.get(0));
     }
 
-    private EventPublisher publisher(boolean kafkaEnabled,
-                                     AtomicReference<OutboxMessage> inserted,
+    private EventPublisher publisher(AtomicReference<OutboxMessage> inserted,
                                      List<Object> localEvents) {
-        StandardEnvironment environment = new StandardEnvironment();
-        environment.getPropertySources().addFirst(new MapPropertySource(
-                "test",
-                Map.of("offerlab.kafka.enabled", kafkaEnabled)
-        ));
         ApplicationEventPublisher localPublisher = localEvents::add;
         OutboxMessageMapper mapper = (OutboxMessageMapper) Proxy.newProxyInstance(
                 OutboxMessageMapper.class.getClassLoader(),
@@ -82,8 +75,7 @@ class EventPublisherTest {
                 localPublisher,
                 mapper,
                 new EventTopicResolver(),
-                new ObjectMapper(),
-                environment
+                new ObjectMapper()
         );
     }
 

@@ -42,6 +42,7 @@ class FollowConsistencyGuardTest {
         String controller = read("src/main/java/com/offerlab/community/user/controller/UserController.java");
         String service = read("src/main/java/com/offerlab/community/user/application/UserApplicationService.java");
         String cacheService = read("src/main/java/com/offerlab/community/user/application/UserCacheService.java");
+        String contactSettingsService = read("src/main/java/com/offerlab/community/user/application/ContactRequestSettingsService.java");
 
         assertTrue(repositoryApi.contains("List<FollowCursorDTO> followingPage"), "repository must expose relation cursor rows for following page");
         assertTrue(repositoryApi.contains("List<FollowCursorDTO> followerPage"), "repository must expose relation cursor rows for follower page");
@@ -76,6 +77,11 @@ class FollowConsistencyGuardTest {
                         "(?s).*afterCommit\\.execute\\(\\(\\) -> userCacheService\\.evictBrief\\(fromUid, toUid\\),\\s*"
                                 + "\"unfollow cache eviction:\" \\+ fromUid \\+ \":\" \\+ toUid\\);.*"),
                 "unfollow cache eviction must be deferred until the unfollow transaction commits");
+        assertTrue(contactSettingsService.contains("private final AfterCommitExecutor afterCommit;"),
+                "contact-request settings must use the shared after-commit executor");
+        assertTrue(contactSettingsService.contains(
+                        "afterCommit.execute(() -> userCacheService.evictBrief(uid),"),
+                "contact-request settings cache eviction must be deferred until commit");
     }
 
     private static String read(String path) throws Exception {

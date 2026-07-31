@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -217,6 +218,49 @@ class ProductionSecurityGuardTest {
                 "acceptance template must document the required Snowflake worker ID");
         assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_DATACENTER_ID=<0-31>"),
                 "acceptance template must document the required Snowflake datacenter ID");
+    }
+
+    @Test
+    void trackedLocalProfileMustRemainShareableAndExcludeCurrentRedissonAutoConfiguration() throws Exception {
+        String gitignore = Files.readString(RepositoryTestPaths.resolve(".gitignore"), StandardCharsets.UTF_8);
+        String localConfig = Files.readString(
+                RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-local.yml"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(gitignore.lines()
+                        .map(String::trim)
+                        .anyMatch("!community-bootstrap/src/main/resources/application-local.yml"::equals),
+                "the shared local profile must remain traceable while other personal local configs stay ignored");
+        assertTrue(localConfig.lines()
+                        .map(String::trim)
+                        .anyMatch("- org.redisson.spring.starter.RedissonAutoConfigurationV2"::equals),
+                "local profile must exclude the Redisson auto configuration used by the current starter");
+        assertFalse(localConfig.lines()
+                        .map(String::trim)
+                        .anyMatch("- org.redisson.spring.starter.RedissonAutoConfiguration"::equals),
+                "local profile must not reference the obsolete Redisson auto configuration");
+        assertDoesNotThrow(
+                () -> Class.forName("org.redisson.spring.starter.RedissonAutoConfigurationV2"),
+                "the Redisson auto configuration referenced by local profile must exist on the runtime classpath");
+        assertTrue(localConfig.lines()
+                        .map(String::trim)
+                        .filter(line -> line.startsWith("password:") || line.startsWith("secret:"))
+                        .allMatch(line -> line.contains("${")),
+                "tracked local credentials must remain environment-overridable and contain no personal literals");
+        assertTrue(localConfig.contains("local-open-enabled: ${OFFERLAB_ADMIN_LOCAL_OPEN_ENABLED:false}"),
+                "tracked local profile must keep local-open admin bootstrap disabled by default");
+        assertTrue(localConfig.contains("address: ${SERVER_ADDRESS:127.0.0.1}"),
+                "tracked local profile must bind to loopback while it carries a documented development JWT default");
+        assertTrue(localConfig.contains("password: ${DB_PASSWORD:offerlab-local-db-change-me}"),
+                "tracked local database credentials must match the reviewed local Compose contract");
+        assertTrue(localConfig.contains("password: ${REDIS_PASSWORD:offerlab-local-redis-change-me}"),
+                "tracked local Redis credentials must match the reviewed local Compose contract");
+        assertTrue(localConfig.contains("enabled: ${OFFERLAB_KAFKA_ENABLED:false}"),
+                "tracked local profile must keep optional Kafka integration disabled by default");
+        assertTrue(localConfig.contains("auto-create: ${OFFERLAB_KAFKA_ENABLED:false}"),
+                "Spring Kafka admin startup must follow the same opt-in local integration toggle");
+        assertTrue(localConfig.contains("enabled: ${ELASTICSEARCH_ENABLED:false}"),
+                "tracked local profile must keep optional Elasticsearch integration disabled by default");
     }
 
     @Test

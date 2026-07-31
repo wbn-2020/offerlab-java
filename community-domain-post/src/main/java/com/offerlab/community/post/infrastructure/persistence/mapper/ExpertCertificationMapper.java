@@ -5,6 +5,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.ExpertCertifica
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -124,6 +125,44 @@ public interface ExpertCertificationMapper extends BaseMapper<ExpertCertificatio
     List<ExpertCertificationApplicationPO> selectReviewQueue(@Param("domain") Integer domain,
                                                              @Param("status") Integer status,
                                                              @Param("limit") Integer limit);
+
+    @Update("""
+            UPDATE t_expert_cert_application
+            SET status = #{nextStatus},
+                reviewer_uid = #{reviewerUid},
+                review_note = #{reviewNote},
+                review_time = #{reviewTime},
+                update_time = #{updateTime}
+            WHERE id = #{applicationId}
+              AND status = #{expectedStatus}
+              AND is_deleted = 0
+            """)
+    int reviewIfStatus(@Param("applicationId") Long applicationId,
+                       @Param("expectedStatus") Integer expectedStatus,
+                       @Param("nextStatus") Integer nextStatus,
+                       @Param("reviewerUid") Long reviewerUid,
+                       @Param("reviewNote") String reviewNote,
+                       @Param("reviewTime") java.time.LocalDateTime reviewTime,
+                       @Param("updateTime") java.time.LocalDateTime updateTime);
+
+    @Update("""
+            UPDATE t_expert_cert_application
+            SET status = #{nextStatus},
+                revoked_by = #{revokedBy},
+                revoke_note = #{revokeNote},
+                revoked_time = #{revokedTime},
+                update_time = #{updateTime}
+            WHERE id = #{applicationId}
+              AND status = #{expectedStatus}
+              AND is_deleted = 0
+            """)
+    int revokeIfStatus(@Param("applicationId") Long applicationId,
+                       @Param("expectedStatus") Integer expectedStatus,
+                       @Param("nextStatus") Integer nextStatus,
+                       @Param("revokedBy") Long revokedBy,
+                       @Param("revokeNote") String revokeNote,
+                       @Param("revokedTime") java.time.LocalDateTime revokedTime,
+                       @Param("updateTime") java.time.LocalDateTime updateTime);
 
     @Select("SELECT COALESCE(GET_LOCK(#{lockName}, #{timeoutSeconds}), 0)")
     Integer acquireNamedLock(@Param("lockName") String lockName, @Param("timeoutSeconds") int timeoutSeconds);

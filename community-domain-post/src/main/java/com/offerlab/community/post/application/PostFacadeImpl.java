@@ -197,6 +197,7 @@ public class PostFacadeImpl implements PostFacade {
                 .toList();
 
         if (!missingIds.isEmpty()) {
+            Map<Long, Long> counterEpochs = postCounterRedis.captureEpochs(missingIds);
             List<PostCounterPO> dbList = counterMapper.selectBatchIds(missingIds);
             for (PostCounterPO c : dbList) {
                 PostCounterDTO dto = PostCounterDTO.builder()
@@ -208,7 +209,8 @@ public class PostFacadeImpl implements PostFacade {
                         .build();
                 result.put(c.getPostId(), dto);
                 postCounterRedis.fillFromDb(c.getPostId(), c.getViewCount(), c.getLikeCount(),
-                        c.getCommentCount(), c.getFavoriteCount(), 0L);
+                        c.getCommentCount(), c.getFavoriteCount(), 0L,
+                        counterEpochs.getOrDefault(c.getPostId(), 0L));
             }
         }
 

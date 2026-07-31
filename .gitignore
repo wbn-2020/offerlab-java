@@ -62,4 +62,6 @@ Thumbs.db
 application-prod.yml
 application-test.yml
 application-local.yml
-db/local/
+!community-bootstrap/src/main/resources/application-local.yml
+db/local/*
+!db/local/seed_local_demo_admin.sql

@@ -176,15 +176,18 @@ public class ExpertCertificationService {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         ExpertCertificationApplicationDTO before = toDto(po);
-        po.setStatus(Boolean.TRUE.equals(cmd.getApproved()) ? STATUS_APPROVED : STATUS_REJECTED);
-        po.setReviewerUid(reviewerUid);
-        po.setReviewNote(limit(cmd.getNote(), 500));
-        po.setReviewTime(LocalDateTime.now());
-        po.setUpdateTime(LocalDateTime.now());
-        mapper.updateById(po);
-        ExpertCertificationApplicationDTO after = toDto(po);
+        LocalDateTime now = LocalDateTime.now();
+        int nextStatus = Boolean.TRUE.equals(cmd.getApproved()) ? STATUS_APPROVED : STATUS_REJECTED;
+        String reviewNote = limit(cmd.getNote(), 500);
+        if (mapper.reviewIfStatus(applicationId, STATUS_SUBMITTED, nextStatus, reviewerUid,
+                reviewNote, now, now) != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "application was changed by another reviewer");
+        }
+        ExpertCertificationApplicationPO updated = requireApplication(applicationId);
+        ExpertCertificationApplicationDTO after = toDto(updated);
         adminAuditService.recordRequired(reviewerUid, "EXPERT_CERT_APPLICATION_REVIEW",
-                "EXPERT_CERT_APPLICATION", applicationId, before, after, limit(cmd.getNote(), 500));
+                "EXPERT_CERT_APPLICATION", applicationId, before, after, reviewNote);
         return after;
     }
 
@@ -205,18 +208,20 @@ public class ExpertCertificationService {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         ExpertCertificationApplicationDTO before = toDto(po);
-        po.setStatus(STATUS_REVOKED);
-        po.setRevokedBy(operatorUid);
-        po.setRevokeNote(limit(note, 500));
-        po.setRevokedTime(LocalDateTime.now());
-        po.setUpdateTime(LocalDateTime.now());
-        mapper.updateById(po);
-        ExpertCertificationApplicationDTO after = toDto(po);
+        LocalDateTime now = LocalDateTime.now();
+        String revokeNote = limit(note, 500);
+        if (mapper.revokeIfStatus(applicationId, po.getStatus(), STATUS_REVOKED, operatorUid,
+                revokeNote, now, now) != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "application was changed by another operator");
+        }
+        ExpertCertificationApplicationPO updated = requireApplication(applicationId);
+        ExpertCertificationApplicationDTO after = toDto(updated);
         if (moderator) {
             adminAuditService.recordRequired(operatorUid, "EXPERT_CERT_APPLICATION_REVOKE",
-                    "EXPERT_CERT_APPLICATION", applicationId, before, after, limit(note, 500));
+                    "EXPERT_CERT_APPLICATION", applicationId, before, after, revokeNote);
         }
-        return toApplicantDto(po);
+        return toApplicantDto(updated);
     }
 
     private List<PostPO> recentPublicPosts(Long applicantUid, Integer domain) {

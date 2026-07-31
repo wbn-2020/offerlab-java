@@ -117,6 +117,26 @@ assert.match(syncScript, /flywayChecksum/)
 assert.match(syncScript, /Get-FlywayChecksum/)
 assert.match(syncScript, /Get-MigrationContentSha256/)
 assert.match(syncScript, /Database init mirror drift detected/)
+assert.match(
+  syncScript,
+  /\$legacyAuthorGuard = ConvertTo-NormalizedNewlines @'/,
+  'fresh-init author guard template must be independent of checkout line endings',
+)
+assert.match(
+  syncScript,
+  /\$freshAuthorGuard = ConvertTo-NormalizedNewlines @'/,
+  'fresh-init author replacement must be independent of checkout line endings',
+)
+assert.match(
+  syncScript,
+  /\$legacyGuard = ConvertTo-NormalizedNewlines @"/,
+  'fresh-init identity guard templates must be independent of checkout line endings',
+)
+assert.match(
+  syncScript,
+  /\$freshGuard = ConvertTo-NormalizedNewlines @"/,
+  'fresh-init identity replacements must be independent of checkout line endings',
+)
 
 const migrationHashPolicyTest = readFileSync(
   resolve(root, 'scripts/test-migration-content-hash.ps1'),
@@ -547,8 +567,8 @@ const generatedSeedBody = initSeed
   .trim()
 assert.equal(
   generatedSeedBody,
-  demoCommunitySeed.replace(/\r\n/g, '\n').trim(),
-  '99_seed.sql community seed block must match the canonical demo migration',
+  buildFreshInitCommunitySeed(demoCommunitySeed),
+  '99_seed.sql community seed block may differ from immutable migration history only through approved V22 safety overrides',
 )
 
 const readinessScript = readFileSync(resolve(root, 'scripts/check-schema-readiness.mjs'), 'utf8')
@@ -593,6 +613,9 @@ assert.match(readinessScript, /checksumMismatches/)
 assert.match(readinessScript, /unexpectedVersions/)
 assert.match(readinessScript, /input:\s*sql/)
 assert.doesNotMatch(readinessScript, /['"]-e['"]/)
+assert.match(readinessScript, /args\.has\('password'\)/)
+assert.doesNotMatch(readinessScript, /args\.get\('password'\)/)
+assert.doesNotMatch(readinessScript, /offerlab-local-db-change-me/)
 
 const runtimeReadiness = readFileSync(
   resolve(
@@ -687,6 +710,82 @@ for (const legacyIndex of [
 }
 
 console.log('Flyway migration lifecycle guard passed.')
+
+function buildFreshInitCommunitySeed(content) {
+  let result = content.replace(/\r\n/g, '\n').trim()
+  result = replaceExactOnce(
+    result,
+    `SET @community_demo_uid := COALESCE(
+    (SELECT id FROM t_user_account WHERE email = 'demo.author@offerlab.local' AND is_deleted = 0 LIMIT 1),
+    (SELECT id FROM t_user_account WHERE email = 'admin' AND is_deleted = 0 LIMIT 1),
+    (SELECT id FROM t_user_account WHERE is_deleted = 0 ORDER BY id LIMIT 1)
+);
+
+SET @community_seed_guard_sql := IF(
+    @community_demo_uid IS NULL,
+    'SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ''community seed requires an existing active author''',
+    'DO 0'
+);
+PREPARE community_seed_guard_stmt FROM @community_seed_guard_sql;
+EXECUTE community_seed_guard_stmt;
+DEALLOCATE PREPARE community_seed_guard_stmt;`,
+    `-- Keep community demo content on the same reserved identity. In particular,
+-- never fall back to a real admin or the first active account when the local
+-- demo identity has been explicitly promoted to demo.admin.
+SET @community_demo_uid := @offerlab_demo_user_uid;
+
+SET @community_seed_identity_conflicts := IF(
+    @community_demo_uid IS NULL OR NOT EXISTS (
+        SELECT 1
+        FROM t_user_account
+        WHERE id = @community_demo_uid
+          AND is_deleted = 0
+    ),
+    1,
+    0
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_demo_author', @community_seed_identity_conflicts);`,
+    'community demo author guard',
+  )
+
+  for (const [diagnostic, assertionName] of [
+    ['tag', 'community_tag_identity'],
+    ['topic', 'community_topic_identity'],
+    ['topic tag', 'community_topic_tag_identity'],
+    ['post', 'community_post_identity'],
+    ['post tag', 'community_post_tag_identity'],
+  ]) {
+    result = replaceExactOnce(
+      result,
+      `SET @community_seed_guard_sql := IF(
+    @community_seed_identity_conflicts > 0,
+    'SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ''community seed ${diagnostic} identity conflict''',
+    'DO 0'
+);
+PREPARE community_seed_guard_stmt FROM @community_seed_guard_sql;
+EXECUTE community_seed_guard_stmt;
+DEALLOCATE PREPARE community_seed_guard_stmt;`,
+      `INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('${assertionName}', @community_seed_identity_conflicts);`,
+      `community demo ${diagnostic} guard`,
+    )
+  }
+
+  return `${result}
+DROP TEMPORARY TABLE offerlab_demo_seed_assertion;`
+}
+
+function replaceExactOnce(content, before, after, label) {
+  const start = content.indexOf(before)
+  assert.notEqual(start, -1, `immutable demo migration is missing expected ${label}`)
+  assert.equal(
+    content.indexOf(before, start + before.length),
+    -1,
+    `immutable demo migration contains duplicate ${label}`,
+  )
+  return `${content.slice(0, start)}${after}${content.slice(start + before.length)}`
+}
 
 function flywayChecksum(content) {
   const crcTable = Array.from({ length: 256 }, (_, value) => {

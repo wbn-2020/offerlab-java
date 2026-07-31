@@ -19,5 +19,10 @@ assert.match(
   /node \.\/scripts\/test-ci-workflow\.mjs/,
   'backend CI must execute its workflow regression guard',
 )
+assert.match(
+  workflow,
+  /node \.\/scripts\/test-sql-source-quality\.mjs/,
+  'backend CI must execute the SQL source lexical quality guard',
+)
 
 console.log('backend CI workflow guard passed')

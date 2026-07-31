@@ -219,6 +219,9 @@ public class BenefitService {
         if (benefit == null || benefit.getEnabled() == null || benefit.getEnabled() != 1) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
+        if (!ENABLED_CONSUMABLE_BENEFITS.contains(benefit.getBenefitCode())) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         requireAllowedBenefitShape(benefit.getCategory(), benefit.getDeliveryType());
         long totalCost;
         try {

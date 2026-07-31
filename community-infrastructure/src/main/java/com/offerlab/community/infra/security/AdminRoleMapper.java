@@ -47,6 +47,15 @@ public interface AdminRoleMapper {
     int countEnabledAdmins();
 
     @Select("""
+            SELECT uid
+            FROM t_user_admin
+            WHERE role_code = 'ADMIN'
+              AND enabled = 1
+            FOR UPDATE
+            """)
+    List<Long> lockEnabledAdminUids();
+
+    @Select("""
             SELECT COUNT(*)
             FROM t_user_admin
             WHERE role_code = 'ADMIN'

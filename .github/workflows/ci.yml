@@ -47,6 +47,7 @@ jobs:
         shell: pwsh
         run: |
           node ./scripts/test-ci-workflow.mjs
+          node ./scripts/test-sql-source-quality.mjs
           ./scripts/test-migration-content-hash.ps1
           ./scripts/check-migration-safety.ps1
           ./scripts/test-migration-safety-policy.ps1

@@ -139,9 +139,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
         } catch (DuplicateKeyException e) {
             throw new BizException(ErrorCode.LIKE_ALREADY_EXISTS);
         }
-        // MySQL 计数为权威，Redis 提交后增量刷新
+        // MySQL 计数为权威，提交后失效 Redis，避免旧 DB 快照与增量交错。
         postCounterMapper.incrLike(postId, 1);
-        afterCommit.execute(() -> postCounterRedis.incrLike(postId, 1), "post like counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post like counter invalidation:" + postId);
         events.publish(PostLikedEvent.builder()
                 .uid(uid).postId(postId).postAuthorId(post.getAuthorId()).domain(post.getDomain())
                 .timestamp(Instant.now().toEpochMilli()).build());
@@ -160,9 +160,9 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (likeMapper.softDeleteById(po.getId()) <= 0) {
             throw new BizException(ErrorCode.LIKE_NOT_EXISTS);
         }
-        // MySQL 计数为权威，Redis 提交后增量刷新
+        // MySQL 计数为权威，提交后失效 Redis，避免旧 DB 快照与增量交错。
         postCounterMapper.incrLike(postId, -1);
-        afterCommit.execute(() -> postCounterRedis.incrLike(postId, -1), "post unlike counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post unlike counter invalidation:" + postId);
     }
 
     @Override
@@ -310,10 +310,10 @@ public class InteractionFacadeImpl implements InteractionFacade {
         } catch (DuplicateKeyException e) {
             throw new BizException(ErrorCode.FAVORITE_ALREADY_EXISTS);
         }
-        // MySQL 计数为权威，Redis 提交后增量刷新
+        // MySQL 计数为权威，提交后失效 Redis，避免旧 DB 快照与增量交错。
         incrementFolderPostCount(uid, folder.getId(), 1);
         postCounterMapper.incrFavorite(postId, 1);
-        afterCommit.execute(() -> postCounterRedis.incrFavorite(postId, 1), "post favorite counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post favorite counter invalidation:" + postId);
         events.publish(PostFavoritedEvent.builder()
                 .uid(uid).postId(postId).postAuthorId(post.getAuthorId()).domain(post.getDomain())
                 .timestamp(Instant.now().toEpochMilli()).build());
@@ -331,10 +331,10 @@ public class InteractionFacadeImpl implements InteractionFacade {
         if (favoriteMapper.softDeleteById(po.getId()) <= 0) {
             throw new BizException(ErrorCode.FAVORITE_NOT_EXISTS);
         }
-        // MySQL 计数为权威，Redis 提交后增量刷新
+        // MySQL 计数为权威，提交后失效 Redis，避免旧 DB 快照与增量交错。
         decrementFolderPostCount(uid, po.getFolderId());
         postCounterMapper.incrFavorite(postId, -1);
-        afterCommit.execute(() -> postCounterRedis.incrFavorite(postId, -1), "post unfavorite counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post unfavorite counter invalidation:" + postId);
     }
 
     @Override
@@ -371,9 +371,10 @@ public class InteractionFacadeImpl implements InteractionFacade {
 
         commentMapper.insert(po);
         if (!reviewRequired) {
-            // MySQL 计数为权威，Redis 提交后增量刷新
+            // MySQL 计数为权威，提交后失效 Redis，避免旧 DB 快照与增量交错。
             postCounterMapper.incrComment(cmd.getPostId(), 1);
-            afterCommit.execute(() -> postCounterRedis.incrComment(cmd.getPostId(), 1), "post comment counter:" + cmd.getPostId());
+            afterCommit.execute(() -> postCounterRedis.evict(cmd.getPostId()),
+                    "post comment counter invalidation:" + cmd.getPostId());
             events.publish(CommentCreatedEvent.builder()
                     .uid(cmd.getAuthorUid())
                     .postId(cmd.getPostId())
@@ -577,9 +578,10 @@ public class InteractionFacadeImpl implements InteractionFacade {
             return;
         }
         long deleted = deletedCount;
-        // MySQL 计数为权威，Redis 提交后增量刷新
+        // MySQL 计数为权威，提交后失效 Redis，避免旧 DB 快照与增量交错。
         postCounterMapper.incrComment(po.getPostId(), -deleted);
-        afterCommit.execute(() -> postCounterRedis.incrComment(po.getPostId(), -deleted), "post comment delete counter:" + po.getPostId());
+        afterCommit.execute(() -> postCounterRedis.evict(po.getPostId()),
+                "post comment delete counter invalidation:" + po.getPostId());
         events.publish(CommentUnavailableEvent.builder()
                 .commentId(po.getId())
                 .postId(po.getPostId())

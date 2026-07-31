@@ -280,7 +280,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     public OperationSlotDTO upsertSlot(OperationSlotCmd cmd, Long operatorUid) {
         String code = requireCode(cmd == null ? null : cmd.getSlotCode(), 64);
         requireSupportedOperationSlot(code);
-        OperationSlotPO existing = slotMapper.selectByCode(code);
+        OperationSlotPO existing = slotMapper.selectByCodeForUpdate(code);
         if (existing == null && slotMapper.countActiveRows() >= MAX_OPERATION_SLOTS) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "operation slots are limited to two in P0");
         }
@@ -320,7 +320,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotItemDTO upsertSlotItem(Long slotId, OperationSlotItemCmd cmd, Long operatorUid) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         String sourceType = normalizeSourceType(cmd == null ? null : cmd.getSourceType(), false);
         Long sourceId = requireId(cmd == null ? null : cmd.getSourceId());
@@ -356,8 +356,14 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (existing == null || existing.getIsDeleted() != null && existing.getIsDeleted() == 1) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        OperationSlotPO slot = requireSlot(existing.getSlotId());
+        OperationSlotPO slot = requireSlotForUpdate(existing.getSlotId());
         requireSupportedOperationSlot(slot.getSlotCode());
+        existing = slotItemMapper.selectById(itemId);
+        if (existing == null
+                || existing.getIsDeleted() != null && existing.getIsDeleted() == 1
+                || !Objects.equals(existing.getSlotId(), slot.getId())) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         slotItemMapper.deleteById(itemId);
         adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_ITEM_DELETE",
                 "OPERATION_SLOT_ITEM", itemId, existing, Map.of("deleted", true), limit(clean(note), 500));
@@ -365,24 +371,26 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotDTO publishSlot(Long slotId, Long operatorUid, String note) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         OperationSlotDTO before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
         OperationSlotDTO current = filterSlotSnapshot(copySlotSnapshot(before));
         if (current == null || current.getItems() == null || current.getItems().isEmpty()) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "operation slot publish requires at least one governed public item");
         }
-        slot.setRollbackSnapshotJson(slot.getPublishedSnapshotJson());
-        slot.setSlotStatus(STATUS_PUBLISHED);
-        slot.setCurrentVersion((slot.getCurrentVersion() == null ? 0 : slot.getCurrentVersion()) + 1);
+        int expectedVersion = slot.getCurrentVersion() == null ? 0 : slot.getCurrentVersion();
+        int nextVersion = expectedVersion + 1;
         current.setStatus(STATUS_PUBLISHED);
-        current.setCurrentVersion(slot.getCurrentVersion());
+        current.setCurrentVersion(nextVersion);
         current.setSource(OPERATION_SOURCE_REMOTE);
         current.setDegraded(false);
         current.setFallbackReason(null);
-        slot.setPublishedSnapshotJson(writeJson(current));
-        slot.setUpdatedBy(operatorUid);
-        slotMapper.updateById(slot);
+        String publishedSnapshotJson = writeJson(current);
+        if (slotMapper.publishIfCurrentVersion(slotId, expectedVersion, nextVersion, STATUS_PUBLISHED,
+                slot.getPublishedSnapshotJson(), publishedSnapshotJson, operatorUid) != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "operation slot was changed by another operator");
+        }
         OperationSlotDTO dto = getPublicSlot(slot.getSlotCode(), slot.getDefaultLimit() == null ? 0 : slot.getDefaultLimit());
         adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_PUBLISH",
                 "OPERATION_SLOT", slotId, before, dto, limit(clean(note), 500));
@@ -392,7 +400,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotDTO offlineSlot(Long slotId, Long operatorUid, String note) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         OperationSlotDTO before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
         slot.setSlotStatus(STATUS_OFFLINE);
@@ -406,7 +414,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotDTO rollbackSlot(Long slotId, Long operatorUid, String note) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         OperationSlotDTO rollback = readSlotSnapshot(slot.getRollbackSnapshotJson());
         if (rollback == null) {
@@ -1659,6 +1667,14 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     private OperationSlotPO requireSlot(Long slotId) {
         OperationSlotPO po = slotMapper.selectById(requireId(slotId));
+        if (po == null || po.getIsDeleted() != null && po.getIsDeleted() == 1) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return po;
+    }
+
+    private OperationSlotPO requireSlotForUpdate(Long slotId) {
+        OperationSlotPO po = slotMapper.selectByIdForUpdate(requireId(slotId));
         if (po == null || po.getIsDeleted() != null && po.getIsDeleted() == 1) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }

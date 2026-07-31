@@ -67,6 +67,11 @@ class OperationCurationGuardTest {
         assertTrue(service.contains("publishSlot("), "HOME_FEATURED slot must have a dedicated publish workflow");
         assertTrue(service.contains("offlineSlot("), "HOME_FEATURED slot must have a dedicated offline workflow");
         assertTrue(service.contains("rollbackSlot("), "HOME_FEATURED slot must have a dedicated rollback workflow");
+        assertTrue(service.contains("requireSlotForUpdate(slotId)")
+                        && service.contains("requireSlotForUpdate(existing.getSlotId())"),
+                "slot lifecycle and item arrangement writes must serialize on the owning slot row");
+        assertTrue(service.contains("publishIfCurrentVersion("),
+                "slot publish must retain a compare-and-set guard after acquiring the slot row lock");
         assertTrue(service.contains("getPublishedSnapshotJson()"),
                 "HOME_FEATURED public reads must use a published snapshot instead of mutable draft rows");
         assertTrue(service.contains("isPublishablePublicSlotItem"),
