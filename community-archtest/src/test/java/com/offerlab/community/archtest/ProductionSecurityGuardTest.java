@@ -328,6 +328,11 @@ class ProductionSecurityGuardTest {
             }
 
             @Override
+            public java.util.List<Long> lockEnabledAdminUids() {
+                return java.util.List.of();
+            }
+
+            @Override
             public int countAdminRows() {
                 return 0;
             }
