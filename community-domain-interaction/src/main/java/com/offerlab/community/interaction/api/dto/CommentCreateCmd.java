@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CommentCreateCmd {
+    private Long commentId;
     @NotNull
     private Long postId;
     @NotNull

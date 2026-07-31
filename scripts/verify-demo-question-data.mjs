@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 const scriptName = 'verify-demo-question-data'
 const args = new Map()
@@ -7,21 +9,24 @@ for (const arg of process.argv.slice(2)) {
   const match = arg.match(/^--([^=]+)=(.*)$/)
   if (match) args.set(match[1], match[2])
 }
+if (args.has('password')) {
+  console.error('--password is not supported because process arguments are observable. Use OFFERLAB_DB_PASSWORD or DB_PASSWORD.')
+  process.exit(2)
+}
 
 const config = {
   host: args.get('host') || process.env.OFFERLAB_DB_HOST || '127.0.0.1',
   port: args.get('port') || process.env.OFFERLAB_DB_PORT || '3306',
   user: args.get('user') || process.env.OFFERLAB_DB_USER || 'offerlab',
-  password: args.get('password') || process.env.OFFERLAB_DB_PASSWORD || 'offerlab123',
+  password: process.env.OFFERLAB_DB_PASSWORD || process.env.DB_PASSWORD || 'offerlab-local-db-change-me',
   database: args.get('database') || process.env.OFFERLAB_DB_NAME || 'offerlab',
   adminEmail: args.get('admin-email') || process.env.OFFERLAB_ADMIN_EMAIL || '',
 }
 
-const retestEmails = unique([
-  config.adminEmail,
-  'admin',
+const fallbackEmails = unique([
   'demo.admin@offerlab.local',
-].filter(Boolean))
+  'admin',
+])
 
 const mysqlCandidates = [
   process.env.MYSQL_BIN,
@@ -35,20 +40,57 @@ if (!mysqlBin) {
   process.exit(2)
 }
 
-const accountCandidatesSql = retestEmails
-  .map((email, index) => `SELECT ${index} AS priority, '${escapeSql(email)}' AS email`)
+const accountCandidatesSql = fallbackEmails
+  .map((email, index) => `SELECT ${index + 2} AS priority, '${escapeSql(email)}' AS email`)
   .join('\n  UNION ALL\n  ')
 
 const sql = `
-WITH account_candidates AS (
+WITH requested_user AS (
+  SELECT u.id, u.email, 0 AS priority
+  FROM t_user_account u
+  WHERE '${escapeSql(config.adminEmail)}' <> ''
+    AND u.email = '${escapeSql(config.adminEmail)}'
+    AND u.account_status = 1
+    AND u.is_deleted = 0
+  LIMIT 1
+),
+seed_owner AS (
+  SELECT u.id, u.email, 1 AS priority
+  FROM t_user_prep_target target
+  JOIN t_user_account u ON u.id = target.uid
+  WHERE target.id = 990300000000000001
+    AND u.account_status = 1
+    AND u.is_deleted = 0
+  LIMIT 1
+),
+account_candidates AS (
   ${accountCandidatesSql}
 ),
-retest_user AS (
-  SELECT u.id, u.email
+fallback_users AS (
+  SELECT u.id, u.email, c.priority
   FROM t_user_account u
   JOIN account_candidates c ON c.email = u.email
-  WHERE u.is_deleted = 0
-  ORDER BY c.priority
+  WHERE u.account_status = 1
+    AND u.is_deleted = 0
+),
+retest_user_candidates AS (
+  SELECT id, email, priority FROM requested_user
+  UNION ALL
+  SELECT id, email, priority
+  FROM seed_owner
+  WHERE '${escapeSql(config.adminEmail)}' = ''
+    AND NOT EXISTS (SELECT 1 FROM requested_user)
+  UNION ALL
+  SELECT id, email, priority
+  FROM fallback_users
+  WHERE '${escapeSql(config.adminEmail)}' = ''
+    AND NOT EXISTS (SELECT 1 FROM requested_user)
+    AND NOT EXISTS (SELECT 1 FROM seed_owner)
+),
+retest_user AS (
+  SELECT id, email
+  FROM retest_user_candidates
+  ORDER BY priority
   LIMIT 1
 )
 SELECT
@@ -75,18 +117,34 @@ SELECT
      AND q.status = 1 AND p.is_deleted = 0 AND p.post_status = 1 AND p.visibility = 1) AS shence_visible_questions;
 `
 
-const output = execFileSync(mysqlBin, [
-  '--batch',
-  '--raw',
-  '--skip-column-names',
-  '-h', config.host,
-  '-P', config.port,
-  '-u', config.user,
-  `--password=${config.password}`,
-  config.database,
-  '-e',
-  sql,
-], { encoding: 'utf8' }).trim()
+let mysqlDefaultsDirectory = ''
+let output
+try {
+  mysqlDefaultsDirectory = mkdtempSync(path.join(tmpdir(), 'offerlab-mysql-'))
+  const mysqlDefaultsFile = path.join(mysqlDefaultsDirectory, 'client.cnf')
+  writeFileSync(mysqlDefaultsFile, [
+    '[client]',
+    `password="${escapeOptionFileValue(config.password)}"`,
+    '',
+  ].join('\n'), { encoding: 'utf8', mode: 0o600 })
+
+  output = execFileSync(mysqlBin, [
+    `--defaults-extra-file=${mysqlDefaultsFile}`,
+    '--batch',
+    '--raw',
+    '--skip-column-names',
+    '-h', config.host,
+    '-P', config.port,
+    '-u', config.user,
+    config.database,
+    '-e',
+    sql,
+  ], { encoding: 'utf8' }).trim()
+} finally {
+  if (mysqlDefaultsDirectory) {
+    rmSync(mysqlDefaultsDirectory, { recursive: true, force: true })
+  }
+}
 
 const [
   retestUidValue,
@@ -107,7 +165,7 @@ const adminProgressRows = Number(adminProgressRowsValue || 0)
 const shenceVisibleQuestions = Number(shenceVisibleQuestionsValue || 0)
 
 const checks = [
-  [`retest uid exists (${retestEmail || retestEmails.join(' -> ')})`, retestUid > 0, retestUid],
+  [`retest uid exists (${retestEmail || config.adminEmail || 'seed owner -> demo.admin -> admin'})`, retestUid > 0, retestUid],
   ['question_total > 0', questionTotal > 0, questionTotal],
   ['visible_question_total > 0', visibleQuestionTotal > 0, visibleQuestionTotal],
   ['admin_prep_targets > 0', adminPrepTargets > 0, adminPrepTargets],
@@ -132,4 +190,12 @@ function unique(values) {
 
 function escapeSql(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll("'", "''")
+}
+
+function escapeOptionFileValue(value) {
+  const normalized = String(value)
+  if (/[\r\n\0]/.test(normalized)) {
+    throw new Error('MySQL password must not contain line breaks or NUL characters.')
+  }
+  return normalized.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
 }

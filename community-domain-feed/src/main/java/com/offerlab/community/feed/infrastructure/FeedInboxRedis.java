@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -29,6 +30,8 @@ public class FeedInboxRedis {
     private static final String TIMELINE = "feed:timeline:";
     private static final String GLOBAL_LATEST = "feed:latest:global";
     private static final int GLOBAL_LATEST_CAP = 10000;
+    private static final Duration GLOBAL_LATEST_TTL = Duration.ofDays(30);
+    private static final long SCORE_SEQUENCE_BASE = 4096L;
 
     private final StringRedisTemplate redis;
     private final LuaScriptLoader lua;
@@ -45,7 +48,7 @@ public class FeedInboxRedis {
                     lua.get("feed_inbox_add"),
                     Collections.singletonList(INBOX + uid),
                     String.valueOf(postId),
-                    String.valueOf(ts),
+                    String.valueOf(stableScore(ts, postId)),
                     String.valueOf(inboxCapacity),
                     String.valueOf(inboxTtlSeconds)
             );
@@ -59,7 +62,7 @@ public class FeedInboxRedis {
     public void addToAuthorTimeline(Long authorUid, Long postId, long ts) {
         try {
             String key = TIMELINE + authorUid;
-            redis.opsForZSet().add(key, String.valueOf(postId), ts);
+            redis.opsForZSet().add(key, String.valueOf(postId), stableScore(ts, postId));
             redis.opsForZSet().removeRange(key, 0, -501); // 保最近 500
             redis.expire(key, java.time.Duration.ofDays(30));
         } catch (Exception e) {
@@ -71,9 +74,10 @@ public class FeedInboxRedis {
 
     public void addToGlobalLatest(Long postId, long ts) {
         try {
-            redis.opsForZSet().add(GLOBAL_LATEST, String.valueOf(postId), ts);
+            redis.opsForZSet().add(GLOBAL_LATEST, String.valueOf(postId), stableScore(ts, postId));
             // 异步裁剪：保留最近 cap
             redis.opsForZSet().removeRange(GLOBAL_LATEST, 0, -GLOBAL_LATEST_CAP - 1);
+            redis.expire(GLOBAL_LATEST, GLOBAL_LATEST_TTL);
         } catch (Exception e) {
             log.warn("addToGlobalLatest failed", e);
             throw new IllegalStateException("add global latest failed", e);
@@ -97,5 +101,17 @@ public class FeedInboxRedis {
     public Set<ZSetOperations.TypedTuple<String>> readGlobalLatest(double maxScoreExclusive, int size) {
         return redis.opsForZSet()
                 .reverseRangeByScoreWithScores(GLOBAL_LATEST, 0, maxScoreExclusive, 0, size);
+    }
+
+    static double stableScore(long timestampMillis, Long postId) {
+        long sequence = postId == null ? 0L : Math.floorMod(postId, SCORE_SEQUENCE_BASE);
+        return Math.addExact(Math.multiplyExact(timestampMillis, SCORE_SEQUENCE_BASE), sequence);
+    }
+
+    public static long scoreTimestamp(double score) {
+        if (score > 10_000_000_000_000D) {
+            return (long) (score / SCORE_SEQUENCE_BASE);
+        }
+        return (long) score;
     }
 }

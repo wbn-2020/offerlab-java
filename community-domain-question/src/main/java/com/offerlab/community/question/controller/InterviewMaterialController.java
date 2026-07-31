@@ -1,7 +1,5 @@
 package com.offerlab.community.question.controller;
 
-import com.offerlab.community.common.exception.BizException;
-import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -34,25 +32,25 @@ public class InterviewMaterialController {
     @PostMapping("/posts/{postId}/interview-materials/generate")
     @RateLimit(key = "'interview-material:generate:' + #uid + ':' + #postId", rate = 20, per = 3600)
     public Result<InterviewMaterialPackDTO> generate(@PathVariable Long postId) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(materialService.generate(UserContext.require(), postId));
     }
 
     @GetMapping("/posts/{postId}/interview-materials")
     public Result<InterviewMaterialPackDTO> getForPost(@PathVariable Long postId) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(materialService.getForPost(UserContext.require(), postId));
     }
 
     @PutMapping("/interview-materials/{id}")
     @RateLimit(key = "'interview-material:update:' + #uid + ':' + #id", rate = 60, per = 3600)
     public Result<InterviewMaterialPackDTO> update(@PathVariable Long id,
                                                    @Valid @RequestBody InterviewMaterialUpdateCmd cmd) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(materialService.update(UserContext.require(), id, cmd));
     }
 
     @PostMapping("/interview-materials/{id}/save-to-prep")
     @RateLimit(key = "'interview-material:save:' + #uid + ':' + #id", rate = 60, per = 3600)
     public Result<InterviewMaterialPackDTO> saveToPrep(@PathVariable Long id) {
-        return disabledLegacyTrainingFeature();
+        return Result.ok(materialService.saveToPrep(UserContext.require(), id));
     }
 
     @GetMapping("/me/knowledge")
@@ -63,10 +61,7 @@ public class InterviewMaterialController {
                                                 @RequestParam(required = false) Integer postType,
                                                 @RequestParam(defaultValue = "false") boolean savedOnly,
                                                 @RequestParam(defaultValue = "12") @Min(1) @Max(50) int limit) {
-        return disabledLegacyTrainingFeature();
-    }
-
-    private static <T> T disabledLegacyTrainingFeature() {
-        throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        return Result.ok(materialService.myKnowledge(UserContext.require(), company, position, techStack,
+                interviewRound, postType, savedOnly, limit));
     }
 }

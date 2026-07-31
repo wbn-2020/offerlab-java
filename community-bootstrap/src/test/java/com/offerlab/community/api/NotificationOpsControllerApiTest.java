@@ -224,7 +224,7 @@ class NotificationOpsControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
                 .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
 
@@ -342,7 +342,7 @@ class NotificationOpsControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DUPLICATE_OPERATION.getCode()))
                 .andExpect(jsonPath("$.data.errorCategory").value("DUPLICATE_ADMIN_OPERATION"));
 
@@ -425,7 +425,7 @@ class NotificationOpsControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"ids\":[3,4],\"remark\":\"replay failed notifications\",\"confirmationPhrase\":\"CONFIRM\",\"idempotencyKey\":\"notif-audit-key-1\",\"previewNonce\":\"" + previewNonce + "\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_OPS);

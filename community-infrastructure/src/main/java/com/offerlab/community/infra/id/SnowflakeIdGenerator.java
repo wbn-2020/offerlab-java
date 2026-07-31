@@ -1,5 +1,7 @@
 package com.offerlab.community.infra.id;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,8 +28,15 @@ public class SnowflakeIdGenerator {
     private long sequence = 0L;
 
     public SnowflakeIdGenerator() {
-        this.workerId = 1;
-        this.datacenterId = 1;
+        this(1, 1);
+    }
+
+    @Autowired
+    public SnowflakeIdGenerator(
+            @Value("${offerlab.id.snowflake.worker-id}") long workerId,
+            @Value("${offerlab.id.snowflake.datacenter-id}") long datacenterId) {
+        this.workerId = requireNodeId("worker-id", workerId, WORKER_ID_MASK);
+        this.datacenterId = requireNodeId("datacenter-id", datacenterId, DATACENTER_ID_MASK);
     }
 
     public synchronized long nextId() {
@@ -60,5 +69,12 @@ public class SnowflakeIdGenerator {
             timestamp = System.currentTimeMillis();
         }
         return timestamp;
+    }
+
+    private static long requireNodeId(String name, long value, long max) {
+        if (value < 0 || value > max) {
+            throw new IllegalArgumentException("Snowflake " + name + " must be between 0 and " + max);
+        }
+        return value;
     }
 }

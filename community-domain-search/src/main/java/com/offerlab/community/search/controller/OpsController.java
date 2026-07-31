@@ -39,6 +39,7 @@ import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRe
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -49,6 +50,7 @@ import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.ConsumerGroupListing;
 import org.springframework.core.env.Environment;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -81,6 +83,20 @@ import java.time.Duration;
 public class OpsController {
     private static final int MAX_RETRY_BATCH_SIZE = 50;
     private static final int PREVIEW_EXPIRES_IN_SECONDS = 300;
+
+    public record OutboxMessageView(
+            Long id,
+            String aggregateType,
+            Long aggregateId,
+            String topic,
+            Integer msgStatus,
+            Integer retryCount,
+            String lockOwner,
+            LocalDateTime lockUntil,
+            LocalDateTime nextRetryTime,
+            LocalDateTime createTime,
+            LocalDateTime updateTime) {
+    }
 
     private final PostSearchIndexer indexer;
     private final SearchIndexRetryService searchIndexRetryService;
@@ -187,11 +203,21 @@ public class OpsController {
         Long uid = UserContext.require();
         boolean localOpen = adminPermissionService.isLocalOpenMode();
         boolean admin = adminPermissionService.isAdmin(uid) || localOpen;
+        boolean opsRole = localOpen || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS);
         Map<String, Object> permissions = new LinkedHashMap<>();
         permissions.put("uid", uid);
         permissions.put("adminMode", adminPermissionService.mode());
         permissions.put("admin", admin);
         permissions.put("ops", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS));
+        permissions.put("opsRole", opsRole);
+        permissions.put("opsOrchestration", Map.of(
+                "publish", opsRole,
+                "offline", opsRole,
+                "rollback", opsRole
+        ));
+        permissions.put("opsOrchestrationPublisher", opsRole);
+        permissions.put("opsOrchestrationOffline", opsRole);
+        permissions.put("opsOrchestrationRollback", opsRole);
         permissions.put("contentModerator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR));
         List<Integer> moderatedDomains = domainModeratorService.listModeratedDomains(uid);
         permissions.put("domainModerator", !moderatedDomains.isEmpty());
@@ -202,25 +228,29 @@ public class OpsController {
     }
 
     @GetMapping("/outbox")
-    public Result<List<OutboxMessage>> listOutbox(@RequestParam(required = false) Integer status,
-                                                  @RequestParam(defaultValue = "20") int limit) {
+    public Result<List<OutboxMessageView>> listOutbox(@RequestParam(required = false) Integer status,
+                                                     @RequestParam(defaultValue = "20") int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
-        return Result.ok(outboxMessageMapper.listRecent(status, clamp(limit)));
+        return Result.ok(outboxMessageMapper.listRecent(status, clamp(limit)).stream()
+                .map(OpsController::toOutboxView)
+                .toList());
     }
 
     @GetMapping("/outbox/page")
-    public Result<PageResult<OutboxMessage>> pageOutbox(@RequestParam(required = false) Integer status,
-                                                        @RequestParam(defaultValue = "1") int page,
-                                                        @RequestParam(defaultValue = "20") int pageSize) {
+    public Result<PageResult<OutboxMessageView>> pageOutbox(@RequestParam(required = false) Integer status,
+                                                           @RequestParam(defaultValue = "1") int page,
+                                                           @RequestParam(defaultValue = "20") int pageSize) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         int safePageSize = clamp(pageSize);
-        int safePage = Math.max(1, page);
-        int offset = (safePage - 1) * safePageSize;
+        int safePage = clampPage(page);
+        int offset = Math.multiplyExact(safePage - 1, safePageSize);
         long total = outboxMessageMapper.countPage(status);
-        List<OutboxMessage> items = total <= offset
+        List<OutboxMessageView> items = total <= offset
                 ? List.of()
-                : outboxMessageMapper.pageRecent(status, safePageSize, offset);
-        return Result.ok(PageResult.<OutboxMessage>builder()
+                : outboxMessageMapper.pageRecent(status, safePageSize, offset).stream()
+                .map(OpsController::toOutboxView)
+                .toList();
+        return Result.ok(PageResult.<OutboxMessageView>builder()
                 .items(items)
                 .hasMore(offset + items.size() < total)
                 .total(total)
@@ -228,13 +258,13 @@ public class OpsController {
     }
 
     @GetMapping("/outbox/{id}")
-    public Result<OutboxMessage> getOutbox(@PathVariable Long id) {
+    public Result<OutboxMessageView> getOutbox(@PathVariable Long id) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_OPS);
         OutboxMessage message = outboxMessageMapper.findById(id);
         if (message == null) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        return Result.ok(message);
+        return Result.ok(toOutboxView(message));
     }
 
     @PostMapping("/outbox/{id}/retry")
@@ -315,15 +345,19 @@ public class OpsController {
     }
 
     @PostMapping("/admins/{uid}/status")
+    @Transactional
     public Result<Map<String, Object>> updateAdminStatus(@PathVariable @Positive Long uid,
                                                         @Valid @RequestBody AdminStatusRequest request) {
         Long operatorUid = UserContext.require();
         adminPermissionService.requireAdmin(operatorUid);
         String roleCode = normalizeRoleCode(request.roleCode());
         int enabled = Boolean.TRUE.equals(request.enabled()) ? 1 : 0;
-        if (enabled == 0 && AdminPermissionService.ROLE_ADMIN.equals(roleCode)
-                && Objects.equals(uid, operatorUid) && adminRoleMapper.countEnabledAdmins() <= 1) {
-            throw new BizException(ErrorCode.INVALID_STATUS);
+        if (enabled == 0 && AdminPermissionService.ROLE_ADMIN.equals(roleCode)) {
+            List<Long> lockedEnabledAdminUids = adminRoleMapper.lockEnabledAdminUids();
+            if (lockedEnabledAdminUids.contains(uid) && lockedEnabledAdminUids.size() <= 1) {
+                throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                        "at least one enabled ADMIN role must remain");
+            }
         }
         String auditRemark = RiskConfirmation.requireCritical(request.auditRemark(), request.confirmationPhrase());
         adminAuditService.requireWritable("ADMIN_ROLE_STATUS", "ADMIN_ROLE", uid + ":" + roleCode);
@@ -738,6 +772,21 @@ public class OpsController {
         return data;
     }
 
+    private static OutboxMessageView toOutboxView(OutboxMessage message) {
+        return new OutboxMessageView(
+                message.getId(),
+                message.getAggregateType(),
+                message.getAggregateId(),
+                message.getTopic(),
+                message.getMsgStatus(),
+                message.getRetryCount(),
+                message.getLockOwner(),
+                message.getLockUntil(),
+                message.getNextRetryTime(),
+                message.getCreateTime(),
+                message.getUpdateTime());
+    }
+
     private Map<String, Object> previewOutboxRetry(Long uid, List<Long> ids) {
         if (!outboxReplayCheckRequired()) {
             List<Map<String, Object>> items = ids.stream()
@@ -1082,6 +1131,10 @@ public class OpsController {
         return Math.min(limit, 100);
     }
 
+    private static int clampPage(int page) {
+        return Math.min(Math.max(1, page), 1000);
+    }
+
     private static Long normalizeUid(Long uid) {
         return uid == null || uid <= 0 ? null : uid;
     }
@@ -1163,7 +1216,7 @@ public class OpsController {
 
     private static String normalizeRoleCode(String roleCode) {
         if (!StringUtils.hasText(roleCode)) {
-            return AdminPermissionService.ROLE_ADMIN;
+            throw new BizException(ErrorCode.PARAM_ERROR);
         }
         String normalized = roleCode.trim().toUpperCase();
         if (List.of(
@@ -1179,7 +1232,7 @@ public class OpsController {
 
     public record AdminRequest(
             @NotNull @Positive Long uid,
-            @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
+            @NotBlank @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
             @Size(max = 200) String remark,
             @Size(max = 500) String auditRemark,
             @Size(max = 32) String confirmationPhrase) {
@@ -1187,7 +1240,7 @@ public class OpsController {
 
     public record AdminStatusRequest(
             @NotNull Boolean enabled,
-            @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
+            @NotBlank @Pattern(regexp = "ADMIN|CONTENT_MODERATOR|QUESTION_OPERATOR|OPS") String roleCode,
             @Size(max = 200) String remark,
             @Size(max = 500) String auditRemark,
             @Size(max = 32) String confirmationPhrase) {

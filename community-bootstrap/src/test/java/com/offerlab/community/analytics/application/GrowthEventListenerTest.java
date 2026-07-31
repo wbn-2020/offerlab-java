@@ -3,6 +3,7 @@ package com.offerlab.community.analytics.application;
 import com.offerlab.community.interaction.api.event.CommentCreatedEvent;
 import com.offerlab.community.interaction.api.event.PostFavoritedEvent;
 import com.offerlab.community.interaction.api.event.PostLikedEvent;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.user.api.event.UserRegisteredEvent;
@@ -119,6 +120,8 @@ class GrowthEventListenerTest {
                 .postId(91L)
                 .authorId(5L)
                 .domain(4)
+                .visibility(Post.VIS_PUBLIC)
+                .postStatus(Post.STATUS_PUBLISHED)
                 .timestamp(123456L)
                 .build());
 
@@ -140,6 +143,8 @@ class GrowthEventListenerTest {
                 .postId(91L)
                 .authorId(5L)
                 .domain(4)
+                .visibility(Post.VIS_PUBLIC)
+                .postStatus(Post.STATUS_PUBLISHED)
                 .timestamp(123456L)
                 .build());
 

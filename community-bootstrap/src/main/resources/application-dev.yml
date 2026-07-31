@@ -2,11 +2,21 @@
 spring:
   autoconfigure:
     exclude:
-      - org.redisson.spring.starter.RedissonAutoConfiguration
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/offerlab?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:offerlab}
+    password: ${DB_PASSWORD:offerlab123}
+  flyway:
+    baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
 
 logging:
   level:
@@ -19,11 +29,14 @@ springdoc:
     enabled: true
 
 offerlab:
+  jwt:
+    secret: ${JWT_SECRET}
   redis:
     pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}
   kafka:
     enabled: ${OFFERLAB_KAFKA_ENABLED:true}
   elasticsearch:
     enabled: ${ELASTICSEARCH_ENABLED:true}
+    url: ${ELASTICSEARCH_URL:http://127.0.0.1:9200}
   realtime:
     websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}

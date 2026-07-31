@@ -28,6 +28,7 @@ public class PostDTO {
     private Boolean anonymous;
     private List<TagDTO> tags;
     private PostCounterDTO counter;
+    private PostTrustSignalsDTO trustSignals;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

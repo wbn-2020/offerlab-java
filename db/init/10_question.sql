@@ -1,7 +1,6 @@
--- 10_question.sql
+﻿-- 10_question.sql
 -- V2 question knowledge base.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_ai_extract_task (
     id              BIGINT       NOT NULL PRIMARY KEY,
@@ -56,6 +55,8 @@ CREATE TABLE IF NOT EXISTS t_question_index_retry_task (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_question_index_retry_dedup (dedup_key),
     KEY idx_question_index_retry_due (task_status, next_retry_time),
+    KEY idx_question_index_retry_claim (task_status, next_retry_time, create_time, id),
+    KEY idx_question_index_retry_expired_claim (task_status, lock_until, create_time, id),
     KEY idx_question_index_retry_lock (lock_owner, lock_until),
     KEY idx_question_index_retry_question (question_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Question ES index retry task';

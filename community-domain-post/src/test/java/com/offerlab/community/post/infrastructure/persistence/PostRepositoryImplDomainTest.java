@@ -13,18 +13,19 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class PostRepositoryImplDomainTest {
 
     @Test
-    void mapsMissingDomainToTechForLegacyPosts() throws Exception {
+    void keepsMissingDomainUnclassifiedForLegacyPosts() throws Exception {
         Post post = mapToDomain(postPo(), null);
 
-        assertEquals(Post.DOMAIN_TECH, post.getDomain());
+        assertNull(post.getDomain());
     }
 
     @Test
-    void mapsIllegalDomainToTechForReadModelSafety() throws Exception {
+    void keepsIllegalLegacyDomainUnclassifiedInsteadOfMisclassifyingItAsTech() throws Exception {
         PostExtensionPO extension = new PostExtensionPO();
         extension.setPostId(7001L);
         extension.setPostType(Post.TYPE_TECH_ARTICLE);
@@ -32,7 +33,7 @@ class PostRepositoryImplDomainTest {
 
         Post post = mapToDomain(postPo(), extension);
 
-        assertEquals(Post.DOMAIN_TECH, post.getDomain());
+        assertNull(post.getDomain());
     }
 
     @Test

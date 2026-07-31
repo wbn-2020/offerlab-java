@@ -23,6 +23,8 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.CommunityTo
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.CommunityTopicPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
+import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelationMapper;
+import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelationRow;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -55,6 +57,7 @@ public class KnowledgeRelationService {
     private final PostMapper postMapper;
     private final CommunityTopicMapper topicMapper;
     private final CommunityTopicTagMapper topicTagMapper;
+    private final PostKnowledgeRelationMapper confirmedRelationMapper;
 
     public KnowledgeRelationGraphDTO explore(Long postId, Long tagId, Long topicId, Integer domain, int limit) {
         if (postId == null && tagId == null && topicId == null && domain == null) {
@@ -84,6 +87,14 @@ public class KnowledgeRelationService {
         if (activeDomain != null) {
             postIds.addAll(selectPostIds(postMapper.selectPublicPosts(null, null, null, null, activeDomain, null, Long.MAX_VALUE, safeLimit)));
         }
+        List<Long> seedPostIds = List.copyOf(postIds);
+        for (Long seedPostId : seedPostIds) {
+            for (PostKnowledgeRelationRow relation :
+                    confirmedRelationMapper.listPublicByPostId(seedPostId, safeLimit)) {
+                postIds.add(relation.getSourcePostId());
+                postIds.add(relation.getTargetPostId());
+            }
+        }
         Map<Long, PostBriefDTO> posts = postFacade.batchGetPosts(postIds, null, false);
         LinkedHashMap<String, KnowledgeRelationNodeDTO> nodes = new LinkedHashMap<>();
         LinkedHashMap<String, KnowledgeRelationEdgeDTO> edges = new LinkedHashMap<>();
@@ -99,14 +110,16 @@ public class KnowledgeRelationService {
                     .label(post.getTitle())
                     .domain(post.getDomain())
                     .build());
-            Integer postDomain = post.getDomain() == null ? PostDomain.TECH.getCode() : post.getDomain();
-            addNode(nodes, KnowledgeRelationNodeDTO.builder()
-                    .key("domain:" + postDomain)
-                    .type("domain")
-                    .label(PostDomain.fromCode(postDomain).name().toLowerCase())
-                    .domain(postDomain)
-                    .build());
-            addEdge(edges, "domain:" + postDomain, "post:" + post.getId(), "domain_post");
+            Integer postDomain = post.getDomain();
+            if (PostDomain.isValid(postDomain)) {
+                addNode(nodes, KnowledgeRelationNodeDTO.builder()
+                        .key("domain:" + postDomain)
+                        .type("domain")
+                        .label(PostDomain.fromCode(postDomain).name().toLowerCase())
+                        .domain(postDomain)
+                        .build());
+                addEdge(edges, "domain:" + postDomain, "post:" + post.getId(), "domain_post");
+            }
             for (TagDTO tag : post.getTags() == null ? List.<TagDTO>of() : post.getTags()) {
                 if (!isPublicTag(tag)) {
                     continue;
@@ -199,6 +212,7 @@ public class KnowledgeRelationService {
         }
         addSeriesRelations(relations, assets, now);
         addSearchRelations(relations, assets, now);
+        addConfirmedPostRelations(relations, assets, safeLimit);
 
         List<PublicKnowledgeAssetDTO> publicAssets = assets.values().stream()
                 .limit(safeLimit)
@@ -332,7 +346,7 @@ public class KnowledgeRelationService {
                 .source("series")
                 .previewSource(PREVIEW_REMOTE)
                 .sourceNote("From public content series")
-                .targetHref("/series/" + series.getId())
+                .targetHref("/collections/" + series.getId())
                 .domain(series.getDomain())
                 .updatedAt(series.getUpdateTime() == null ? now : series.getUpdateTime())
                 .build();
@@ -431,6 +445,43 @@ public class KnowledgeRelationService {
         }
     }
 
+    private void addConfirmedPostRelations(Map<String, PublicKnowledgeRelationDTO> relations,
+                                           Map<String, PublicKnowledgeAssetDTO> assets,
+                                           int limit) {
+        LinkedHashSet<Long> postIds = assets.values().stream()
+                .filter(asset -> "post".equals(asset.getAssetType()))
+                .map(PublicKnowledgeAssetDTO::getAssetId)
+                .map(KnowledgeRelationService::assetKey)
+                .map(KnowledgeRelationService::parseLong)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        LinkedHashSet<Long> visitedRelationIds = new LinkedHashSet<>();
+        for (Long postId : postIds) {
+            for (PostKnowledgeRelationRow row : confirmedRelationMapper.listPublicByPostId(postId, limit)) {
+                if (row.getId() == null || !visitedRelationIds.add(row.getId())) {
+                    continue;
+                }
+                String sourceAssetId = "post:" + row.getSourcePostId();
+                String targetAssetId = "post:" + row.getTargetPostId();
+                if (!assets.containsKey(sourceAssetId) || !assets.containsKey(targetAssetId)) {
+                    continue;
+                }
+                PublicKnowledgeRelationDTO relation = PublicKnowledgeRelationDTO.builder()
+                        .relationId("confirmed-post-relation:" + row.getId())
+                        .sourceAssetId(sourceAssetId)
+                        .targetAssetId(targetAssetId)
+                        .relationType(row.getRelationType().toLowerCase(java.util.Locale.ROOT))
+                        .reasonText(row.getReasonText())
+                        .source("manual")
+                        .reviewStatus("APPROVED")
+                        .riskLevel(row.getRiskLevel())
+                        .createdAt(row.getCreateTime())
+                        .build();
+                relations.putIfAbsent(relation.getRelationId(), relation);
+            }
+        }
+    }
+
     private static PublicKnowledgeRelationDTO relation(String sourceAssetId,
                                                        String targetAssetId,
                                                        String relationType,
@@ -509,7 +560,7 @@ public class KnowledgeRelationService {
                                                                   int limit,
                                                                   LocalDateTime now) {
         return assets.stream()
-                .filter(asset -> STATUS_ARCHIVED.equals(asset.getAssetStatus()) || !"search_entry".equals(asset.getAssetType()))
+                .filter(asset -> STATUS_ARCHIVED.equals(asset.getAssetStatus()))
                 .limit(Math.min(limit, 3))
                 .map(asset -> KnowledgeAssetSnapshotDTO.builder()
                         .snapshotId("snapshot:" + asset.getAssetId())
@@ -525,7 +576,7 @@ public class KnowledgeRelationService {
                                 .limit(limit)
                                 .toList())
                         .sourceNote(asset.getSourceNote())
-                        .archivedAt(STATUS_ARCHIVED.equals(asset.getAssetStatus()) ? asset.getUpdatedAt() : now)
+                        .archivedAt(asset.getUpdatedAt())
                         .build())
                 .toList();
     }
@@ -543,6 +594,7 @@ public class KnowledgeRelationService {
         result.addAll(discoveryMap.getActiveTopics() == null ? List.of() : discoveryMap.getActiveTopics());
         result.addAll(discoveryMap.getSearchEntrypoints() == null ? List.of() : discoveryMap.getSearchEntrypoints());
         result.addAll(discoveryMap.getChannels() == null ? List.of() : discoveryMap.getChannels());
+        result.addAll(discoveryMap.getContentForms() == null ? List.of() : discoveryMap.getContentForms());
         return result;
     }
 
@@ -610,6 +662,14 @@ public class KnowledgeRelationService {
         }
         int index = id.indexOf(':');
         return index >= 0 && index + 1 < id.length() ? id.substring(index + 1) : id;
+    }
+
+    private static Long parseLong(String value) {
+        try {
+            return StringUtils.hasText(value) ? Long.parseLong(value) : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static String sourceNote(String assetType) {

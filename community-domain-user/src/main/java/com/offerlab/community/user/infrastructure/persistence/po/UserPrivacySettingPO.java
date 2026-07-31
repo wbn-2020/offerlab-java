@@ -22,6 +22,9 @@ public class UserPrivacySettingPO {
     private Integer followNotification;
     private Integer favoriteNotification;
     private Integer mentionNotification;
+    private Integer acceptContactRequest;
+    private String contactRequestPolicy;
+    private Integer contactRequestDailyLimit;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

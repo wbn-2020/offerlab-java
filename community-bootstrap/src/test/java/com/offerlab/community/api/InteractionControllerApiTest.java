@@ -2,12 +2,16 @@ package com.offerlab.community.api;
 
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.interaction.api.DiscussionFollowFacade;
 import com.offerlab.community.interaction.api.InteractionFacade;
 import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
+import com.offerlab.community.interaction.api.dto.CommentDTO;
 import com.offerlab.community.interaction.application.CommentReportService;
 import com.offerlab.community.interaction.controller.InteractionController;
+import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.application.DomainModeratorService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,11 +38,17 @@ class InteractionControllerApiTest {
     @Mock
     private InteractionFacade facade;
     @Mock
+    private PostFacade postFacade;
+    @Mock
+    private DiscussionFollowFacade discussionFollowFacade;
+    @Mock
     private CommentReportService reportService;
     @Mock
     private DomainModeratorService domainModeratorService;
     @Mock
     private ContentModerationService contentModerationService;
+    @Mock
+    private SnowflakeIdGenerator idGenerator;
     @Mock
     private JwtService jwtService;
 
@@ -47,19 +57,27 @@ class InteractionControllerApiTest {
     @BeforeEach
     void setUp() {
         mvc = ApiTestSupport.mvc(
-                new InteractionController(facade, reportService, domainModeratorService, contentModerationService),
+                new InteractionController(facade, postFacade, discussionFollowFacade, reportService,
+                        domainModeratorService, contentModerationService, idGenerator),
                 jwtService);
     }
 
     @Test
     void commentsArePublicAndUseAnonymousViewerWhenNoToken() throws Exception {
-        when(facade.listComments(10L, null, 0L, 20)).thenReturn(PageResult.empty());
+        when(facade.listComments(10L, null, "0", 20, "latest")).thenReturn(PageResult.empty());
+        when(facade.getCommentContext(10L, 99L, null))
+                .thenReturn(CommentDTO.builder().id(99L).postId(10L).build());
 
         mvc.perform(get("/api/v1/posts/10/comments"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
+        mvc.perform(get("/api/v1/posts/10/comments/99/context"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.id").value(99));
 
-        verify(facade).listComments(10L, null, 0L, 20);
+        verify(facade).listComments(10L, null, "0", 20, "latest");
+        verify(facade).getCommentContext(10L, 99L, null);
     }
 
     @Test
@@ -74,9 +92,10 @@ class InteractionControllerApiTest {
     @Test
     void commentUsesAuthenticatedUserAndModerationDecision() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(99L);
-        when(contentModerationService.checkContent(eq(99L), eq(ContentModerationService.SCOPE_COMMENT), eq("hello")))
+        when(idGenerator.nextId()).thenReturn(77L);
+        when(contentModerationService.checkContent(eq(99L), eq(ContentModerationService.SCOPE_COMMENT),
+                eq(ContentModerationService.SOURCE_COMMENT), eq(77L), eq("hello")))
                 .thenReturn(new ContentModerationService.ModerationDecision(false, "ALLOW", null, null));
-        when(facade.addComment(any(CommentCreateCmd.class))).thenReturn(77L);
 
         mvc.perform(post("/api/v1/posts/10/comments")
                         .header("Authorization", "Bearer token")
@@ -89,6 +108,7 @@ class InteractionControllerApiTest {
 
         ArgumentCaptor<CommentCreateCmd> captor = ArgumentCaptor.forClass(CommentCreateCmd.class);
         verify(facade).addComment(captor.capture());
+        assertEquals(77L, captor.getValue().getCommentId());
         assertEquals(10L, captor.getValue().getPostId());
         assertEquals(99L, captor.getValue().getAuthorUid());
         assertEquals("hello", captor.getValue().getContent());

@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 import java.util.Collections;
+import java.util.UUID;
 
 /**
  * 限流切面：调用 Redis Lua 滑动窗口
@@ -43,6 +44,7 @@ public class RateLimitAspect {
         String key = "ratelimit:" + resolveKey(pjp, rl.key());
         long now = System.currentTimeMillis();
         long window = rl.per() * 1000L;
+        String member = now + ":" + UUID.randomUUID();
 
         Long pass;
         try {
@@ -52,7 +54,8 @@ public class RateLimitAspect {
                     String.valueOf(now),
                     String.valueOf(window),
                     String.valueOf(rl.rate()),
-                    String.valueOf(rl.per())
+                    String.valueOf(rl.per()),
+                    member
             );
         } catch (Exception e) {
             if (rl.failOpen()) {

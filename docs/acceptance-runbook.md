@@ -17,6 +17,32 @@ Before service-style acceptance, record the effective values or secret reference
 for DB, Redis, Kafka, Elasticsearch, JWT, CORS, admin access, demo/test data, and
 feature degradation toggles. The template starts from `.env.acceptance.example`.
 
+`application-acceptance.yml` consumes `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD`.
+Operator scripts consume the equivalent `OFFERLAB_DB_HOST`, `OFFERLAB_DB_PORT`,
+`OFFERLAB_DB_NAME`, `OFFERLAB_DB_USER`, and `OFFERLAB_DB_PASSWORD`; the schema
+readiness script also derives them from the Spring variables. Keep both forms
+aligned in the recorded acceptance environment.
+
+## Health layers
+
+- `GET /api/v1/health/liveness` only proves that the process can answer.
+- `GET /api/v1/health/readiness` is the anonymous service-readiness summary and
+  does not expose dependency details.
+- `GET /api/v1/health/operator-health` requires the `OPS` scope and exposes
+  dependency and queue diagnostics without acting as a release gate.
+- `GET /api/v1/health/readiness/strict` requires the `OPS` scope and is the
+  release-acceptance gate. It returns HTTP 503 when either a core component is
+  unavailable or an operator queue still requires attention.
+
+Authentication alone is not sufficient for the two detailed endpoints. Ensure
+that an acceptance operator has an active persisted `OPS` role before probing
+them.
+
+## Acceptance actors
+
+Record separate test identities for anonymous, member, content moderator,
+question operator, and OPS flows. Do not use the local-open bootstrap mode.
+
 ## Safe defaults
 
 - `application-acceptance.yml` disables Kafka, Elasticsearch, Redis pub/sub, and

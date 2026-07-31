@@ -1,7 +1,371 @@
 -- 99_seed.sql
 -- 演示种子数据：标签库
 SET NAMES utf8mb4;
-USE offerlab;
+
+-- Personalized demo records stay on the dedicated local demo identity. Never
+-- infer a real user from an existing database and attach private prep data to it.
+SET @offerlab_demo_user_uid := 990000000000000001;
+
+-- Validate the deterministic account identity before the first data write.
+-- An explicitly enabled local demo admin is preserved; unrelated accounts or
+-- duplicate reserved emails fail closed.
+SET @offerlab_preserve_existing_local_admin := EXISTS (
+    SELECT 1
+    FROM t_user_account account
+    JOIN t_user_admin admin
+      ON admin.uid = account.id
+     AND admin.role_code = 'ADMIN'
+     AND admin.enabled = 1
+    WHERE account.id = 990000000000000001
+      AND account.email = 'demo.admin@offerlab.local'
+      AND account.account_status = 1
+      AND account.is_deleted = 0
+);
+
+SET @offerlab_demo_author_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM t_user_account account
+    WHERE account.id = 990000000000000001
+      AND NOT (
+          account.is_deleted = 0
+          AND (
+              account.email = 'demo.author@offerlab.local'
+              OR @offerlab_preserve_existing_local_admin = 1
+          )
+      )
+) + (
+    SELECT COUNT(*)
+    FROM t_user_account account
+    WHERE account.email IN ('demo.author@offerlab.local', 'demo.admin@offerlab.local')
+      AND account.id <> 990000000000000001
+ ) + (
+    SELECT COUNT(*)
+    FROM t_user_profile profile
+    WHERE profile.id = 990000000000000001
+      AND NOT EXISTS (
+          SELECT 1
+          FROM t_user_account account
+          WHERE account.id = profile.id
+            AND account.is_deleted = 0
+            AND account.email IN ('demo.author@offerlab.local', 'demo.admin@offerlab.local')
+      )
+ ) + (
+    SELECT COUNT(*)
+    FROM t_user_admin admin
+    WHERE admin.uid = 990000000000000001
+      AND @offerlab_preserve_existing_local_admin = 0
+);
+
+DROP TEMPORARY TABLE IF EXISTS offerlab_demo_seed_assertion;
+CREATE TEMPORARY TABLE offerlab_demo_seed_assertion (
+    assertion_name VARCHAR(96) NOT NULL,
+    conflict_count BIGINT NOT NULL,
+    CONSTRAINT chk_offerlab_demo_seed_no_conflicts CHECK (conflict_count = 0)
+) ENGINE=InnoDB;
+
+-- Fresh database initialization normally starts with autocommit enabled. Keep
+-- every persistent seed write in one transaction, then restore the caller's
+-- mode at the end. The existing-database refresh wrapper enters with
+-- autocommit disabled, so restoring that value does not commit its outer
+-- transaction before refresh postconditions run.
+SET @offerlab_demo_seed_original_autocommit := @@SESSION.autocommit;
+SET SESSION autocommit = 0;
+
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('demo_author_identity', @offerlab_demo_author_identity_conflicts);
+
+-- Validate every deterministic demo asset before the first persistent write.
+-- Both the reserved id and its natural identity must agree; otherwise an
+-- existing local row could be silently repurposed by ON DUPLICATE KEY UPDATE.
+SET @offerlab_demo_seed_asset_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"1001","name":"Java"},{"id":"1002","name":"Go"},{"id":"1003","name":"Python"},{"id":"1004","name":"Spring"},{"id":"1005","name":"MySQL"},{"id":"1006","name":"Redis"},{"id":"1007","name":"Kafka"},{"id":"1008","name":"Elasticsearch"},{"id":"1009","name":"Netty"},{"id":"1010","name":"JVM"},{"id":"2001","name":"字节跳动"},{"id":"2002","name":"阿里巴巴"},{"id":"2003","name":"腾讯"},{"id":"2004","name":"美团"},{"id":"2005","name":"小红书"},{"id":"2006","name":"百度"},{"id":"2007","name":"深测科技"},{"id":"3001","name":"Java 后端"},{"id":"3002","name":"Go 后端"},{"id":"3003","name":"前端"},{"id":"3004","name":"算法工程师"},{"id":"3005","name":"后端工程师"},{"id":"991000000000000001","name":"开源工具"},{"id":"991000000000000002","name":"数字安全"},{"id":"991000000000000003","name":"职业成长"},{"id":"991000000000000004","name":"沟通协作"},{"id":"991000000000000005","name":"财务安全"},{"id":"991000000000000006","name":"风险教育"},{"id":"991000000000000007","name":"学习方法"},{"id":"991000000000000008","name":"阅读笔记"},{"id":"991000000000000009","name":"生活经验"},{"id":"991000000000000010","name":"健康管理"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            tag_name VARCHAR(64) PATH '$.name'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_tag existing
+        WHERE existing.id = expected.id
+          AND NOT (existing.tag_name <=> expected.tag_name)
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_tag existing
+        WHERE existing.tag_name = expected.tag_name
+          AND existing.is_deleted = 0
+          AND existing.id <> expected.id
+    )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990500000000000001","slug":"java-backend-roadmap"},{"id":"990500000000000002","slug":"redis-cache-consistency"},{"id":"990500000000000003","slug":"kafka-reliability"},{"id":"990500000000000004","slug":"elasticsearch-search-index"},{"id":"991500000000000001","slug":"digital-life-open-tools"},{"id":"991500000000000002","slug":"career-transition-field-notes"},{"id":"991500000000000003","slug":"personal-finance-risk-basics"},{"id":"991500000000000004","slug":"learning-systems"},{"id":"991500000000000005","slug":"everyday-life-practice"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            slug VARCHAR(64) PATH '$.slug'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_community_topic existing
+        WHERE existing.id = expected.id
+          AND NOT (existing.slug <=> expected.slug)
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_community_topic existing
+        WHERE existing.slug = expected.slug
+          AND existing.is_deleted = 0
+          AND existing.id <> expected.id
+    )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990510000000000001","topic":"990500000000000001","tag":"1001"},{"id":"990510000000000002","topic":"990500000000000001","tag":"1004"},{"id":"990510000000000003","topic":"990500000000000001","tag":"1005"},{"id":"990510000000000004","topic":"990500000000000001","tag":"1006"},{"id":"990510000000000005","topic":"990500000000000001","tag":"1007"},{"id":"990510000000000006","topic":"990500000000000002","tag":"1006"},{"id":"990510000000000007","topic":"990500000000000003","tag":"1007"},{"id":"990510000000000008","topic":"990500000000000004","tag":"1008"},{"id":"991510000000000001","topic":"991500000000000001","tag":"991000000000000001"},{"id":"991510000000000002","topic":"991500000000000001","tag":"991000000000000002"},{"id":"991510000000000003","topic":"991500000000000002","tag":"991000000000000003"},{"id":"991510000000000004","topic":"991500000000000002","tag":"991000000000000004"},{"id":"991510000000000005","topic":"991500000000000003","tag":"991000000000000005"},{"id":"991510000000000006","topic":"991500000000000003","tag":"991000000000000006"},{"id":"991510000000000007","topic":"991500000000000004","tag":"991000000000000007"},{"id":"991510000000000008","topic":"991500000000000004","tag":"991000000000000008"},{"id":"991510000000000009","topic":"991500000000000005","tag":"991000000000000009"},{"id":"991510000000000010","topic":"991500000000000005","tag":"991000000000000010"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            topic_id BIGINT PATH '$.topic',
+            tag_id BIGINT PATH '$.tag'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_community_topic_tag existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.topic_id <=> expected.topic_id)
+              OR NOT (existing.tag_id <=> expected.tag_id)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_community_topic_tag existing
+        WHERE existing.topic_id = expected.topic_id
+          AND existing.tag_id = expected.tag_id
+          AND existing.id <> expected.id
+    )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990010000000000001","canonical":"深测科技","alias":"深测科技"},{"id":"990010000000000002","canonical":"深测科技","alias":"深测"},{"id":"990010000000000003","canonical":"深测科技","alias":"深测科技有限公司"},{"id":"990010000000000004","canonical":"字节跳动","alias":"字节跳动"},{"id":"990010000000000005","canonical":"字节跳动","alias":"ByteDance"},{"id":"990010000000000006","canonical":"阿里巴巴","alias":"阿里巴巴"},{"id":"990010000000000007","canonical":"阿里巴巴","alias":"阿里"},{"id":"990010000000000008","canonical":"美团","alias":"美团"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            canonical_company VARCHAR(128) PATH '$.canonical',
+            alias VARCHAR(128) PATH '$.alias'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_company_alias existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.alias <=> expected.alias)
+              OR NOT (existing.canonical_company <=> expected.canonical_company)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_company_alias existing
+        WHERE existing.alias = expected.alias
+          AND existing.id <> expected.id
+    )
+);
+
+SET @offerlab_demo_seed_asset_identity_conflicts := @offerlab_demo_seed_asset_identity_conflicts + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990100000000000001","title":"深测科技 Java 后端一面复盘：缓存、事务和慢 SQL"},{"id":"990100000000000002","title":"深测科技 二面：Kafka 削峰和分布式排查"},{"id":"990100000000000003","title":"深测科技 HR 前技术加面：JVM、索引和项目亮点"},{"id":"990100000000000004","title":"字节跳动 Java 后端二面复盘：高并发接口、限流和降级"},{"id":"990100000000000005","title":"美团后端工程师面经：MySQL 索引、订单一致性和压测复盘"},{"id":"990100000000000006","title":"阿里巴巴 Java 后端终面准备：项目稳定性、消息链路和 STAR 表达"},{"id":"991100000000000001","title":"数字生活应急包清单：备份、密码与双重验证"},{"id":"991100000000000002","title":"开源软件要不要默认收集遥测数据"},{"id":"991100000000000003","title":"把旧电脑改成家庭资料站的一次实践"},{"id":"991100000000000004","title":"从全职工作到自由职业三个月的真实账本"},{"id":"991100000000000005","title":"职业空窗期如何向家人和招聘方解释"},{"id":"991100000000000006","title":"第一次带跨职能项目失败后的复盘"},{"id":"991100000000000007","title":"建立家庭应急金前的六项检查"},{"id":"991100000000000008","title":"指数基金定投前先确认哪些风险"},{"id":"991100000000000009","title":"租房还是买房，先讨论现金流和生活选择"},{"id":"991100000000000010","title":"我的晨间一小时学习系统运行了半年"},{"id":"991100000000000011","title":"读一本非虚构书的三层笔记模板"},{"id":"991100000000000012","title":"连续学习计划中断后的复盘"},{"id":"991100000000000013","title":"合租公共空间怎么制定不伤人的规则"},{"id":"991100000000000014","title":"要不要搬去离公司更远但更舒适的房子"},{"id":"991100000000000015","title":"周末无屏幕半天带来的生活观察"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            title VARCHAR(255) PATH '$.title'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_post_main existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.title <=> expected.title)
+              OR NOT (existing.author_id <=> @offerlab_demo_user_uid)
+          )
+    )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990200000000000001","post":"990100000000000001"},{"id":"990200000000000002","post":"990100000000000001"},{"id":"990200000000000003","post":"990100000000000001"},{"id":"990200000000000004","post":"990100000000000002"},{"id":"990200000000000005","post":"990100000000000002"},{"id":"990200000000000006","post":"990100000000000003"},{"id":"990200000000000007","post":"990100000000000003"},{"id":"990200000000000008","post":"990100000000000003"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            source_post_id BIGINT PATH '$.post'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_interview_question existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.normalized_hash <=> SHA2(CONCAT('offerlab-demo-question-', expected.id), 256))
+              OR NOT (existing.source_post_id <=> expected.source_post_id)
+              OR NOT (existing.source_author_uid <=> @offerlab_demo_user_uid)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_interview_question existing
+        WHERE existing.source_post_id = expected.source_post_id
+          AND existing.normalized_hash = SHA2(CONCAT('offerlab-demo-question-', expected.id), 256)
+          AND existing.id <> expected.id
+    )
+);
+
+SET @offerlab_demo_seed_asset_identity_conflicts := @offerlab_demo_seed_asset_identity_conflicts + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990300000000000001","type":"company","value":"深测科技"},{"id":"990300000000000002","type":"position","value":"Java 后端"},{"id":"990300000000000003","type":"tag","value":"Kafka"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            target_type VARCHAR(16) PATH '$.type',
+            target_value VARCHAR(128) PATH '$.value'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_user_prep_target existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.uid <=> @offerlab_demo_user_uid)
+              OR NOT (existing.target_type <=> expected.target_type)
+              OR NOT (existing.target_value <=> expected.target_value)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_user_prep_target existing
+        WHERE existing.uid = @offerlab_demo_user_uid
+          AND existing.target_type = expected.target_type
+          AND existing.target_value = expected.target_value
+          AND existing.id <> expected.id
+    )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990310000000000001","question":"990200000000000001"},{"id":"990310000000000002","question":"990200000000000002"},{"id":"990310000000000003","question":"990200000000000003"},{"id":"990310000000000004","question":"990200000000000004"},{"id":"990310000000000005","question":"990200000000000005"},{"id":"990310000000000006","question":"990200000000000006"},{"id":"990310000000000007","question":"990200000000000007"},{"id":"990310000000000008","question":"990200000000000008"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            question_id BIGINT PATH '$.question'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_user_question_progress existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.uid <=> @offerlab_demo_user_uid)
+              OR NOT (existing.question_id <=> expected.question_id)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_user_question_progress existing
+        WHERE existing.uid = @offerlab_demo_user_uid
+          AND existing.question_id = expected.question_id
+          AND existing.id <> expected.id
+    )
+) + (
+    SELECT COUNT(*)
+    FROM t_mock_interview_session existing
+    WHERE existing.id = 990400000000000001
+      AND (
+          NOT (existing.uid <=> @offerlab_demo_user_uid)
+          OR NOT (existing.company <=> '深测科技')
+          OR NOT (existing.position <=> 'Java 后端')
+      )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990410000000000001","question":"990200000000000002"},{"id":"990410000000000002","question":"990200000000000004"},{"id":"990410000000000003","question":"990200000000000008"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            question_id BIGINT PATH '$.question'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_mock_interview_answer existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.uid <=> @offerlab_demo_user_uid)
+              OR NOT (existing.session_id <=> 990400000000000001)
+              OR NOT (existing.question_id <=> expected.question_id)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_mock_interview_answer existing
+        WHERE existing.session_id = 990400000000000001
+          AND existing.question_id = expected.question_id
+          AND existing.id <> expected.id
+    )
+);
+
+SET @offerlab_demo_seed_asset_identity_conflicts := @offerlab_demo_seed_asset_identity_conflicts + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990110000000000001","post":"990100000000000001","tag":"1001"},{"id":"990110000000000002","post":"990100000000000001","tag":"1004"},{"id":"990110000000000003","post":"990100000000000001","tag":"1005"},{"id":"990110000000000004","post":"990100000000000001","tag":"1006"},{"id":"990110000000000005","post":"990100000000000001","tag":"2007"},{"id":"990110000000000006","post":"990100000000000001","tag":"3001"},{"id":"990110000000000007","post":"990100000000000002","tag":"1007"},{"id":"990110000000000008","post":"990100000000000002","tag":"1006"},{"id":"990110000000000009","post":"990100000000000002","tag":"2007"},{"id":"990110000000000010","post":"990100000000000002","tag":"3005"},{"id":"990110000000000011","post":"990100000000000003","tag":"1010"},{"id":"990110000000000012","post":"990100000000000003","tag":"1005"},{"id":"990110000000000013","post":"990100000000000003","tag":"2007"},{"id":"990110000000000014","post":"990100000000000003","tag":"3001"},{"id":"990110000000000015","post":"990100000000000003","tag":"1001"},{"id":"990110000000000016","post":"990100000000000004","tag":"1001"},{"id":"990110000000000017","post":"990100000000000004","tag":"1004"},{"id":"990110000000000018","post":"990100000000000004","tag":"1006"},{"id":"990110000000000019","post":"990100000000000004","tag":"1007"},{"id":"990110000000000020","post":"990100000000000004","tag":"2001"},{"id":"990110000000000021","post":"990100000000000004","tag":"3001"},{"id":"990110000000000022","post":"990100000000000005","tag":"1001"},{"id":"990110000000000023","post":"990100000000000005","tag":"1005"},{"id":"990110000000000024","post":"990100000000000005","tag":"1006"},{"id":"990110000000000025","post":"990100000000000005","tag":"2004"},{"id":"990110000000000026","post":"990100000000000005","tag":"3005"},{"id":"990110000000000027","post":"990100000000000006","tag":"1001"},{"id":"990110000000000028","post":"990100000000000006","tag":"1004"},{"id":"990110000000000029","post":"990100000000000006","tag":"1007"},{"id":"990110000000000030","post":"990100000000000006","tag":"1010"},{"id":"990110000000000031","post":"990100000000000006","tag":"2002"},{"id":"990110000000000032","post":"990100000000000006","tag":"3001"},{"id":"991110000000000001","post":"991100000000000001","tag":"991000000000000001"},{"id":"991110000000000002","post":"991100000000000001","tag":"991000000000000002"},{"id":"991110000000000003","post":"991100000000000002","tag":"991000000000000001"},{"id":"991110000000000004","post":"991100000000000002","tag":"991000000000000002"},{"id":"991110000000000005","post":"991100000000000003","tag":"991000000000000001"},{"id":"991110000000000006","post":"991100000000000003","tag":"991000000000000002"},{"id":"991110000000000007","post":"991100000000000004","tag":"991000000000000003"},{"id":"991110000000000008","post":"991100000000000004","tag":"991000000000000004"},{"id":"991110000000000009","post":"991100000000000005","tag":"991000000000000003"},{"id":"991110000000000010","post":"991100000000000005","tag":"991000000000000004"},{"id":"991110000000000011","post":"991100000000000006","tag":"991000000000000003"},{"id":"991110000000000012","post":"991100000000000006","tag":"991000000000000004"},{"id":"991110000000000013","post":"991100000000000007","tag":"991000000000000005"},{"id":"991110000000000014","post":"991100000000000007","tag":"991000000000000006"},{"id":"991110000000000015","post":"991100000000000008","tag":"991000000000000005"},{"id":"991110000000000016","post":"991100000000000008","tag":"991000000000000006"},{"id":"991110000000000017","post":"991100000000000009","tag":"991000000000000005"},{"id":"991110000000000018","post":"991100000000000009","tag":"991000000000000006"},{"id":"991110000000000019","post":"991100000000000010","tag":"991000000000000007"},{"id":"991110000000000020","post":"991100000000000010","tag":"991000000000000008"},{"id":"991110000000000021","post":"991100000000000011","tag":"991000000000000007"},{"id":"991110000000000022","post":"991100000000000011","tag":"991000000000000008"},{"id":"991110000000000023","post":"991100000000000012","tag":"991000000000000007"},{"id":"991110000000000024","post":"991100000000000012","tag":"991000000000000008"},{"id":"991110000000000025","post":"991100000000000013","tag":"991000000000000009"},{"id":"991110000000000026","post":"991100000000000013","tag":"991000000000000010"},{"id":"991110000000000027","post":"991100000000000014","tag":"991000000000000009"},{"id":"991110000000000028","post":"991100000000000014","tag":"991000000000000010"},{"id":"991110000000000029","post":"991100000000000015","tag":"991000000000000009"},{"id":"991110000000000030","post":"991100000000000015","tag":"991000000000000010"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            post_id BIGINT PATH '$.post',
+            tag_id BIGINT PATH '$.tag'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_post_tag_ref existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.post_id <=> expected.post_id)
+              OR NOT (existing.tag_id <=> expected.tag_id)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_post_tag_ref existing
+        WHERE existing.post_id = expected.post_id
+          AND existing.tag_id = expected.tag_id
+          AND existing.id <> expected.id
+    )
+) + (
+    SELECT COUNT(*)
+    FROM JSON_TABLE(
+        '[{"id":"990210000000000001","question":"990200000000000001","tag":"1001"},{"id":"990210000000000002","question":"990200000000000001","tag":"1004"},{"id":"990210000000000003","question":"990200000000000002","tag":"1006"},{"id":"990210000000000004","question":"990200000000000002","tag":"1001"},{"id":"990210000000000005","question":"990200000000000003","tag":"1005"},{"id":"990210000000000006","question":"990200000000000003","tag":"1001"},{"id":"990210000000000007","question":"990200000000000004","tag":"1007"},{"id":"990210000000000008","question":"990200000000000004","tag":"1001"},{"id":"990210000000000009","question":"990200000000000005","tag":"1004"},{"id":"990210000000000010","question":"990200000000000005","tag":"1006"},{"id":"990210000000000011","question":"990200000000000006","tag":"1010"},{"id":"990210000000000012","question":"990200000000000006","tag":"1001"},{"id":"990210000000000013","question":"990200000000000007","tag":"1008"},{"id":"990210000000000014","question":"990200000000000007","tag":"1001"},{"id":"990210000000000015","question":"990200000000000008","tag":"3001"},{"id":"990210000000000016","question":"990200000000000008","tag":"2007"}]',
+        '$[*]' COLUMNS (
+            id BIGINT PATH '$.id',
+            question_id BIGINT PATH '$.question',
+            tag_id BIGINT PATH '$.tag'
+        )
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_interview_question_tag existing
+        WHERE existing.id = expected.id
+          AND (
+              NOT (existing.question_id <=> expected.question_id)
+              OR NOT (existing.tag_id <=> expected.tag_id)
+          )
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_interview_question_tag existing
+        WHERE existing.question_id = expected.question_id
+          AND existing.tag_id = expected.tag_id
+          AND existing.id <> expected.id
+    )
+);
+
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('demo_asset_identity', @offerlab_demo_seed_asset_identity_conflicts);
 
 INSERT INTO t_tag (id, tag_name, tag_type, use_count, is_official) VALUES
     (1001, 'Java', 1, 5, 1),
@@ -30,7 +394,10 @@ ON DUPLICATE KEY UPDATE
     tag_name = VALUES(tag_name),
     tag_type = VALUES(tag_type),
     use_count = GREATEST(use_count, VALUES(use_count)),
-    is_official = VALUES(is_official);
+    is_official = VALUES(is_official),
+    tag_status = 1,
+    merge_target_id = NULL,
+    is_deleted = 0;
 
 INSERT INTO t_community_topic (
     id, slug, topic_name, description, topic_type, cover_url,
@@ -73,17 +440,22 @@ ON DUPLICATE KEY UPDATE
     topic_id = VALUES(topic_id),
     tag_id = VALUES(tag_id);
 
--- 本地演示账号：demo.admin@offerlab.local / OfferLab123
+-- Demo content author. This account is disabled by default and is not granted
+-- admin permissions. If an existing local database has explicitly promoted
+-- this deterministic uid to an enabled admin, preserve that login identity
+-- instead of silently replacing its credentials during an idempotent refresh.
+-- Use db/local/seed_local_demo_admin.sql explicitly to promote this identity
+-- for a fresh local-only admin demo.
 INSERT INTO t_user_account
     (id, email, password_hash, password_salt, account_status)
 VALUES
-    (990000000000000001, 'demo.admin@offerlab.local', '$2a$10$0CN4aiMIujTsf.AmOBUj8OAO.IrhNxcI5Toug4dnCegzpvuYHYmcG', '', 1)
+    (990000000000000001, 'demo.author@offerlab.local', '$2a$10$0CN4aiMIujTsf.AmOBUj8OAO.IrhNxcI5Toug4dnCegzpvuYHYmcG', '', 2)
 ON DUPLICATE KEY UPDATE
-    email = VALUES(email),
-    password_hash = VALUES(password_hash),
-    password_salt = VALUES(password_salt),
-    account_status = VALUES(account_status),
-    update_time = CURRENT_TIMESTAMP(3);
+    email = IF(@offerlab_preserve_existing_local_admin = 1, email, VALUES(email)),
+    password_hash = IF(@offerlab_preserve_existing_local_admin = 1, password_hash, VALUES(password_hash)),
+    password_salt = IF(@offerlab_preserve_existing_local_admin = 1, password_salt, VALUES(password_salt)),
+    account_status = IF(@offerlab_preserve_existing_local_admin = 1, account_status, VALUES(account_status)),
+    update_time = IF(@offerlab_preserve_existing_local_admin = 1, update_time, CURRENT_TIMESTAMP(3));
 
 INSERT INTO t_user_profile
     (id, nickname, avatar_url, bio, intent_json)
@@ -91,7 +463,7 @@ VALUES
     (
         990000000000000001,
         'OfferLab 演示管理员',
-        'https://api.dicebear.com/7.x/initials/svg?seed=OfferLab',
+        NULL,
         '正在准备深测科技 Java 后端面试，已整理题单、笔记和 STAR 草稿。',
         JSON_OBJECT(
             'targetCompanies', JSON_ARRAY('深测科技'),
@@ -100,32 +472,22 @@ VALUES
         )
     )
 ON DUPLICATE KEY UPDATE
-    nickname = VALUES(nickname),
-    avatar_url = VALUES(avatar_url),
-    bio = VALUES(bio),
-    intent_json = VALUES(intent_json),
-    update_time = CURRENT_TIMESTAMP(3);
+    nickname = IF(@offerlab_preserve_existing_local_admin = 1, nickname, VALUES(nickname)),
+    avatar_url = IF(@offerlab_preserve_existing_local_admin = 1, avatar_url, VALUES(avatar_url)),
+    bio = IF(@offerlab_preserve_existing_local_admin = 1, bio, VALUES(bio)),
+    intent_json = IF(@offerlab_preserve_existing_local_admin = 1, intent_json, VALUES(intent_json)),
+    update_time = IF(@offerlab_preserve_existing_local_admin = 1, update_time, CURRENT_TIMESTAMP(3));
 
 INSERT INTO t_user_counter
     (user_id, follower_count, following_count, post_count, like_received)
 VALUES
     (990000000000000001, 18, 7, 6, 196)
 ON DUPLICATE KEY UPDATE
-    follower_count = VALUES(follower_count),
-    following_count = VALUES(following_count),
-    post_count = VALUES(post_count),
-    like_received = VALUES(like_received),
-    update_time = CURRENT_TIMESTAMP(3);
-
-INSERT INTO t_user_admin
-    (uid, role_code, enabled, remark, operator_uid)
-VALUES
-    (990000000000000001, 'ADMIN', 1, 'local demo admin seeded by 99_seed.sql', 990000000000000001)
-ON DUPLICATE KEY UPDATE
-    enabled = VALUES(enabled),
-    remark = VALUES(remark),
-    operator_uid = VALUES(operator_uid),
-    update_time = CURRENT_TIMESTAMP(3);
+    follower_count = IF(@offerlab_preserve_existing_local_admin = 1, follower_count, VALUES(follower_count)),
+    following_count = IF(@offerlab_preserve_existing_local_admin = 1, following_count, VALUES(following_count)),
+    post_count = IF(@offerlab_preserve_existing_local_admin = 1, post_count, VALUES(post_count)),
+    like_received = IF(@offerlab_preserve_existing_local_admin = 1, like_received, VALUES(like_received)),
+    update_time = IF(@offerlab_preserve_existing_local_admin = 1, update_time, CURRENT_TIMESTAMP(3));
 
 INSERT INTO t_company_alias
     (id, canonical_company, alias, status)
@@ -543,10 +905,11 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO t_user_prep_target
     (id, uid, target_type, target_value, interview_date, priority, note)
 VALUES
-    (990300000000000001, 990000000000000001, 'company', '深测科技', DATE_ADD(CURDATE(), INTERVAL 14 DAY), 'urgent', '优先刷深测科技高频后端题，准备一面到加面的完整链路。'),
-    (990300000000000002, 990000000000000001, 'position', 'Java 后端', DATE_ADD(CURDATE(), INTERVAL 14 DAY), 'high', '围绕 Spring、MySQL、Redis、Kafka、JVM 做专项复盘。'),
-    (990300000000000003, 990000000000000001, 'tag', 'Kafka', DATE_ADD(CURDATE(), INTERVAL 7 DAY), 'medium', '补齐消息堆积、幂等和重试死信案例。')
+    (990300000000000001, @offerlab_demo_user_uid, 'company', '深测科技', DATE_ADD(CURDATE(), INTERVAL 14 DAY), 'urgent', '优先刷深测科技高频后端题，准备一面到加面的完整链路。'),
+    (990300000000000002, @offerlab_demo_user_uid, 'position', 'Java 后端', DATE_ADD(CURDATE(), INTERVAL 14 DAY), 'high', '围绕 Spring、MySQL、Redis、Kafka、JVM 做专项复盘。'),
+    (990300000000000003, @offerlab_demo_user_uid, 'tag', 'Kafka', DATE_ADD(CURDATE(), INTERVAL 7 DAY), 'medium', '补齐消息堆积、幂等和重试死信案例。')
 ON DUPLICATE KEY UPDATE
+    uid = VALUES(uid),
     interview_date = VALUES(interview_date),
     priority = VALUES(priority),
     note = VALUES(note);
@@ -557,7 +920,7 @@ INSERT INTO t_user_question_progress
 VALUES
     (
         990310000000000001,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000001,
         'mastered',
         1,
@@ -574,7 +937,7 @@ VALUES
     ),
     (
         990310000000000002,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000002,
         'review',
         1,
@@ -591,7 +954,7 @@ VALUES
     ),
     (
         990310000000000003,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000003,
         'learning',
         0,
@@ -608,7 +971,7 @@ VALUES
     ),
     (
         990310000000000004,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000004,
         'review',
         1,
@@ -625,7 +988,7 @@ VALUES
     ),
     (
         990310000000000005,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000005,
         'todo',
         0,
@@ -642,7 +1005,7 @@ VALUES
     ),
     (
         990310000000000006,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000006,
         'learning',
         1,
@@ -659,7 +1022,7 @@ VALUES
     ),
     (
         990310000000000007,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000007,
         'todo',
         0,
@@ -676,7 +1039,7 @@ VALUES
     ),
     (
         990310000000000008,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000008,
         'review',
         1,
@@ -692,6 +1055,7 @@ VALUES
         NOW(3) - INTERVAL 30 MINUTE
     )
 ON DUPLICATE KEY UPDATE
+    uid = VALUES(uid),
     progress_status = VALUES(progress_status),
     favorite = VALUES(favorite),
     note = VALUES(note),
@@ -708,8 +1072,9 @@ INSERT INTO t_mock_interview_session
     (id, uid, company, position, difficulty, focus_tag, question_count, answered_count, total_score,
      duration_seconds, status, create_time, update_time)
 VALUES
-    (990400000000000001, 990000000000000001, '深测科技', 'Java 后端', 'medium', 'Kafka', 3, 3, 12, 1280, 'completed', NOW(3) - INTERVAL 1 DAY, NOW(3) - INTERVAL 1 HOUR)
+    (990400000000000001, @offerlab_demo_user_uid, '深测科技', 'Java 后端', 'medium', 'Kafka', 3, 3, 12, 1280, 'completed', NOW(3) - INTERVAL 1 DAY, NOW(3) - INTERVAL 1 HOUR)
 ON DUPLICATE KEY UPDATE
+    uid = VALUES(uid),
     company = VALUES(company),
     position = VALUES(position),
     difficulty = VALUES(difficulty),
@@ -729,7 +1094,7 @@ VALUES
     (
         990410000000000001,
         990400000000000001,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000002,
         1,
         'Redis 缓存和数据库双写不一致时，你会如何设计更新策略？',
@@ -751,7 +1116,7 @@ VALUES
     (
         990410000000000002,
         990400000000000001,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000004,
         2,
         'Kafka 消费端如何保证幂等？如果出现消息堆积你会先看哪些指标？',
@@ -773,7 +1138,7 @@ VALUES
     (
         990410000000000003,
         990400000000000001,
-        990000000000000001,
+        @offerlab_demo_user_uid,
         990200000000000008,
         3,
         '项目经历里你如何用 STAR 讲清一次稳定性优化？',
@@ -793,6 +1158,7 @@ VALUES
         '补充自己负责的模块和协作边界。'
     )
 ON DUPLICATE KEY UPDATE
+    uid = VALUES(uid),
     sequence_no = VALUES(sequence_no),
     question_text_snapshot = VALUES(question_text_snapshot),
     answer_hint_snapshot = VALUES(answer_hint_snapshot),
@@ -809,3 +1175,384 @@ ON DUPLICATE KEY UPDATE
     ai_completeness = VALUES(ai_completeness),
     ai_project_expression = VALUES(ai_project_expression),
     ai_follow_up_suggestion = VALUES(ai_follow_up_suggestion);
+
+-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql
+-- 20260712_demo_community_seed.sql
+-- Non-destructive comprehensive community seed for existing demo databases.
+SET NAMES utf8mb4;
+
+-- Keep community demo content on the same reserved identity. In particular,
+-- never fall back to a real admin or the first active account when the local
+-- demo identity has been explicitly promoted to demo.admin.
+SET @community_demo_uid := @offerlab_demo_user_uid;
+
+SET @community_seed_identity_conflicts := IF(
+    @community_demo_uid IS NULL OR NOT EXISTS (
+        SELECT 1
+        FROM t_user_account
+        WHERE id = @community_demo_uid
+          AND is_deleted = 0
+    ),
+    1,
+    0
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_demo_author', @community_seed_identity_conflicts);
+
+SET @community_seed_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM t_tag
+    WHERE (id = 991000000000000001 AND tag_name <> '开源工具')
+       OR (id = 991000000000000002 AND tag_name <> '数字安全')
+       OR (id = 991000000000000003 AND tag_name <> '职业成长')
+       OR (id = 991000000000000004 AND tag_name <> '沟通协作')
+       OR (id = 991000000000000005 AND tag_name <> '财务安全')
+       OR (id = 991000000000000006 AND tag_name <> '风险教育')
+       OR (id = 991000000000000007 AND tag_name <> '学习方法')
+       OR (id = 991000000000000008 AND tag_name <> '阅读笔记')
+       OR (id = 991000000000000009 AND tag_name <> '生活经验')
+       OR (id = 991000000000000010 AND tag_name <> '健康管理')
+       OR (tag_name = '开源工具' AND is_deleted = 0 AND id <> 991000000000000001)
+       OR (tag_name = '数字安全' AND is_deleted = 0 AND id <> 991000000000000002)
+       OR (tag_name = '职业成长' AND is_deleted = 0 AND id <> 991000000000000003)
+       OR (tag_name = '沟通协作' AND is_deleted = 0 AND id <> 991000000000000004)
+       OR (tag_name = '财务安全' AND is_deleted = 0 AND id <> 991000000000000005)
+       OR (tag_name = '风险教育' AND is_deleted = 0 AND id <> 991000000000000006)
+       OR (tag_name = '学习方法' AND is_deleted = 0 AND id <> 991000000000000007)
+       OR (tag_name = '阅读笔记' AND is_deleted = 0 AND id <> 991000000000000008)
+       OR (tag_name = '生活经验' AND is_deleted = 0 AND id <> 991000000000000009)
+       OR (tag_name = '健康管理' AND is_deleted = 0 AND id <> 991000000000000010)
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_tag_identity', @community_seed_identity_conflicts);
+
+INSERT INTO t_tag
+    (id, tag_name, tag_type, use_count, is_official, tag_status, recommended)
+VALUES
+    (991000000000000001, '开源工具', 4, 3, 1, 1, 1),
+    (991000000000000002, '数字安全', 4, 3, 1, 1, 1),
+    (991000000000000003, '职业成长', 4, 3, 1, 1, 1),
+    (991000000000000004, '沟通协作', 4, 3, 1, 1, 1),
+    (991000000000000005, '财务安全', 4, 3, 1, 1, 1),
+    (991000000000000006, '风险教育', 4, 3, 1, 1, 1),
+    (991000000000000007, '学习方法', 4, 3, 1, 1, 1),
+    (991000000000000008, '阅读笔记', 4, 3, 1, 1, 1),
+    (991000000000000009, '生活经验', 4, 3, 1, 1, 1),
+    (991000000000000010, '健康管理', 4, 3, 1, 1, 1)
+ON DUPLICATE KEY UPDATE
+    tag_name = VALUES(tag_name),
+    tag_type = VALUES(tag_type),
+    use_count = GREATEST(use_count, VALUES(use_count)),
+    is_official = VALUES(is_official),
+    tag_status = VALUES(tag_status),
+    recommended = VALUES(recommended),
+    merge_target_id = NULL,
+    is_deleted = 0,
+    update_time = CURRENT_TIMESTAMP(3);
+
+SET @community_seed_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM t_community_topic
+    WHERE (id = 991500000000000001 AND slug <> 'digital-life-open-tools')
+       OR (id = 991500000000000002 AND slug <> 'career-transition-field-notes')
+       OR (id = 991500000000000003 AND slug <> 'personal-finance-risk-basics')
+       OR (id = 991500000000000004 AND slug <> 'learning-systems')
+       OR (id = 991500000000000005 AND slug <> 'everyday-life-practice')
+       OR (slug = 'digital-life-open-tools' AND is_deleted = 0 AND id <> 991500000000000001)
+       OR (slug = 'career-transition-field-notes' AND is_deleted = 0 AND id <> 991500000000000002)
+       OR (slug = 'personal-finance-risk-basics' AND is_deleted = 0 AND id <> 991500000000000003)
+       OR (slug = 'learning-systems' AND is_deleted = 0 AND id <> 991500000000000004)
+       OR (slug = 'everyday-life-practice' AND is_deleted = 0 AND id <> 991500000000000005)
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_topic_identity', @community_seed_identity_conflicts);
+
+INSERT INTO t_community_topic (
+    id, slug, topic_name, description, topic_type, cover_url,
+    sort_order, featured, topic_status, created_by, updated_by
+) VALUES
+    (991500000000000001, 'digital-life-open-tools', '数字生活与开源工具',
+     '分享普通人能复用的开源工具、账号安全、数据备份和数字生活实践。',
+     'resource', NULL, 125, 1, 1, @community_demo_uid, @community_demo_uid),
+    (991500000000000002, 'career-transition-field-notes', '职业转型田野笔记',
+     '讨论转岗、空窗期、跨职能协作和工作方式变化中的真实经验。',
+     'scenario', NULL, 124, 1, 1, @community_demo_uid, @community_demo_uid),
+    (991500000000000003, 'personal-finance-risk-basics', '个人财务风险基础',
+     '只做预算、应急金、资产配置和风险识别教育，不构成投资建议。',
+     'resource', NULL, 123, 1, 1, @community_demo_uid, @community_demo_uid),
+    (991500000000000004, 'learning-systems', '可持续学习系统',
+     '沉淀阅读、课程、笔记、复习和长期学习计划的可复用方法。',
+     'project', NULL, 122, 1, 1, @community_demo_uid, @community_demo_uid),
+    (991500000000000005, 'everyday-life-practice', '日常生活实践',
+     '围绕居住、健康、关系和生活选择展开具体、友善、可验证的讨论。',
+     'scenario', NULL, 121, 1, 1, @community_demo_uid, @community_demo_uid)
+ON DUPLICATE KEY UPDATE
+    topic_name = VALUES(topic_name),
+    description = VALUES(description),
+    topic_type = VALUES(topic_type),
+    cover_url = VALUES(cover_url),
+    sort_order = VALUES(sort_order),
+    featured = VALUES(featured),
+    topic_status = VALUES(topic_status),
+    updated_by = VALUES(updated_by),
+    is_deleted = 0,
+    update_time = CURRENT_TIMESTAMP(3);
+
+SET @community_seed_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM (
+        SELECT 991510000000000001 AS id, 991500000000000001 AS topic_id, 991000000000000001 AS tag_id
+        UNION ALL SELECT 991510000000000002, 991500000000000001, 991000000000000002
+        UNION ALL SELECT 991510000000000003, 991500000000000002, 991000000000000003
+        UNION ALL SELECT 991510000000000004, 991500000000000002, 991000000000000004
+        UNION ALL SELECT 991510000000000005, 991500000000000003, 991000000000000005
+        UNION ALL SELECT 991510000000000006, 991500000000000003, 991000000000000006
+        UNION ALL SELECT 991510000000000007, 991500000000000004, 991000000000000007
+        UNION ALL SELECT 991510000000000008, 991500000000000004, 991000000000000008
+        UNION ALL SELECT 991510000000000009, 991500000000000005, 991000000000000009
+        UNION ALL SELECT 991510000000000010, 991500000000000005, 991000000000000010
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_community_topic_tag existing
+        WHERE existing.id = expected.id
+          AND (existing.topic_id <> expected.topic_id OR existing.tag_id <> expected.tag_id)
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_community_topic_tag existing
+        WHERE existing.topic_id = expected.topic_id
+          AND existing.tag_id = expected.tag_id
+          AND existing.id <> expected.id
+    )
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_topic_tag_identity', @community_seed_identity_conflicts);
+
+INSERT IGNORE INTO t_community_topic_tag (id, topic_id, tag_id) VALUES
+    (991510000000000001, 991500000000000001, 991000000000000001),
+    (991510000000000002, 991500000000000001, 991000000000000002),
+    (991510000000000003, 991500000000000002, 991000000000000003),
+    (991510000000000004, 991500000000000002, 991000000000000004),
+    (991510000000000005, 991500000000000003, 991000000000000005),
+    (991510000000000006, 991500000000000003, 991000000000000006),
+    (991510000000000007, 991500000000000004, 991000000000000007),
+    (991510000000000008, 991500000000000004, 991000000000000008),
+    (991510000000000009, 991500000000000005, 991000000000000009),
+    (991510000000000010, 991500000000000005, 991000000000000010);
+
+SET @community_seed_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM t_post_main
+    WHERE (id = 991100000000000001 AND (title <> '数字生活应急包清单：备份、密码与双重验证' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000002 AND (title <> '开源软件要不要默认收集遥测数据' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000003 AND (title <> '把旧电脑改成家庭资料站的一次实践' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000004 AND (title <> '从全职工作到自由职业三个月的真实账本' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000005 AND (title <> '职业空窗期如何向家人和招聘方解释' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000006 AND (title <> '第一次带跨职能项目失败后的复盘' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000007 AND (title <> '建立家庭应急金前的六项检查' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000008 AND (title <> '指数基金定投前先确认哪些风险' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000009 AND (title <> '租房还是买房，先讨论现金流和生活选择' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000010 AND (title <> '我的晨间一小时学习系统运行了半年' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000011 AND (title <> '读一本非虚构书的三层笔记模板' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000012 AND (title <> '连续学习计划中断后的复盘' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000013 AND (title <> '合租公共空间怎么制定不伤人的规则' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000014 AND (title <> '要不要搬去离公司更远但更舒适的房子' OR author_id <> @community_demo_uid))
+       OR (id = 991100000000000015 AND (title <> '周末无屏幕半天带来的生活观察' OR author_id <> @community_demo_uid))
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_post_identity', @community_seed_identity_conflicts);
+
+INSERT INTO t_post_main
+    (id, author_id, post_type, title, content, cover_url, visibility, post_status, create_time, update_time, is_deleted)
+VALUES
+    -- COMMUNITY_DEMO_POST id=991100000000000001 domain=1 type=14
+    (991100000000000001, @community_demo_uid, 14, '数字生活应急包清单：备份、密码与双重验证', '这份清单从重要文件三份备份、密码管理器、双重验证恢复码和设备丢失预案四部分展开，适合普通家庭每半年检查一次。', NULL, 1, 1, NOW(3) - INTERVAL 15 DAY, NOW(3) - INTERVAL 2 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000002 domain=1 type=16
+    (991100000000000002, @community_demo_uid, 16, '开源软件要不要默认收集遥测数据', '讨论重点不是简单支持或反对遥测，而是默认关闭还是默认开启、是否充分告知、数据能否本地查看，以及用户能不能真正撤回授权。', NULL, 1, 1, NOW(3) - INTERVAL 14 DAY, NOW(3) - INTERVAL 2 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000003 domain=1 type=15
+    (991100000000000003, @community_demo_uid, 15, '把旧电脑改成家庭资料站的一次实践', '我记录了硬盘健康检查、局域网共享、自动备份和断电恢复的完整过程，也保留了失败方案和维护成本，方便非专业用户判断是否值得照做。', NULL, 1, 1, NOW(3) - INTERVAL 13 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000004 domain=2 type=15
+    (991100000000000004, @community_demo_uid, 15, '从全职工作到自由职业三个月的真实账本', '这不是成功学总结，而是对收入波动、客户沟通、工作边界和作息变化的逐周记录，并说明哪些准备不足导致了额外压力。', NULL, 1, 1, NOW(3) - INTERVAL 12 DAY, NOW(3) - INTERVAL 2 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000005 domain=2 type=13
+    (991100000000000005, @community_demo_uid, 13, '职业空窗期如何向家人和招聘方解释', '希望收集不同处境下的表达方式：既不把空窗期包装成完美故事，也能说明休整、照护、学习或求职过程中真正完成的事情。', NULL, 1, 1, NOW(3) - INTERVAL 11 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000006 domain=2 type=11
+    (991100000000000006, @community_demo_uid, 11, '第一次带跨职能项目失败后的复盘', '问题不只在排期，还包括目标定义含糊、决策记录缺失和风险升级太晚。复盘最后给出下一次项目启动会要使用的检查表。', NULL, 1, 1, NOW(3) - INTERVAL 10 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000007 domain=5 type=14
+    (991100000000000007, @community_demo_uid, 14, '建立家庭应急金前的六项检查', '先核对必要支出、收入稳定性、保险缺口、负债成本和资金流动性，再决定应急金规模。内容仅作风险教育，不构成投资建议。', NULL, 1, 1, NOW(3) - INTERVAL 9 DAY, NOW(3) - INTERVAL 2 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000008 domain=5 type=13
+    (991100000000000008, @community_demo_uid, 13, '指数基金定投前先确认哪些风险', '讨论波动、费用、跟踪误差和长期资金安排，也提醒投资可能发生本金损失。请依据自己的风险承受能力独立判断，不构成投资建议。', NULL, 1, 1, NOW(3) - INTERVAL 8 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000009 domain=5 type=16
+    (991100000000000009, @community_demo_uid, 16, '租房还是买房，先讨论现金流和生活选择', '把通勤、家庭计划、城市流动性、首付占用和压力测试放在同一张表里讨论。内容不提供交易结论，只用于识别长期财务风险。', NULL, 1, 1, NOW(3) - INTERVAL 7 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000010 domain=3 type=15
+    (991100000000000010, @community_demo_uid, 15, '我的晨间一小时学习系统运行了半年', '学习系统由固定触发、二十五分钟专注、十分钟回忆和每周复盘组成。半年后保留了有效环节，也删掉了让计划越来越重的打卡项目。', NULL, 1, 1, NOW(3) - INTERVAL 6 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000011 domain=3 type=14
+    (991100000000000011, @community_demo_uid, 14, '读一本非虚构书的三层笔记模板', '第一层记录原文位置，第二层写自己的解释，第三层连接到问题和行动。模板同时说明哪些书不适合做重笔记，避免形式超过内容。', NULL, 1, 1, NOW(3) - INTERVAL 5 DAY, NOW(3) - INTERVAL 1 DAY, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000012 domain=3 type=11
+    (991100000000000012, @community_demo_uid, 11, '连续学习计划中断后的复盘', '连续记录中断后，我检查了任务粒度、环境阻力和休息不足三个原因，把目标从每天完成改成每周可恢复，降低一次中断带来的放弃成本。', NULL, 1, 1, NOW(3) - INTERVAL 4 DAY, NOW(3) - INTERVAL 12 HOUR, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000013 domain=4 type=13
+    (991100000000000013, @community_demo_uid, 13, '合租公共空间怎么制定不伤人的规则', '想听听大家如何讨论清洁频率、物品边界、访客和安静时间。重点是把指责改成可执行约定，并保留定期重新协商的空间。', NULL, 1, 1, NOW(3) - INTERVAL 3 DAY, NOW(3) - INTERVAL 12 HOUR, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000014 domain=4 type=16
+    (991100000000000014, @community_demo_uid, 16, '要不要搬去离公司更远但更舒适的房子', '欢迎从通勤时间、睡眠、租金、社交支持和居住稳定性几个角度讨论，不把任何一种生活选择当成标准答案。', NULL, 1, 1, NOW(3) - INTERVAL 2 DAY, NOW(3) - INTERVAL 6 HOUR, 0),
+    -- COMMUNITY_DEMO_POST id=991100000000000015 domain=4 type=15
+    (991100000000000015, @community_demo_uid, 15, '周末无屏幕半天带来的生活观察', '连续四周保留半天不用社交媒体，我记录了焦虑、注意力、散步和与家人交流的变化，也说明这种安排并不适合所有人的工作和照护节奏。', NULL, 1, 1, NOW(3) - INTERVAL 1 DAY, NOW(3), 0)
+ON DUPLICATE KEY UPDATE
+    author_id = VALUES(author_id),
+    post_type = VALUES(post_type),
+    title = VALUES(title),
+    content = VALUES(content),
+    cover_url = VALUES(cover_url),
+    visibility = VALUES(visibility),
+    post_status = VALUES(post_status),
+    is_deleted = VALUES(is_deleted),
+    update_time = VALUES(update_time);
+
+INSERT INTO t_post_extension (post_id, post_type, ext_json) VALUES
+    (991100000000000001, 14, JSON_OBJECT('domain', 1, 'seed', 'community_seed', 'format', 'RESOURCE')),
+    (991100000000000002, 16, JSON_OBJECT('domain', 1, 'seed', 'community_seed', 'format', 'DISCUSSION')),
+    (991100000000000003, 15, JSON_OBJECT('domain', 1, 'seed', 'community_seed', 'format', 'EXPERIENCE')),
+    (991100000000000004, 15, JSON_OBJECT('domain', 2, 'seed', 'community_seed', 'format', 'EXPERIENCE')),
+    (991100000000000005, 13, JSON_OBJECT('domain', 2, 'seed', 'community_seed', 'format', 'QUESTION')),
+    (991100000000000006, 11, JSON_OBJECT('domain', 2, 'seed', 'community_seed', 'format', 'REVIEW')),
+    (991100000000000007, 14, JSON_OBJECT('domain', 5, 'seed', 'community_seed', 'format', 'RESOURCE')),
+    (991100000000000008, 13, JSON_OBJECT('domain', 5, 'seed', 'community_seed', 'format', 'QUESTION')),
+    (991100000000000009, 16, JSON_OBJECT('domain', 5, 'seed', 'community_seed', 'format', 'DISCUSSION')),
+    (991100000000000010, 15, JSON_OBJECT('domain', 3, 'seed', 'community_seed', 'format', 'EXPERIENCE')),
+    (991100000000000011, 14, JSON_OBJECT('domain', 3, 'seed', 'community_seed', 'format', 'RESOURCE')),
+    (991100000000000012, 11, JSON_OBJECT('domain', 3, 'seed', 'community_seed', 'format', 'REVIEW')),
+    (991100000000000013, 13, JSON_OBJECT('domain', 4, 'seed', 'community_seed', 'format', 'QUESTION')),
+    (991100000000000014, 16, JSON_OBJECT('domain', 4, 'seed', 'community_seed', 'format', 'DISCUSSION')),
+    (991100000000000015, 15, JSON_OBJECT('domain', 4, 'seed', 'community_seed', 'format', 'EXPERIENCE'))
+ON DUPLICATE KEY UPDATE
+    post_type = VALUES(post_type),
+    ext_json = VALUES(ext_json),
+    update_time = CURRENT_TIMESTAMP(3);
+
+INSERT INTO t_post_counter
+    (post_id, view_count, like_count, comment_count, favorite_count, share_count)
+VALUES
+    (991100000000000001, 386, 42, 8, 61, 11),
+    (991100000000000002, 244, 28, 23, 17, 5),
+    (991100000000000003, 318, 37, 12, 44, 8),
+    (991100000000000004, 352, 49, 19, 38, 7),
+    (991100000000000005, 291, 31, 27, 22, 4),
+    (991100000000000006, 278, 35, 16, 29, 5),
+    (991100000000000007, 421, 53, 14, 72, 13),
+    (991100000000000008, 397, 46, 32, 58, 9),
+    (991100000000000009, 265, 29, 38, 18, 6),
+    (991100000000000010, 368, 51, 21, 63, 10),
+    (991100000000000011, 332, 44, 11, 69, 12),
+    (991100000000000012, 247, 32, 18, 35, 5),
+    (991100000000000013, 309, 36, 41, 24, 7),
+    (991100000000000014, 283, 27, 46, 19, 8),
+    (991100000000000015, 341, 48, 25, 39, 9)
+ON DUPLICATE KEY UPDATE
+    view_count = GREATEST(view_count, VALUES(view_count)),
+    like_count = GREATEST(like_count, VALUES(like_count)),
+    comment_count = GREATEST(comment_count, VALUES(comment_count)),
+    favorite_count = GREATEST(favorite_count, VALUES(favorite_count)),
+    share_count = GREATEST(share_count, VALUES(share_count)),
+    update_time = CURRENT_TIMESTAMP(3);
+
+SET @community_seed_identity_conflicts := (
+    SELECT COUNT(*)
+    FROM (
+        SELECT 991110000000000001 AS id, 991100000000000001 AS post_id, 991000000000000001 AS tag_id
+        UNION ALL SELECT 991110000000000002, 991100000000000001, 991000000000000002
+        UNION ALL SELECT 991110000000000003, 991100000000000002, 991000000000000001
+        UNION ALL SELECT 991110000000000004, 991100000000000002, 991000000000000002
+        UNION ALL SELECT 991110000000000005, 991100000000000003, 991000000000000001
+        UNION ALL SELECT 991110000000000006, 991100000000000003, 991000000000000002
+        UNION ALL SELECT 991110000000000007, 991100000000000004, 991000000000000003
+        UNION ALL SELECT 991110000000000008, 991100000000000004, 991000000000000004
+        UNION ALL SELECT 991110000000000009, 991100000000000005, 991000000000000003
+        UNION ALL SELECT 991110000000000010, 991100000000000005, 991000000000000004
+        UNION ALL SELECT 991110000000000011, 991100000000000006, 991000000000000003
+        UNION ALL SELECT 991110000000000012, 991100000000000006, 991000000000000004
+        UNION ALL SELECT 991110000000000013, 991100000000000007, 991000000000000005
+        UNION ALL SELECT 991110000000000014, 991100000000000007, 991000000000000006
+        UNION ALL SELECT 991110000000000015, 991100000000000008, 991000000000000005
+        UNION ALL SELECT 991110000000000016, 991100000000000008, 991000000000000006
+        UNION ALL SELECT 991110000000000017, 991100000000000009, 991000000000000005
+        UNION ALL SELECT 991110000000000018, 991100000000000009, 991000000000000006
+        UNION ALL SELECT 991110000000000019, 991100000000000010, 991000000000000007
+        UNION ALL SELECT 991110000000000020, 991100000000000010, 991000000000000008
+        UNION ALL SELECT 991110000000000021, 991100000000000011, 991000000000000007
+        UNION ALL SELECT 991110000000000022, 991100000000000011, 991000000000000008
+        UNION ALL SELECT 991110000000000023, 991100000000000012, 991000000000000007
+        UNION ALL SELECT 991110000000000024, 991100000000000012, 991000000000000008
+        UNION ALL SELECT 991110000000000025, 991100000000000013, 991000000000000009
+        UNION ALL SELECT 991110000000000026, 991100000000000013, 991000000000000010
+        UNION ALL SELECT 991110000000000027, 991100000000000014, 991000000000000009
+        UNION ALL SELECT 991110000000000028, 991100000000000014, 991000000000000010
+        UNION ALL SELECT 991110000000000029, 991100000000000015, 991000000000000009
+        UNION ALL SELECT 991110000000000030, 991100000000000015, 991000000000000010
+    ) expected
+    WHERE EXISTS (
+        SELECT 1
+        FROM t_post_tag_ref existing
+        WHERE existing.id = expected.id
+          AND (existing.post_id <> expected.post_id OR existing.tag_id <> expected.tag_id)
+    )
+       OR EXISTS (
+        SELECT 1
+        FROM t_post_tag_ref existing
+        WHERE existing.post_id = expected.post_id
+          AND existing.tag_id = expected.tag_id
+          AND existing.id <> expected.id
+    )
+);
+INSERT INTO offerlab_demo_seed_assertion (assertion_name, conflict_count)
+VALUES ('community_post_tag_identity', @community_seed_identity_conflicts);
+
+INSERT IGNORE INTO t_post_tag_ref (id, post_id, tag_id) VALUES
+    (991110000000000001, 991100000000000001, 991000000000000001),
+    (991110000000000002, 991100000000000001, 991000000000000002),
+    (991110000000000003, 991100000000000002, 991000000000000001),
+    (991110000000000004, 991100000000000002, 991000000000000002),
+    (991110000000000005, 991100000000000003, 991000000000000001),
+    (991110000000000006, 991100000000000003, 991000000000000002),
+    (991110000000000007, 991100000000000004, 991000000000000003),
+    (991110000000000008, 991100000000000004, 991000000000000004),
+    (991110000000000009, 991100000000000005, 991000000000000003),
+    (991110000000000010, 991100000000000005, 991000000000000004),
+    (991110000000000011, 991100000000000006, 991000000000000003),
+    (991110000000000012, 991100000000000006, 991000000000000004),
+    (991110000000000013, 991100000000000007, 991000000000000005),
+    (991110000000000014, 991100000000000007, 991000000000000006),
+    (991110000000000015, 991100000000000008, 991000000000000005),
+    (991110000000000016, 991100000000000008, 991000000000000006),
+    (991110000000000017, 991100000000000009, 991000000000000005),
+    (991110000000000018, 991100000000000009, 991000000000000006),
+    (991110000000000019, 991100000000000010, 991000000000000007),
+    (991110000000000020, 991100000000000010, 991000000000000008),
+    (991110000000000021, 991100000000000011, 991000000000000007),
+    (991110000000000022, 991100000000000011, 991000000000000008),
+    (991110000000000023, 991100000000000012, 991000000000000007),
+    (991110000000000024, 991100000000000012, 991000000000000008),
+    (991110000000000025, 991100000000000013, 991000000000000009),
+    (991110000000000026, 991100000000000013, 991000000000000010),
+    (991110000000000027, 991100000000000014, 991000000000000009),
+    (991110000000000028, 991100000000000014, 991000000000000010),
+    (991110000000000029, 991100000000000015, 991000000000000009),
+    (991110000000000030, 991100000000000015, 991000000000000010);
+
+INSERT INTO t_user_counter (user_id, post_count)
+VALUES (
+    @community_demo_uid,
+    (SELECT COUNT(*)
+     FROM t_post_main
+     WHERE author_id = @community_demo_uid
+       AND post_status = 1
+       AND is_deleted = 0)
+)
+ON DUPLICATE KEY UPDATE
+    post_count = VALUES(post_count),
+    update_time = CURRENT_TIMESTAMP(3);
+DROP TEMPORARY TABLE offerlab_demo_seed_assertion;
+-- END GENERATED FROM db/migration/20260712_demo_community_seed.sql
+
+-- Restoring 1 commits the fresh-init transaction. Restoring 0 leaves the
+-- existing-database refresh transaction open for its own postcondition guard.
+SET SESSION autocommit = @offerlab_demo_seed_original_autocommit;
+SET @offerlab_demo_seed_original_autocommit := NULL;

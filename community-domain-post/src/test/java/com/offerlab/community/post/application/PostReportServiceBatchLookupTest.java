@@ -8,6 +8,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostReportPO;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,6 +28,8 @@ class PostReportServiceBatchLookupTest {
         PostReportService service = new PostReportService(
                 postRepository,
                 mapperReturning(List.of(report(101L, 11L), report(102L, 12L), report(103L, 11L))),
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -114,7 +117,12 @@ class PostReportServiceBatchLookupTest {
         }
 
         @Override
-        public void update(Post post) {
+        public boolean update(Post post) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean updateStatusIfCurrent(Long postId, Integer expectedStatus, Integer nextStatus, Integer expectedVersion) {
             throw new UnsupportedOperationException();
         }
 
@@ -135,6 +143,12 @@ class PostReportServiceBatchLookupTest {
 
         @Override
         public List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
+                                            LocalDateTime cursorTime, Long cursorId, int size) {
             throw new UnsupportedOperationException();
         }
     }

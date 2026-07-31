@@ -37,8 +37,27 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
             WHERE creator_uid = #{creatorUid}
               AND is_deleted = 0
             ORDER BY update_time DESC, id DESC
+            LIMIT 100
             """)
     List<ContentSeriesPO> selectMine(@Param("creatorUid") Long creatorUid);
+
+    @Select("""
+            SELECT id
+            FROM t_user_account
+            WHERE id = #{creatorUid}
+              AND is_deleted = 0
+            LIMIT 1
+            FOR UPDATE
+            """)
+    Long lockCreator(@Param("creatorUid") Long creatorUid);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_content_series
+            WHERE creator_uid = #{creatorUid}
+              AND is_deleted = 0
+            """)
+    long countActiveByCreator(@Param("creatorUid") Long creatorUid);
 
     @Select("""
             SELECT id,
@@ -140,6 +159,7 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
               ON sp.series_id = s.id
              AND sp.is_deleted = 0
             WHERE s.is_deleted = 0
+              AND s.visibility = 1
               AND sp.post_id IN
               <foreach collection="postIds" item="postId" open="(" separator="," close=")">
                 #{postId}

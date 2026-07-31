@@ -9,6 +9,9 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
 import com.offerlab.community.infra.review.ReviewQueueSourceActionHandler;
+import com.offerlab.community.infra.review.ReviewQueueSourceDomainResolver;
+import com.offerlab.community.infra.security.AdminPermissionService;
+import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.search.api.dto.ReviewQueueCreateCmd;
 import com.offerlab.community.search.infrastructure.persistence.mapper.ReviewQueueMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.ReviewQueueItemPO;
@@ -19,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -32,6 +36,9 @@ public class ReviewQueueService implements ReviewQueuePublisher {
 
     private static final int DEFAULT_LIMIT = 50;
     private static final int MAX_LIMIT = 100;
+    private static final int ACCESSIBLE_SCAN_BATCH_SIZE = 100;
+    private static final int MAX_ACCESSIBLE_SCAN_ROWS = 5000;
+    private static final String SOURCE_CONTACT_REQUEST_REPORT = "CONTACT_REQUEST_REPORT";
     private static final List<String> OPEN_STATUSES = List.of(ReviewQueueMapper.STATUS_PENDING, ReviewQueueMapper.STATUS_CLAIMED);
 
     private final ReviewQueueMapper mapper;
@@ -39,15 +46,36 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     private final AdminAuditService auditService;
     private final MigrationCheckService migrationCheckService;
     private final List<ReviewQueueSourceActionHandler> sourceActionHandlers;
+    private final List<ReviewQueueSourceDomainResolver> sourceDomainResolvers;
+    private final AdminPermissionService adminPermissionService;
+    private final DomainModeratorService domainModeratorService;
 
     public List<ReviewQueueItemPO> list(String status, String sourceType, String riskLevel, int limit) {
+        return list(status, sourceType, riskLevel, limit, null);
+    }
+
+    public List<ReviewQueueItemPO> list(String status, String sourceType, String riskLevel, int limit, Long operatorUid) {
         if (!queueReady()) {
             return List.of();
         }
-        return mapper.list(normalizeStatus(status), normalizeSourceType(sourceType), normalizeRiskLevel(riskLevel), clamp(limit));
+        if (operatorUid == null) {
+            return mapper.list(normalizeStatus(status), normalizeSourceType(sourceType), normalizeRiskLevel(riskLevel), clamp(limit));
+        }
+        requireQueueAccess(operatorUid);
+        int requestedLimit = clamp(limit);
+        if (hasGlobalReviewScope(operatorUid)) {
+            return mapper.list(normalizeStatus(status), normalizeSourceType(sourceType),
+                    normalizeRiskLevel(riskLevel), requestedLimit);
+        }
+        return listAccessibleItems(operatorUid, normalizeStatus(status), normalizeSourceType(sourceType),
+                normalizeRiskLevel(riskLevel), requestedLimit).items();
     }
 
     public Map<String, Object> status() {
+        return status(null);
+    }
+
+    public Map<String, Object> status(Long operatorUid) {
         Map<String, Long> byStatus = new LinkedHashMap<>();
         for (String status : List.of("pending", "claimed", "approved", "rejected", "closed")) {
             byStatus.put(status, 0L);
@@ -55,14 +83,33 @@ public class ReviewQueueService implements ReviewQueuePublisher {
         if (!queueReady()) {
             return Map.of("available", false, "status", "DOWN", "byStatus", byStatus);
         }
+        if (operatorUid != null) {
+            requireQueueAccess(operatorUid);
+        }
+        if (operatorUid != null && !hasGlobalReviewScope(operatorUid)) {
+            AccessibleScanResult scan = listAccessibleItems(operatorUid, null, null, null, MAX_ACCESSIBLE_SCAN_ROWS);
+            for (ReviewQueueItemPO item : scan.items()) {
+                byStatus.computeIfPresent(item.getQueueStatus(), (key, value) -> value + 1);
+            }
+            return Map.of("available", true, "status", "UP", "byStatus", byStatus,
+                    "scannedRows", scan.scannedRows(), "scanLimited", scan.scanLimited());
+        }
         for (Map<String, Object> row : mapper.countByStatus()) {
             byStatus.put(String.valueOf(row.get("status")), asLong(row.get("count")));
         }
         return Map.of("available", true, "status", "UP", "byStatus", byStatus);
     }
 
+    public ReviewQueueItemPO findSourceItem(String sourceType, Long sourceId) {
+        if (!queueReady() || sourceId == null || sourceId <= 0) {
+            return null;
+        }
+        return mapper.findBySource(normalizeRequiredSourceType(sourceType), sourceId);
+    }
+
     @Transactional
     public ReviewQueueItemPO create(ReviewQueueCreateCmd cmd, Long operatorUid) {
+        requireGlobalQueueAccess(operatorUid);
         ReviewQueueItemCommand command = new ReviewQueueItemCommand(
                 cmd.getSourceType(),
                 cmd.getSourceId(),
@@ -83,12 +130,15 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     @Override
     @Transactional
     public void upsert(ReviewQueueItemCommand command) {
-        try {
-            upsertInternal(command);
-        } catch (RuntimeException e) {
-            log.warn("review queue source upsert failed: sourceType={} sourceId={}",
-                    command == null ? null : command.sourceType(),
-                    command == null ? null : command.sourceId(), e);
+        upsertInternal(command);
+    }
+
+    @Override
+    @Transactional
+    public void reopen(ReviewQueueItemCommand command) {
+        ReviewQueueItemPO item = upsertInternal(command);
+        if (item.getSourceId() != null) {
+            mapper.reopenBySource(item.getSourceType(), item.getSourceId());
         }
     }
 
@@ -103,6 +153,27 @@ public class ReviewQueueService implements ReviewQueuePublisher {
             resolveSourceBestEffort(sourceType, sourceId, status, result, note, null);
         } catch (RuntimeException e) {
             log.warn("review queue source resolve failed: sourceType={} sourceId={}", sourceType, sourceId, e);
+        }
+    }
+
+    @Override
+    @Transactional
+    public void resolveRequired(String sourceType, Long sourceId, String status, String result,
+                                String note, Long operatorUid) {
+        if (!queueReady() || sourceId == null || sourceId <= 0) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(), "Review queue service is unavailable");
+        }
+        SourceResolveResult resolved = resolveSourceInternal(sourceType, sourceId, status, result, note, operatorUid);
+        if (resolved == null) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "Review queue item changed concurrently; refresh and retry");
+        }
+        if (operatorUid != null) {
+            auditService.recordRequired(operatorUid, "REVIEW_QUEUE_SOURCE_RESOLVE", "REVIEW_QUEUE",
+                    resolved.before().getId(), resolved.before(), resolved.after(), clean(note));
+        } else {
+            auditService.record(null, "SYSTEM_REVIEW_QUEUE_SOURCE_RESOLVE", "REVIEW_QUEUE",
+                    resolved.before().getId(), resolved.before(), resolved.after(), clean(note));
         }
     }
 
@@ -127,7 +198,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     }
 
     private SourceResolveResult resolveSourceInternal(String sourceType, Long sourceId, String status, String result,
-                                                     String note, Long operatorUid) {
+                                                       String note, Long operatorUid) {
         if (!queueReady() || sourceId == null || sourceId <= 0) {
             return null;
         }
@@ -173,6 +244,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     @Transactional
     public ReviewQueueItemPO claim(Long id, Long operatorUid) {
         ReviewQueueItemPO before = requireItem(id);
+        requireCanAccessItem(operatorUid, before);
         int updated = mapper.claim(id, operatorUid);
         if (updated == 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
@@ -185,6 +257,7 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     @Transactional
     public ReviewQueueItemPO release(Long id, Long operatorUid, String note) {
         ReviewQueueItemPO before = requireItem(id);
+        requireCanAccessItem(operatorUid, before);
         int updated = mapper.release(id, operatorUid);
         if (updated == 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
@@ -214,27 +287,31 @@ public class ReviewQueueService implements ReviewQueuePublisher {
 
     private ReviewQueueItemPO resolve(Long id, Long operatorUid, String status, String result, String note, String action) {
         ReviewQueueItemPO before = requireItem(id);
+        requireCanAccessItem(operatorUid, before);
         if (!OPEN_STATUSES.contains(before.getQueueStatus())) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
+        dispatchSourceAction(before, status, result, note, operatorUid, true);
         int updated = mapper.resolve(id, status, result, clean(note), operatorUid);
         if (updated == 0) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         ReviewQueueItemPO after = requireItem(id);
-        dispatchSourceAction(after, status, result, note, operatorUid);
+        dispatchSourceAction(after, status, result, note, operatorUid, false);
         auditService.recordRequired(operatorUid, action, "REVIEW_QUEUE", id, before, after, clean(note));
         return after;
     }
 
-    private void dispatchSourceAction(ReviewQueueItemPO item, String status, String result, String note, Long operatorUid) {
+    private void dispatchSourceAction(ReviewQueueItemPO item, String status, String result, String note,
+                                      Long operatorUid, boolean beforeQueueResolution) {
         if (item == null || item.getSourceId() == null || sourceActionHandlers == null || sourceActionHandlers.isEmpty()) {
             return;
         }
         String sourceType = item.getSourceType();
         for (ReviewQueueSourceActionHandler handler : sourceActionHandlers) {
-            if (handler.supports(sourceType)) {
-                handler.handle(sourceType, item.getSourceId(), status, result, note, operatorUid);
+            if (handler.supports(sourceType)
+                    && handler.resolveSourceBeforeQueue() == beforeQueueResolution) {
+                handler.handle(sourceType, item.getSourceId(), status, result, note, operatorUid, item.getExtJson());
             }
         }
     }
@@ -264,6 +341,119 @@ public class ReviewQueueService implements ReviewQueuePublisher {
             log.warn("review queue table unavailable: {}", e.getMessage());
             return false;
         }
+    }
+
+    private void requireQueueAccess(Long operatorUid) {
+        if (operatorUid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        if (hasGlobalReviewScope(operatorUid) || domainModeratorService.isDomainModerator(operatorUid)) {
+            return;
+        }
+        throw new BizException(ErrorCode.FORBIDDEN);
+    }
+
+    private void requireGlobalQueueAccess(Long operatorUid) {
+        if (operatorUid == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        if (!hasGlobalReviewScope(operatorUid)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
+    }
+
+    private void requireCanAccessItem(Long operatorUid, ReviewQueueItemPO item) {
+        requireQueueAccess(operatorUid);
+        if (!canAccessItem(operatorUid, item)) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+    }
+
+    private boolean canAccessItem(Long operatorUid, ReviewQueueItemPO item) {
+        if (hasGlobalReviewScope(operatorUid)) {
+            return true;
+        }
+        Integer domain = resolveItemDomain(item);
+        if (domain != null) {
+            return domainModeratorService.canModerateDomain(operatorUid, domain);
+        }
+        return isCrossDomainGovernanceItem(item) && domainModeratorService.isDomainModerator(operatorUid);
+    }
+
+    private boolean isCrossDomainGovernanceItem(ReviewQueueItemPO item) {
+        return item != null && SOURCE_CONTACT_REQUEST_REPORT.equalsIgnoreCase(item.getSourceType());
+    }
+
+    private Integer resolveItemDomain(ReviewQueueItemPO item) {
+        if (item == null || sourceDomainResolvers == null || sourceDomainResolvers.isEmpty()) {
+            return null;
+        }
+        for (ReviewQueueSourceDomainResolver resolver : sourceDomainResolvers) {
+            if (!resolver.supports(item.getSourceType())) {
+                continue;
+            }
+            try {
+                Integer domain = resolver.resolveDomain(item.getSourceType(), item.getSourceId());
+                if (domain != null) {
+                    return domain;
+                }
+            } catch (RuntimeException e) {
+                log.warn("review queue source domain resolve failed: sourceType={} sourceId={}",
+                        item.getSourceType(), item.getSourceId(), e);
+            }
+        }
+        return null;
+    }
+
+    private AccessibleScanResult listAccessibleItems(Long operatorUid,
+                                                     String status,
+                                                     String sourceType,
+                                                     String riskLevel,
+                                                     int requestedLimit) {
+        List<ReviewQueueItemPO> accessible = new ArrayList<>(Math.min(requestedLimit, MAX_LIMIT));
+        Integer beforePriority = null;
+        java.time.LocalDateTime beforeCreateTime = null;
+        Long beforeId = null;
+        int scannedRows = 0;
+        boolean scanLimited = false;
+
+        while (accessible.size() < requestedLimit && scannedRows < MAX_ACCESSIBLE_SCAN_ROWS) {
+            int remainingScanRows = MAX_ACCESSIBLE_SCAN_ROWS - scannedRows;
+            int batchSize = Math.min(ACCESSIBLE_SCAN_BATCH_SIZE, remainingScanRows);
+            List<ReviewQueueItemPO> rows = mapper.listAfter(status, sourceType, riskLevel,
+                    beforePriority, beforeCreateTime, beforeId, batchSize);
+            if (rows == null || rows.isEmpty()) {
+                break;
+            }
+            scannedRows += rows.size();
+            for (ReviewQueueItemPO item : rows) {
+                if (canAccessItem(operatorUid, item)) {
+                    accessible.add(item);
+                    if (accessible.size() >= requestedLimit) {
+                        break;
+                    }
+                }
+            }
+            ReviewQueueItemPO last = rows.get(rows.size() - 1);
+            beforePriority = last.getPriority() == null ? 0 : last.getPriority();
+            beforeCreateTime = last.getCreateTime();
+            beforeId = last.getId();
+            if (rows.size() < batchSize || beforeCreateTime == null || beforeId == null) {
+                break;
+            }
+        }
+        if (accessible.size() < requestedLimit && scannedRows >= MAX_ACCESSIBLE_SCAN_ROWS) {
+            scanLimited = true;
+            log.warn("review queue accessible scan reached limit, operatorUid={}, status={}, sourceType={}, riskLevel={}, requestedLimit={}, scannedRows={}",
+                    operatorUid, status, sourceType, riskLevel, requestedLimit, scannedRows);
+        }
+        return new AccessibleScanResult(accessible, scannedRows, scanLimited);
+    }
+
+    private boolean hasGlobalReviewScope(Long operatorUid) {
+        return operatorUid != null && (adminPermissionService.isAdmin(operatorUid)
+                || adminPermissionService.hasRole(operatorUid, AdminPermissionService.ROLE_CONTENT_MODERATOR)
+                || adminPermissionService.isLocalOpenMode());
     }
 
     private static int clamp(int limit) {
@@ -349,5 +539,8 @@ public class ReviewQueueService implements ReviewQueuePublisher {
     }
 
     private record SourceResolveResult(ReviewQueueItemPO before, ReviewQueueItemPO after) {
+    }
+
+    private record AccessibleScanResult(List<ReviewQueueItemPO> items, int scannedRows, boolean scanLimited) {
     }
 }

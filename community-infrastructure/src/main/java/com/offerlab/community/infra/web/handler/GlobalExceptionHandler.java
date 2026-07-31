@@ -8,9 +8,13 @@ import com.offerlab.community.infra.trace.TraceContext;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -20,8 +24,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientException;
 
 @Slf4j
 @RestControllerAdvice
@@ -60,7 +64,24 @@ public class GlobalExceptionHandler {
                 || ErrorCode.INVALID_STATUS.getCode().equals(code)) {
             return HttpStatus.BAD_REQUEST;
         }
-        return HttpStatus.OK;
+        if (ErrorCode.DUPLICATE_OPERATION.getCode().equals(code)
+                || ErrorCode.CONCURRENT_MODIFICATION.getCode().equals(code)) {
+            return HttpStatus.CONFLICT;
+        }
+        if (ErrorCode.DATABASE_ERROR.getCode().equals(code)
+                || ErrorCode.CACHE_ERROR.getCode().equals(code)
+                || ErrorCode.MQ_ERROR.getCode().equals(code)
+                || ErrorCode.ELASTICSEARCH_ERROR.getCode().equals(code)
+                || ErrorCode.DEPENDENCY_ERROR.getCode().equals(code)) {
+            return HttpStatus.SERVICE_UNAVAILABLE;
+        }
+        if (code != null && code >= 30000 && code < 40000) {
+            return HttpStatus.BAD_REQUEST;
+        }
+        if (code != null && code >= 20000 && code < 30000) {
+            return HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        return HttpStatus.BAD_REQUEST;
     }
 
     @ExceptionHandler(SystemException.class)
@@ -68,24 +89,76 @@ public class GlobalExceptionHandler {
         log.error("[sys] code={}", e.getCode(), e);
         Result<?> r = Result.fail(e.getCode(), e.getMessage());
         r.setTraceId(TraceContext.get());
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(r);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(r);
     }
 
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<Result<?>> handleDataAccess(DataAccessException e) {
-        log.error("[db]", e);
-        boolean missingSchema = looksLikeMissingSchema(e);
         String traceId = TraceContext.ensure();
-        String message = missingSchema
-                ? "数据库迁移未补齐，请先执行对应的 db/migration 增量脚本"
-                : "数据库暂时不可用，请稍后重试";
+        boolean retryable = retryableDatabaseFailure(e);
+        HttpStatus status = retryable
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.INTERNAL_SERVER_ERROR;
+        // Diagnostics stay server-side and are correlated through traceId.
+        log.error("[db] category={} retryable={} capability={} traceId={}",
+                databaseFailureCategory(e, retryable), retryable, affectedCapability(e), traceId, e);
         Result<?> r = Result.builder()
                 .code(ErrorCode.DATABASE_ERROR.getCode())
-                .message(message)
-                .data(databaseDiagnostic(e, missingSchema, traceId))
+                .message(retryable
+                        ? "Database is temporarily unavailable. Please try again later."
+                        : "Request could not be completed.")
                 .traceId(traceId)
                 .build();
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(r);
+        return ResponseEntity.status(status).body(r);
+    }
+
+    private boolean retryableDatabaseFailure(Throwable e) {
+        if (e instanceof DataIntegrityViolationException
+                || e instanceof InvalidDataAccessResourceUsageException) {
+            return false;
+        }
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof TransientDataAccessException
+                    || current instanceof RecoverableDataAccessException
+                    || current instanceof DataAccessResourceFailureException
+                    || current instanceof SQLTransientException
+                    || current instanceof SQLRecoverableException) {
+                return true;
+            }
+            Throwable cause = current.getCause();
+            if (cause == current) {
+                break;
+            }
+            current = cause;
+        }
+        return false;
+    }
+
+    private String databaseFailureCategory(Throwable e, boolean retryable) {
+        if (schemaIssue(e)) {
+            return "SQL_OR_SCHEMA_ERROR";
+        }
+        if (e instanceof DataIntegrityViolationException) {
+            return "DATA_INTEGRITY_ERROR";
+        }
+        return retryable ? "TRANSIENT_DATABASE_ERROR" : "PERMANENT_DATABASE_ERROR";
+    }
+
+    private boolean schemaIssue(Throwable e) {
+        String message = e == null ? "" : String.valueOf(e.getMessage()).toLowerCase();
+        return message.contains("unknown column")
+                || message.contains("unknown table")
+                || message.contains("doesn't exist")
+                || message.contains("bad sql grammar");
+    }
+
+    private String affectedCapability(Throwable e) {
+        String message = e == null ? "" : String.valueOf(e.getMessage()).toLowerCase();
+        if (message.contains("tag_") || message.contains("t_tag")) {
+            return "TAG_GOVERNANCE";
+        }
+        return "UNKNOWN";
     }
 
     @ExceptionHandler({
@@ -127,53 +200,4 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(r);
     }
 
-    private boolean looksLikeMissingSchema(Throwable e) {
-        if (e instanceof BadSqlGrammarException) {
-            return true;
-        }
-        String message = String.valueOf(e.getMessage()).toLowerCase();
-        return message.contains("unknown column")
-                || message.contains("doesn't exist")
-                || message.contains("does not exist")
-                || message.contains("bad sql grammar");
-    }
-
-    private Map<String, Object> databaseDiagnostic(DataAccessException e, boolean missingSchema, String traceId) {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("errorCategory", missingSchema ? "SCHEMA_MISMATCH" : "DEPENDENCY_DOWN");
-        data.put("schemaIssue", missingSchema);
-        data.put("traceId", traceId);
-        data.put("exceptionType", e.getClass().getSimpleName());
-        data.put("affectedCapability", inferCapability(e));
-        data.put("migrationHint", missingSchema
-                ? "Run scripts/check-schema-readiness.mjs and apply the missing db/migration scripts after explicit confirmation."
-                : "No schema migration hint is available for this error.");
-        data.put("recommendedAction", missingSchema
-                ? "Check /api/v1/ops/migration/status, then apply the listed migrations before retrying the user action."
-                : "Check datasource connectivity, credentials, and database server health before retrying the user action.");
-        return data;
-    }
-
-    private String inferCapability(Throwable e) {
-        String message = String.valueOf(e.getMessage()).toLowerCase();
-        if (message.contains("t_tag") || message.contains("tag_status") || message.contains("synonyms")) {
-            return "TAG_GOVERNANCE";
-        }
-        if (message.contains("review_queue")) {
-            return "REVIEW_QUEUE";
-        }
-        if (message.contains("mock_interview") || message.contains("ai_review")) {
-            return "MOCK_INTERVIEW_AI_REVIEW";
-        }
-        if (message.contains("community_topic")) {
-            return "COMMUNITY_TOPIC";
-        }
-        if (message.contains("search_index_retry")) {
-            return "SEARCH_INDEX_RETRY";
-        }
-        if (message.contains("notif_retry")) {
-            return "NOTIFICATION_RETRY";
-        }
-        return "DATABASE";
-    }
 }

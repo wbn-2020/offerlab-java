@@ -15,18 +15,18 @@ public interface CommentReportMapper extends BaseMapper<CommentReportPO> {
 
     @Select("""
             <script>
-            SELECT id,
-                   comment_id AS commentId,
-                   post_id AS postId,
-                   reporter_uid AS reporterUid,
-                   reason,
-                   detail,
-                   report_status AS reportStatus,
-                   reviewer_uid AS reviewerUid,
-                   review_note AS reviewNote,
-                   review_time AS reviewTime,
-                   create_time AS createTime,
-                   update_time AS updateTime
+            SELECT r.id,
+                   r.comment_id AS commentId,
+                   r.post_id AS postId,
+                   r.reporter_uid AS reporterUid,
+                   r.reason,
+                   r.detail,
+                   r.report_status AS reportStatus,
+                   r.reviewer_uid AS reviewerUid,
+                   r.review_note AS reviewNote,
+                   r.review_time AS reviewTime,
+                   r.create_time AS createTime,
+                   r.update_time AS updateTime
             FROM t_comment_report r
             LEFT JOIN t_post_extension e ON e.post_id = r.post_id
             WHERE 1 = 1
@@ -34,7 +34,7 @@ public interface CommentReportMapper extends BaseMapper<CommentReportPO> {
               AND r.report_status = #{status}
             </if>
             <if test="domain != null">
-              AND COALESCE(e.domain, 1) = #{domain}
+              AND e.domain = #{domain}
             </if>
             ORDER BY r.create_time DESC
             LIMIT #{limit}
@@ -47,6 +47,58 @@ public interface CommentReportMapper extends BaseMapper<CommentReportPO> {
     default List<CommentReportPO> selectRecent(Integer status, int limit) {
         return selectRecent(status, null, limit);
     }
+
+    @Select("""
+            <script>
+            SELECT id,
+                   comment_id AS commentId,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   review_time AS reviewTime,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_comment_report
+            WHERE reporter_uid = #{reporterUid}
+            <if test="status != null">
+              AND report_status = #{status}
+            </if>
+            <if test="cursor != null and cursor > 0">
+              AND id &lt; #{cursor}
+            </if>
+            ORDER BY id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<CommentReportPO> selectByReporter(@Param("reporterUid") Long reporterUid,
+                                           @Param("status") Integer status,
+                                           @Param("cursor") Long cursor,
+                                           @Param("limit") int limit);
+
+    default List<CommentReportPO> selectByReporter(Long reporterUid, Integer status, int limit) {
+        return selectByReporter(reporterUid, status, null, limit);
+    }
+
+    @Select("""
+            SELECT id,
+                   comment_id AS commentId,
+                   post_id AS postId,
+                   reporter_uid AS reporterUid,
+                   reason,
+                   detail,
+                   report_status AS reportStatus,
+                   review_time AS reviewTime,
+                   create_time AS createTime,
+                   update_time AS updateTime
+            FROM t_comment_report
+            WHERE id = #{reportId}
+              AND reporter_uid = #{reporterUid}
+            LIMIT 1
+            """)
+    CommentReportPO selectByIdAndReporter(@Param("reportId") Long reportId,
+                                          @Param("reporterUid") Long reporterUid);
 
     @Select("""
             SELECT id,

@@ -23,5 +23,9 @@ public class PostUpdateCmd {
     private Boolean anonymous;
     private List<Long> tagIds;
     private List<String> tagNames;
+    private String publicUpdateSummary;
+    private String impactScope;
+    private List<Long> respondedSuggestionIds;
     private Boolean reviewRequired;
+    private Boolean keywordReviewRequired;
 }

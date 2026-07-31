@@ -4,6 +4,8 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.web.handler.GlobalExceptionHandler;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -19,23 +21,49 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class GlobalExceptionHandlerApiTest {
 
     @Test
-    void missingSchemaSqlErrorsReturnStructuredDatabaseDiagnostic() throws Exception {
+    void permanentSqlErrorsReturn500WithoutInternalDiagnostics() throws Exception {
         MockMvc mvc = MockMvcBuilders.standaloneSetup(new BrokenSchemaController())
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 
+        // Audit item 5.6: schema state, exception class names, ops scripts and
+        // internal endpoints must never reach the client. Ops correlates via
+        // traceId against server logs instead.
         mvc.perform(get("/broken-schema"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DATABASE_ERROR.getCode()))
-                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.message").value("Request could not be completed."))
                 .andExpect(jsonPath("$.traceId").isNotEmpty())
-                .andExpect(jsonPath("$.data.errorCategory").value("SCHEMA_MISMATCH"))
-                .andExpect(jsonPath("$.data.schemaIssue").value(true))
-                .andExpect(jsonPath("$.data.exceptionType").value("BadSqlGrammarException"))
-                .andExpect(jsonPath("$.data.affectedCapability").value("TAG_GOVERNANCE"))
-                .andExpect(jsonPath("$.data.migrationHint").value("Run scripts/check-schema-readiness.mjs and apply the missing db/migration scripts after explicit confirmation."))
-                .andExpect(jsonPath("$.data.recommendedAction").value("Check /api/v1/ops/migration/status, then apply the listed migrations before retrying the user action."))
-                .andExpect(jsonPath("$.data.traceId").isNotEmpty());
+                .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    void transientDatabaseErrorsReturn503WithoutInternalDiagnostics() throws Exception {
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new TransientDatabaseController())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mvc.perform(get("/transient-database"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value(ErrorCode.DATABASE_ERROR.getCode()))
+                .andExpect(jsonPath("$.message")
+                        .value("Database is temporarily unavailable. Please try again later."))
+                .andExpect(jsonPath("$.traceId").isNotEmpty())
+                .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    void integrityErrorsReturn500WithoutConstraintDiagnostics() throws Exception {
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new IntegrityFailureController())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mvc.perform(get("/integrity-failure"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value(ErrorCode.DATABASE_ERROR.getCode()))
+                .andExpect(jsonPath("$.message").value("Request could not be completed."))
+                .andExpect(jsonPath("$.traceId").isNotEmpty())
+                .andExpect(jsonPath("$.data").doesNotExist());
     }
 
     @Test
@@ -50,6 +78,18 @@ class GlobalExceptionHandlerApiTest {
                 .andExpect(jsonPath("$.message").value(ErrorCode.POST_NOT_FOUND.getMessage()));
     }
 
+    @Test
+    void concurrentModificationBusinessErrorReturnsHttp409() throws Exception {
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new ConcurrentModificationController())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mvc.perform(get("/concurrent-modification"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(ErrorCode.CONCURRENT_MODIFICATION.getCode()))
+                .andExpect(jsonPath("$.message").value(ErrorCode.CONCURRENT_MODIFICATION.getMessage()));
+    }
+
     @RestController
     private static class BrokenSchemaController {
         @GetMapping("/broken-schema")
@@ -60,10 +100,35 @@ class GlobalExceptionHandlerApiTest {
     }
 
     @RestController
+    private static class TransientDatabaseController {
+        @GetMapping("/transient-database")
+        Object transientDatabase() {
+            throw new TransientDataAccessResourceException("connection pool exhausted");
+        }
+    }
+
+    @RestController
+    private static class IntegrityFailureController {
+        @GetMapping("/integrity-failure")
+        Object integrityFailure() {
+            throw new DataIntegrityViolationException(
+                    "duplicate value violates unique constraint user_email_key");
+        }
+    }
+
+    @RestController
     private static class NotFoundController {
         @GetMapping("/missing-post")
         Object missingPost() {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+    }
+
+    @RestController
+    private static class ConcurrentModificationController {
+        @GetMapping("/concurrent-modification")
+        Object concurrentModification() {
+            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
         }
     }
 }

@@ -110,6 +110,10 @@ public class DomainConfigService {
                 || RISK_HIGH.equalsIgnoreCase(config.getRiskLevel());
     }
 
+    public String riskLevelForDomain(Integer domain) {
+        return getDomainConfig(requireKnownDomain(domain)).getRiskLevel().toLowerCase(Locale.ROOT);
+    }
+
     private DomainConfigDTO getDomainConfig(Integer domain) {
         if (!tableReady()) {
             return defaultByDomain().get(requireKnownDomain(domain));

@@ -16,11 +16,24 @@ class V4SearchDiscoveryGuardTest {
     void publicSearchEndpointMustStayPublicAndNonDemo() throws Exception {
         String controller = read("src/main/java/com/offerlab/community/search/controller/SearchController.java");
         String facade = read("src/main/java/com/offerlab/community/search/application/SearchFacadeImpl.java");
+        String indexer = read("src/main/java/com/offerlab/community/search/application/PostSearchIndexer.java");
+        String postMapper = read("../community-domain-post/src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/PostMapper.java");
 
-        assertTrue(controller.contains("facade.searchPosts(keyword, company, position, type, sort, cursor, size, false).publicView()"),
-                "public search endpoint must force includeTestData=false and return publicView");
-        assertTrue(facade.contains("filterVisibleSearchResults(items, includeTestData)"),
-                "search results must pass public visibility and test-data filtering before output");
+        assertTrue(controller.contains("facade.searchPosts(keyword, company, position, type, domain, sort, cursor, size, false,")
+                        && controller.contains("trustFilter).publicView()"),
+                "public search endpoint must force includeTestData=false, retain trusted filters, and return publicView");
+        assertTrue(controller.contains("@RequestParam(required = false) @Min(1) @Max(5) Integer domain"),
+                "public search endpoint must validate the domain filter");
+        assertTrue(facade.contains("Map.of(\"term\", Map.of(\"domain\", domain))"),
+                "Elasticsearch search must filter by domain");
+        assertTrue(indexer.contains("doc.put(\"domain\"")
+                        && indexer.contains("props.put(\"domain\", Map.of(\"type\", \"integer\"))"),
+                "Elasticsearch documents and mappings must include domain");
+        assertTrue(postMapper.contains("<if test=\"domain != null\">")
+                        && postMapper.contains("AND e.domain = #{domain}"),
+                "MySQL fallback search must filter by the indexed domain without classifying null as TECH");
+        assertTrue(facade.contains("filterVisibleSearchResults(items, includeTestData, domain)"),
+                "search results must pass public visibility, test-data, and current domain filtering before output");
         assertTrue(facade.contains("visibleSuggestionSources(hits)"),
                 "suggestions must validate current visible posts before output");
         assertTrue(facade.contains("emptyHints(degraded, fallbackReason, includeTestData)"),

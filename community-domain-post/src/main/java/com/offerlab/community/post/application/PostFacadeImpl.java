@@ -15,8 +15,10 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
@@ -24,13 +26,16 @@ import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
+import com.offerlab.community.post.infrastructure.persistence.mapper.PostTrustSignalsMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
+import com.offerlab.community.post.infrastructure.persistence.projection.PostTrustSignalsRow;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -59,6 +64,7 @@ public class PostFacadeImpl implements PostFacade {
     private final PostExtensionMapper extensionMapper;
     private final PostCounterMapper counterMapper;
     private final TagMapper tagMapper;
+    private final PostTrustSignalsMapper trustSignalsMapper;
     private final PostCounterRedis postCounterRedis;
     private final PostVersionHistoryService versionHistoryService;
     private final MultiLevelCache<PostDTO> multiLevelCache;
@@ -93,6 +99,51 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
+    public PostDTO getPostMetadata(Long postId) {
+        if (postId == null || postId <= 0) {
+            return null;
+        }
+        return postRepo.findById(postId).map(this::toFullDto).orElse(null);
+    }
+
+    @Override
+    public PostDTO getPostForAuthor(Long postId, Long authorUid) {
+        if (postId == null || postId <= 0 || authorUid == null || authorUid <= 0) {
+            return null;
+        }
+        PostDTO dto = postRepo.findById(postId)
+                .filter(post -> Objects.equals(post.getAuthorId(), authorUid))
+                .map(this::toFullDto)
+                .orElse(null);
+        return dto == null ? null : enrichFull(dto, authorUid);
+    }
+
+    @Override
+    public Map<Long, PostBriefDTO> batchGetPostsForAuthor(Collection<Long> postIds, Long authorUid) {
+        if (authorUid == null || authorUid <= 0) {
+            return Map.of();
+        }
+        List<Long> normalizedIds = normalizeBatchIds(postIds, MAX_BATCH_LOOKUP_IDS);
+        if (normalizedIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Post> posts = postRepo.batchFindByIds(normalizedIds);
+        Map<Long, PostBriefDTO> result = new HashMap<>();
+        for (Post post : posts.values()) {
+            if (Objects.equals(post.getAuthorId(), authorUid)) {
+                result.put(post.getId(), PostBriefDTO.builder()
+                        .id(post.getId())
+                        .authorId(post.getAuthorId())
+                        .title(post.getTitle())
+                        .summary(summary(post.getContent()))
+                        .createTime(post.getCreateTime())
+                        .build());
+            }
+        }
+        return result;
+    }
+
+    @Override
     public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) {
         return batchGetPosts(postIds, null);
     }
@@ -108,9 +159,16 @@ public class PostFacadeImpl implements PostFacade {
         if (normalizedIds.isEmpty()) return Map.of();
         Map<Long, Post> posts = postRepo.batchFindByIds(normalizedIds);
         Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.keySet());
+        Map<Long, Boolean> followingByAuthor = viewerUid == null
+                ? Map.of()
+                : userFacade.batchIsFollowing(viewerUid, posts.values().stream()
+                        .map(Post::getAuthorId)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .toList());
         Map<Long, PostBriefDTO> result = new HashMap<>(posts.size());
         for (Post p : posts.values()) {
-            boolean following = viewerUid != null && p.getAuthorId() != null && userFacade.isFollowing(viewerUid, p.getAuthorId());
+            boolean following = Boolean.TRUE.equals(followingByAuthor.get(p.getAuthorId()));
             if (p.isVisibleTo(viewerUid, following)) {
                 result.put(p.getId(), toBrief(p, tags.getOrDefault(p.getId(), List.of())));
             }
@@ -139,6 +197,7 @@ public class PostFacadeImpl implements PostFacade {
                 .toList();
 
         if (!missingIds.isEmpty()) {
+            Map<Long, Long> counterEpochs = postCounterRedis.captureEpochs(missingIds);
             List<PostCounterPO> dbList = counterMapper.selectBatchIds(missingIds);
             for (PostCounterPO c : dbList) {
                 PostCounterDTO dto = PostCounterDTO.builder()
@@ -150,7 +209,8 @@ public class PostFacadeImpl implements PostFacade {
                         .build();
                 result.put(c.getPostId(), dto);
                 postCounterRedis.fillFromDb(c.getPostId(), c.getViewCount(), c.getLikeCount(),
-                        c.getCommentCount(), c.getFavoriteCount(), 0L);
+                        c.getCommentCount(), c.getFavoriteCount(), 0L,
+                        counterEpochs.getOrDefault(c.getPostId(), 0L));
             }
         }
 
@@ -180,12 +240,13 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     @Override
-    public void updatePost(PostUpdateCmd cmd) {
-        postService.update(cmd);
+    public boolean updatePost(PostUpdateCmd cmd) {
+        boolean reviewRequired = postService.update(cmd);
         // 帖子正文、可见性和标签都可能变化，更新成功后必须清理详情缓存。
 
 
         evictPostDetail(cmd.getPostId());
+        return reviewRequired;
     }
 
     @Override
@@ -212,6 +273,18 @@ public class PostFacadeImpl implements PostFacade {
         return versionHistoryService.listRecent(postId, limit);
     }
 
+    @Override
+    public List<PublicPostUpdateDTO> listPublicUpdates(Long postId, int limit) {
+        if (postId == null || postId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        Post post = postRepo.findById(postId).orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        if (!isPubliclyVisible(post)) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        return versionHistoryService.listPublicUpdates(postId, limit);
+    }
+
 
     @Override
     public PageResult<PostBriefDTO> getLatest(long cursor, int size) {
@@ -228,7 +301,13 @@ public class PostFacadeImpl implements PostFacade {
         int limit = pageSize(size);
         Integer activeDomain = requireOptionalDomain(domain);
         HotCursor hotCursor = HotCursor.parse(cursor);
-        return pagedHotPo(postMapper.selectHotPosts(hotCursor.score(), hotCursor.time(), hotCursor.id(), activeDomain, scanSize(limit)), limit);
+        return pagedHotPo(postMapper.selectHotPosts(
+                hotCursor.score(),
+                hotCursor.time(),
+                hotCursor.id(),
+                activeDomain,
+                hotCursor.rankingTime(),
+                scanSize(limit)), limit);
     }
 
     @Override
@@ -244,6 +323,37 @@ public class PostFacadeImpl implements PostFacade {
         List<Post> list = scanPublicPosts(authorId, tagId, postType, featured, activeDomain, cursor, limit);
 
         return paged(list, limit, includeTestData);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> listPostsByKeyset(Long authorId, Long tagId, Integer postType,
+                                                       Boolean featured, Integer domain,
+                                                       LocalDateTime cursorTime, Long cursorId, int size) {
+        Integer activeDomain = requireOptionalDomain(domain);
+        int limit = pageSize(size);
+        List<Post> list = scanPublicPostsByKeyset(
+                authorId, tagId, postType, featured, activeDomain, cursorTime, cursorId, limit);
+        return paged(list, limit, false);
+    }
+
+    @Override
+    public List<PostBriefDTO> listFollowingPostsByKeyset(Long viewerUid, Integer domain,
+                                                         LocalDateTime cursorTime, Long cursorId, int size) {
+        if (viewerUid == null || viewerUid <= 0) {
+            return List.of();
+        }
+        Integer activeDomain = requireOptionalDomain(domain);
+        List<Post> posts = postRepo.findFollowingPostsByKeyset(
+                viewerUid, activeDomain, cursorTime, cursorId, pageSize(size));
+        if (posts.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(posts.stream().map(Post::getId).toList());
+        List<PostBriefDTO> items = posts.stream()
+                .map(post -> toBrief(post, tags.getOrDefault(post.getId(), List.of())))
+                .toList();
+        enrichBriefs(items, viewerUid);
+        return items;
     }
 
     @Override
@@ -286,10 +396,10 @@ public class PostFacadeImpl implements PostFacade {
         } else if (rawHasMore) {
             cursorPost = list.get(list.size() - 1);
         }
-        // 普通列表使用 createTime 毫秒时间戳作为游标，前端需原样传回。
+        // Public post lists use the full Snowflake id as an opaque keyset cursor.
         boolean hasMore = visibleHasMore || rawHasMore;
         String next = hasMore && cursorPost != null
-                ? listCursor(cursorPost.getCreateTime(), cursorPost.getId())
+                ? listCursor(cursorPost.getId())
                 : null;
         return PageResult.of(items, next, hasMore)
                 .withDiagnostic("includeTestData", includeTestData)
@@ -331,9 +441,10 @@ public class PostFacadeImpl implements PostFacade {
         return PageResult.of(items, next, hasMore);
     }
 
-    private PageResult<PostBriefDTO> pagedHotPo(List<PostPO> list, int size) {
+    private PageResult<PostBriefDTO> pagedHotPo(List<PostMapper.HotPostRow> list, int size) {
         if (list.isEmpty()) return PageResult.empty();
-        Map<Long, PostPO> postById = list.stream().collect(Collectors.toMap(PostPO::getId, post -> post, (left, right) -> left));
+        Map<Long, PostMapper.HotPostRow> postById = list.stream()
+                .collect(Collectors.toMap(PostPO::getId, post -> post, (left, right) -> left));
         List<Long> postIds = list.stream().map(PostPO::getId).toList();
         Map<Long, List<TagDTO>> tags = tagsByPostIds(postIds);
         Map<Long, String> extJson = extensionMapper.selectBatchIds(postIds).stream()
@@ -360,7 +471,7 @@ public class PostFacadeImpl implements PostFacade {
         boolean visibleHasMore = visible.size() > size;
         boolean rawHasMore = list.size() > size;
         List<PostBriefDTO> items = visibleHasMore ? visible.subList(0, size) : visible;
-        PostPO cursorPost = null;
+        PostMapper.HotPostRow cursorPost = null;
         if (visibleHasMore && !items.isEmpty()) {
             cursorPost = postById.get(items.get(items.size() - 1).getId());
         } else if (rawHasMore) {
@@ -368,8 +479,7 @@ public class PostFacadeImpl implements PostFacade {
         }
         boolean hasMore = visibleHasMore || rawHasMore;
         String next = hasMore && cursorPost != null
-                ? HotCursor.of(cursorPost,
-                batchGetCounters(List.of(cursorPost.getId())).get(cursorPost.getId()))
+                ? HotCursor.of(cursorPost)
                 : null;
         return PageResult.of(items, next, hasMore);
     }
@@ -420,6 +530,36 @@ public class PostFacadeImpl implements PostFacade {
         return scanned;
     }
 
+    private List<Post> scanPublicPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured,
+                                               Integer domain, LocalDateTime cursorTime, Long cursorId, int pageSize) {
+        int scanLimit = scanSize(pageSize);
+        int maxRows = Math.min(MAX_SYNTHETIC_SCAN_ROWS,
+                Math.max(scanLimit, scanLimit * SYNTHETIC_SCAN_MULTIPLIER));
+        List<Post> scanned = new ArrayList<>();
+        LocalDateTime scanTime = cursorTime;
+        Long scanId = cursorId;
+        while (scanned.size() < maxRows) {
+            int remaining = Math.min(scanLimit, maxRows - scanned.size());
+            List<Post> batch = postRepo.findPostsByKeyset(
+                    authorId, tagId, postType, featured, domain, scanTime, scanId, remaining);
+            if (batch.isEmpty()) {
+                break;
+            }
+            scanned.addAll(batch);
+            if (batch.size() < remaining || hasVisiblePageAfterSyntheticFiltering(scanned, pageSize)) {
+                break;
+            }
+            Post last = batch.get(batch.size() - 1);
+            if (last.getCreateTime() == null || last.getId() == null
+                    || (Objects.equals(scanTime, last.getCreateTime()) && Objects.equals(scanId, last.getId()))) {
+                break;
+            }
+            scanTime = last.getCreateTime();
+            scanId = last.getId();
+        }
+        return scanned;
+    }
+
     private boolean hasVisiblePageAfterSyntheticFiltering(List<Post> posts, int pageSize) {
         if (posts == null || posts.isEmpty()) {
             return false;
@@ -445,7 +585,7 @@ public class PostFacadeImpl implements PostFacade {
         if (post == null) {
             return null;
         }
-        String cursor = listCursor(post.getCreateTime(), post.getId());
+        String cursor = listCursor(post.getId());
         if (cursor == null) {
             return null;
         }
@@ -488,8 +628,10 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, PostCounterDTO> counters = batchGetCounters(postIds);
         Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(
                 posts.stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet()));
+        Map<Long, PostTrustSignalsDTO> trustSignals = trustSignalsByPostIds(postIds);
         posts.forEach(p -> {
             p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
+            p.setTrustSignals(trustSignals.getOrDefault(p.getId(), emptyTrustSignals()));
             boolean revealAuthor = !isAnonymousPost(p) || canViewRealAuthor(viewerUid, p.getAuthorId());
             p.setAuthor(revealAuthor ? sanitizeAuthor(viewerUid, p.getAuthorId(), authors.get(p.getAuthorId())) : anonymousAuthor());
             if (!revealAuthor) {
@@ -518,6 +660,7 @@ public class PostFacadeImpl implements PostFacade {
                 .anonymous(isAnonymousPost(dto))
                 .tags(dto.getTags())
                 .counter(batchGetCounters(List.of(dto.getId())).getOrDefault(dto.getId(), emptyCounter(dto.getId())))
+                .trustSignals(trustSignalsByPostIds(List.of(dto.getId())).getOrDefault(dto.getId(), emptyTrustSignals()))
                 .createTime(dto.getCreateTime())
                 .updateTime(dto.getUpdateTime())
                 .build();
@@ -538,6 +681,12 @@ public class PostFacadeImpl implements PostFacade {
             return true;
         }
         return visibility == Post.VIS_FOLLOWER && userFacade.isFollowing(viewerUid, dto.getAuthorId());
+    }
+
+    private boolean isPubliclyVisible(Post post) {
+        return post != null
+                && Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
+                && (post.getVisibility() == null || Objects.equals(post.getVisibility(), Post.VIS_PUBLIC));
     }
 
     private void evictPostDetail(Long postId) {
@@ -594,7 +743,7 @@ public class PostFacadeImpl implements PostFacade {
                     : null;
             return effectiveDomain(domain);
         } catch (Exception ignored) {
-            return Post.DOMAIN_TECH;
+            return null;
         }
     }
 
@@ -609,7 +758,7 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     private Integer effectiveDomain(Integer domain) {
-        return PostDomain.fromCode(domain).getCode();
+        return PostDomain.isValid(domain) ? domain : null;
     }
 
     private boolean canViewRealAuthor(Long viewerUid, Long authorId) {
@@ -635,6 +784,55 @@ public class PostFacadeImpl implements PostFacade {
                 .profileVisible(false)
                 .intentVisible(false)
                 .privacyReason("匿名发布")
+                .build();
+    }
+
+    private Map<Long, PostTrustSignalsDTO> trustSignalsByPostIds(Collection<Long> postIds) {
+        List<Long> ids = normalizeBatchIds(postIds, MAX_BATCH_LOOKUP_IDS);
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return trustSignalsMapper.selectByPostIds(ids).stream()
+                    .filter(row -> row.getPostId() != null)
+                    .collect(Collectors.toMap(PostTrustSignalsRow::getPostId, this::toTrustSignals,
+                            (left, right) -> left));
+        } catch (RuntimeException ignored) {
+            // Stage 6 migration may be absent during a rolling upgrade. Public post reads must stay available.
+            return Map.of();
+        }
+    }
+
+    private PostTrustSignalsDTO toTrustSignals(PostTrustSignalsRow row) {
+        boolean profileAvailable = Objects.equals(row.getProfileAvailable(), 1);
+        boolean acceptedAnswer = row.getAcceptedCommentId() != null && row.getAcceptedCommentId() > 0;
+        String freshness = row.getFreshnessStatus();
+        boolean resolved = acceptedAnswer
+                || "ACCEPTED".equals(freshness)
+                || "UPDATED".equals(freshness)
+                || "CURRENT".equals(freshness);
+        return PostTrustSignalsDTO.builder()
+                .profileAvailable(profileAvailable)
+                .completenessScore(Math.max(0, Math.min(row.getCompletenessScore() == null ? 0 : row.getCompletenessScore(), 100)))
+                .lastConfirmedAt(row.getLastConfirmedAt())
+                .freshnessStatus(freshness)
+                .hasAcceptedAnswer(acceptedAnswer)
+                .acceptedSuggestionCount(Math.max(0, row.getAcceptedSuggestionCount() == null ? 0 : row.getAcceptedSuggestionCount()))
+                .publicCorrectionCount(Math.max(0, row.getPublicCorrectionCount() == null ? 0 : row.getPublicCorrectionCount()))
+                .sourceComplete(Objects.equals(row.getSourceComplete(), 1))
+                .resolved(resolved)
+                .build();
+    }
+
+    private PostTrustSignalsDTO emptyTrustSignals() {
+        return PostTrustSignalsDTO.builder()
+                .profileAvailable(false)
+                .completenessScore(0)
+                .hasAcceptedAnswer(false)
+                .acceptedSuggestionCount(0)
+                .publicCorrectionCount(0)
+                .sourceComplete(false)
+                .resolved(false)
                 .build();
     }
 
@@ -664,8 +862,40 @@ public class PostFacadeImpl implements PostFacade {
             copy.setFollowingCount(0L);
             copy.setPostCount(0L);
             copy.setPrivacyReason("PROFILE_RESTRICTED");
+            copy.setAcceptContactRequest(false);
+            copy.setContactRequestPolicy("off");
+            copy.setCanStartContactRequest(false);
+            copy.setContactRequestReasonCode("PROFILE_RESTRICTED");
+            copy.setContactRequestReasonMessage("PROFILE_RESTRICTED");
+        } else {
+            applyContactRequestPolicy(copy, viewerUid, effectiveTargetUid);
         }
         return copy;
+    }
+
+    private void applyContactRequestPolicy(UserBriefDTO dto, Long viewerUid, Long targetUid) {
+        if (dto == null || targetUid == null) {
+            return;
+        }
+        if (viewerUid == null) {
+            dto.setCanStartContactRequest(false);
+            dto.setContactRequestReasonCode("LOGIN_REQUIRED");
+            dto.setContactRequestReasonMessage("LOGIN_REQUIRED");
+            return;
+        }
+        if (viewerUid.equals(targetUid)) {
+            dto.setCanStartContactRequest(false);
+            dto.setContactRequestReasonCode("SELF_CONTACT");
+            dto.setContactRequestReasonMessage("SELF_CONTACT");
+            return;
+        }
+        ContactRequestPolicyCheckDTO policy = userFacade.checkContactRequestPolicy(viewerUid, targetUid);
+        dto.setCanStartContactRequest(Boolean.TRUE.equals(policy.getAllowed()));
+        dto.setContactRequestReasonCode(policy.getReasonCode());
+        dto.setContactRequestReasonMessage(policy.getReasonMessage());
+        dto.setContactRequestPolicy(policy.getContactRequestPolicy());
+        dto.setAcceptContactRequest(Boolean.TRUE.equals(policy.getAllowed())
+                || !"CONTACT_REQUEST_CLOSED".equals(policy.getReasonCode()));
     }
 
     private static UserBriefDTO copyUserBrief(UserBriefDTO dto) {
@@ -684,6 +914,11 @@ public class PostFacadeImpl implements PostFacade {
                 .profileVisible(dto.getProfileVisible())
                 .intentVisible(dto.getIntentVisible())
                 .privacyReason(dto.getPrivacyReason())
+                .acceptContactRequest(dto.getAcceptContactRequest())
+                .contactRequestPolicy(dto.getContactRequestPolicy())
+                .canStartContactRequest(dto.getCanStartContactRequest())
+                .contactRequestReasonCode(dto.getContactRequestReasonCode())
+                .contactRequestReasonMessage(dto.getContactRequestReasonMessage())
                 .build();
     }
 
@@ -802,48 +1037,55 @@ public class PostFacadeImpl implements PostFacade {
         return s.length() <= SUMMARY_LEN ? s : s.substring(0, SUMMARY_LEN) + "...";
     }
 
-    private static String listCursor(LocalDateTime time, Long id) {
-        if (time == null) {
+    private static String listCursor(Long id) {
+        if (id == null || id <= 0) {
             return null;
         }
-        long millis = time.toInstant(ZoneOffset.UTC).toEpochMilli();
-        long suffix = id == null ? 0L : Math.floorMod(id, 1_000_000L);
-        return String.valueOf(millis * 1_000_000L + suffix);
+        return String.valueOf(id);
     }
 
-    private record HotCursor(Double score, LocalDateTime time, Long id) {
+    record HotCursor(Long score, LocalDateTime time, Long id, LocalDateTime rankingTime) {
         static HotCursor parse(String cursor) {
-            if (cursor == null || cursor.isBlank() || !cursor.contains(":")) {
-                return new HotCursor(null, null, null);
+            if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+                return new HotCursor(null, null, null, null);
+            }
+            if (!cursor.startsWith("v2:")) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "hot cursor is invalid");
             }
             try {
-                String[] parts = cursor.split(":");
-                double score = Double.parseDouble(parts[0]) / 10_000D;
-                LocalDateTime time = LocalDateTime.ofInstant(Instant.ofEpochMilli(Long.parseLong(parts[1])), ZoneOffset.UTC);
-                Long id = Long.parseLong(parts[2]);
-                return new HotCursor(score, time, id);
-            } catch (RuntimeException ignored) {
-                return new HotCursor(null, null, null);
+                String[] parts = cursor.split(":", -1);
+                if (parts.length != 5) {
+                    throw new IllegalArgumentException("cursor shape");
+                }
+                LocalDateTime rankingTime = LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(Long.parseLong(parts[1])), ZoneOffset.UTC);
+                long score = Long.parseLong(parts[2]);
+                LocalDateTime time = LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(Long.parseLong(parts[3])), ZoneOffset.UTC);
+                long id = Long.parseLong(parts[4]);
+                if (score < 0 || id <= 0) {
+                    throw new IllegalArgumentException("cursor values");
+                }
+                return new HotCursor(score, time, id, rankingTime);
+            } catch (RuntimeException ex) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "hot cursor is invalid");
             }
         }
 
-        static String of(PostPO post, PostCounterDTO counter) {
-            double score = 0D;
-            if (counter != null) {
-                score += safe(counter.getLikeCount()) * 3D;
-                score += safe(counter.getFavoriteCount()) * 4D;
-                score += safe(counter.getCommentCount()) * 5D;
-                score += safe(counter.getViewCount()) * 0.2D;
+        static String of(PostMapper.HotPostRow post) {
+            if (post == null
+                    || post.getHotScore() == null
+                    || post.getHotScore() < 0
+                    || post.getRankingTime() == null
+                    || post.getCreateTime() == null
+                    || post.getId() == null
+                    || post.getId() <= 0) {
+                throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                        "hot post query returned an invalid cursor anchor");
             }
-            if (post.getCreateTime() != null) {
-                score += Math.max(0D, 72D - java.time.Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
-            }
-            long time = post.getCreateTime() == null ? 0L : post.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
-            return Math.round(score * 10_000D) + ":" + time + ":" + post.getId();
+            long rankingTime = post.getRankingTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+            long createTime = post.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+            return "v2:" + rankingTime + ":" + post.getHotScore() + ":" + createTime + ":" + post.getId();
         }
-    }
-
-    private static long safe(Long value) {
-        return value == null ? 0L : value;
     }
 }

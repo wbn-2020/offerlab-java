@@ -59,7 +59,7 @@ class ReviewQueueGuardTest {
                 "@PostMapping(\"/{id}/release\")", "@PostMapping(\"/{id}/approve\")", "@PostMapping(\"/{id}/reject\")", "@PostMapping(\"/{id}/close\")"}) {
             assertTrue(controller.contains(path), "review queue controller must expose " + path);
         }
-        assertTrue(controller.contains("AdminPermissionService.ROLE_CONTENT_MODERATOR"), "review queue API must require content-moderator scope");
+        assertTrue(service.contains("AdminPermissionService.ROLE_CONTENT_MODERATOR"), "review queue API must require content-moderator scope");
         assertTrue(controller.contains("UserContext.require()"), "review queue API must require a logged-in operator");
 
         assertTrue(createCmd.contains("class ReviewQueueCreateCmd"), "queue creation must use a typed DTO");

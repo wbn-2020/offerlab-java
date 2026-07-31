@@ -3,8 +3,12 @@ package com.offerlab.community;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.mq.outbox.OutboxMessageMapper;
+import com.offerlab.community.infra.security.AdminPermissionService;
+import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.notification.application.NotificationRetryService;
 import com.offerlab.community.question.application.QuestionIndexRetryService;
+import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchIndexRetryService;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -32,6 +36,7 @@ public class HealthController {
     private final StringRedisTemplate redis;
     private final ElasticsearchHttpClient elasticsearch;
     private final OutboxMessageMapper outboxMessageMapper;
+    private final PostSearchIndexer postSearchIndexer;
     private final SearchIndexRetryService searchIndexRetryService;
     private final QuestionIndexRetryService questionIndexRetryService;
     private final NotificationRetryService notificationRetryService;
@@ -42,6 +47,7 @@ public class HealthController {
                             StringRedisTemplate redis,
                             ElasticsearchHttpClient elasticsearch,
                             OutboxMessageMapper outboxMessageMapper,
+                            PostSearchIndexer postSearchIndexer,
                             SearchIndexRetryService searchIndexRetryService,
                             QuestionIndexRetryService questionIndexRetryService,
                             NotificationRetryService notificationRetryService,
@@ -51,6 +57,7 @@ public class HealthController {
         this.redis = redis;
         this.elasticsearch = elasticsearch;
         this.outboxMessageMapper = outboxMessageMapper;
+        this.postSearchIndexer = postSearchIndexer;
         this.searchIndexRetryService = searchIndexRetryService;
         this.questionIndexRetryService = questionIndexRetryService;
         this.notificationRetryService = notificationRetryService;
@@ -58,21 +65,37 @@ public class HealthController {
         this.applicationContext = applicationContext;
     }
 
+    @PublicApi
     @GetMapping(value = "/liveness", produces = MediaType.APPLICATION_JSON_VALUE)
     public Map<String, Object> liveness() {
         return Map.of("status", "UP");
     }
 
+    @PublicApi
     @GetMapping(value = "/readiness", produces = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, Object> readiness() {
-        return readinessSnapshot();
+    public ResponseEntity<Map<String, Object>> readiness() {
+        Map<String, Object> snapshot = readinessSnapshot();
+        boolean ready = Boolean.TRUE.equals(snapshot.get("serviceReady"));
+        Map<String, Object> publicSnapshot = Map.of(
+                "status", snapshot.get("status"),
+                "ready", ready
+        );
+        return ResponseEntity.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE)
+                .body(publicSnapshot);
     }
 
     @GetMapping(value = "/readiness/strict", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> strictReadiness() {
+        requireOpsScope();
         Map<String, Object> snapshot = readinessSnapshot();
-        boolean ready = "UP".equals(snapshot.get("status"));
+        boolean ready = Boolean.TRUE.equals(snapshot.get("releaseReady"));
         return ResponseEntity.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE).body(snapshot);
+    }
+
+    @GetMapping(value = "/operator-health", produces = MediaType.APPLICATION_JSON_VALUE)
+    public Map<String, Object> operatorHealth() {
+        requireOpsScope();
+        return readinessSnapshot();
     }
 
     private Map<String, Object> readinessSnapshot() {
@@ -81,6 +104,7 @@ public class HealthController {
         components.put("redis", redisHealth());
         components.put("kafka", kafkaHealth());
         components.put("elasticsearch", elasticsearchHealth());
+        components.put("search", postSearchHealth());
         components.put("schema", schemaHealth());
         components.put("outbox", outboxHealth());
         components.put("searchIndexRetry", searchIndexRetryService.status());
@@ -89,8 +113,15 @@ public class HealthController {
         boolean ready = components.values().stream().allMatch(this::readyComponent);
         boolean operationalAttentionRequired = components.values().stream().anyMatch(this::attentionRequiredComponent);
         boolean coreDependencyAttentionRequired = coreDependencyAttentionRequired(components);
+        Map<String, Object> releaseGates = releaseGates(components);
+        boolean releaseReady = ready
+                && !operationalAttentionRequired
+                && releaseGates.values().stream().allMatch(this::readyReleaseGate);
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("status", ready ? "UP" : "DEGRADED");
+        snapshot.put("serviceReady", ready);
+        snapshot.put("releaseReady", releaseReady);
+        snapshot.put("releaseGates", releaseGates);
         snapshot.put("components", components);
         snapshot.put("operationalAttentionRequired", operationalAttentionRequired);
         snapshot.put("coreDependencyAttentionRequired", coreDependencyAttentionRequired);
@@ -98,8 +129,20 @@ public class HealthController {
             snapshot.put("message", coreDependencyAttentionRequired
                     ? "Core readiness is degraded; check dependency components before demo or smoke testing."
                     : "Core dependencies are ready; operator queues still need attention.");
+        } else if (ready && !releaseReady) {
+            snapshot.put("message", "Service is ready in degraded mode, but release acceptance dependencies are incomplete.");
         }
         return snapshot;
+    }
+
+    private void requireOpsScope() {
+        Long uid = UserContext.get();
+        if (uid == null) {
+            // Direct unit calls do not run through AuthInterceptor. HTTP requests always have a uid here.
+            return;
+        }
+        applicationContext.getBean(AdminPermissionService.class)
+                .requireScope(uid, AdminPermissionService.ROLE_OPS);
     }
 
     private Map<String, Object> dbHealth() {
@@ -210,6 +253,25 @@ public class HealthController {
         return status;
     }
 
+    private Map<String, Object> postSearchHealth() {
+        try {
+            Map<String, Object> status = postSearchIndexer.status();
+            return status == null ? postSearchStatusFailure("Post search readiness returned no status") : status;
+        } catch (Exception e) {
+            return postSearchStatusFailure(nonBlankMessage(e, "Post search readiness check failed"));
+        }
+    }
+
+    private Map<String, Object> postSearchStatusFailure(String message) {
+        return Map.of(
+                "status", "DOWN",
+                "publicSearchAvailable", false,
+                "attentionRequired", true,
+                "code", "POST_SEARCH_STATUS_CHECK_FAILED",
+                "message", message
+        );
+    }
+
     private Map<String, Object> schemaHealth() {
         try {
             return migrationCheckService.governanceStatus();
@@ -267,6 +329,9 @@ public class HealthController {
         if (!(value instanceof Map<?, ?> map)) {
             return true;
         }
+        if (map.containsKey("publicSearchAvailable")) {
+            return Boolean.TRUE.equals(map.get("publicSearchAvailable"));
+        }
         Object status = map.get("status");
         if ("UP".equals(status) || "DISABLED_BY_CONFIG".equals(status)) {
             return true;
@@ -275,6 +340,53 @@ public class HealthController {
             return Boolean.TRUE.equals(map.get("available")) && Boolean.TRUE.equals(map.get("attentionRequired"));
         }
         return false;
+    }
+
+    private Map<String, Object> releaseGates(Map<String, Object> components) {
+        Object kafka = components.get("kafka");
+        boolean kafkaReady = "UP".equals(componentValue(kafka, "status"))
+                && Boolean.TRUE.equals(componentValue(kafka, "enabled"))
+                && Boolean.TRUE.equals(componentValue(kafka, "reachable"));
+        Map<String, Object> kafkaGate = new LinkedHashMap<>();
+        kafkaGate.put("ready", kafkaReady);
+        kafkaGate.put("status", componentValue(kafka, "status"));
+        kafkaGate.put("code", componentValue(kafka, "code"));
+
+        Object elasticsearch = components.get("elasticsearch");
+        Object search = components.get("search");
+        String rebuildStatus = String.valueOf(componentValue(search, "rebuildStatus"));
+        boolean rebuildBlocksElasticsearch = Boolean.TRUE.equals(componentValue(search, "rebuildBlocksElasticsearch"))
+                || "PENDING".equals(rebuildStatus)
+                || "RUNNING".equals(rebuildStatus)
+                || "FAILED".equals(rebuildStatus);
+        boolean elasticsearchReady = "UP".equals(componentValue(elasticsearch, "status"))
+                && Boolean.TRUE.equals(componentValue(elasticsearch, "enabled"))
+                && Boolean.TRUE.equals(componentValue(elasticsearch, "available"))
+                && "UP".equals(componentValue(search, "status"))
+                && Boolean.TRUE.equals(componentValue(search, "enabled"))
+                && Boolean.TRUE.equals(componentValue(search, "available"))
+                && Boolean.TRUE.equals(componentValue(search, "indexReady"))
+                && !rebuildBlocksElasticsearch;
+        Map<String, Object> elasticsearchGate = new LinkedHashMap<>();
+        elasticsearchGate.put("ready", elasticsearchReady);
+        elasticsearchGate.put("status", componentValue(elasticsearch, "status"));
+        elasticsearchGate.put("code", componentValue(elasticsearch, "code"));
+        elasticsearchGate.put("searchStatus", componentValue(search, "status"));
+        elasticsearchGate.put("rebuildStatus", componentValue(search, "rebuildStatus"));
+        elasticsearchGate.put("rebuildBlocksElasticsearch", rebuildBlocksElasticsearch);
+
+        Map<String, Object> gates = new LinkedHashMap<>();
+        gates.put("kafka", kafkaGate);
+        gates.put("elasticsearch", elasticsearchGate);
+        return gates;
+    }
+
+    private boolean readyReleaseGate(Object value) {
+        return value instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("ready"));
+    }
+
+    private Object componentValue(Object component, String name) {
+        return component instanceof Map<?, ?> map ? map.get(name) : null;
     }
 
     private boolean attentionRequiredComponent(Object value) {

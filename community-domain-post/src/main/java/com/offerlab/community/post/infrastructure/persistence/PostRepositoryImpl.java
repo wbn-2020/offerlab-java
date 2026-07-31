@@ -1,6 +1,7 @@
 package com.offerlab.community.post.infrastructure.persistence;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.offerlab.community.common.utils.SqlLimits;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
@@ -34,6 +35,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class PostRepositoryImpl implements PostRepository {
 
     private static final int MAX_BATCH_FIND_IDS = 500;
+    private static final long SNOWFLAKE_EPOCH_MILLIS = 1609459200000L;
+    private static final int SNOWFLAKE_TIMESTAMP_SHIFT = 22;
+    private static final long LEGACY_CURSOR_SCALE = 1_000_000L;
+    private static final long LEGACY_CURSOR_MIN_MILLIS = 946684800000L;
+    private static final long CURSOR_CLOCK_SKEW_MILLIS = 86_400_000L;
 
     private final PostMapper postMapper;
     private final PostExtensionMapper extMapper;
@@ -64,6 +70,14 @@ public class PostRepositoryImpl implements PostRepository {
     }
 
     @Override
+    public Optional<Post> findByIdForUpdate(Long id) {
+        PostPO po = postMapper.selectByIdForUpdate(id);
+        if (po == null) return Optional.empty();
+        PostExtensionPO ext = extMapper.selectById(id);
+        return Optional.of(toDomain(po, ext));
+    }
+
+    @Override
     public Map<Long, Post> batchFindByIds(Collection<Long> ids) {
         List<Long> normalizedIds = normalizeBatchIds(ids);
         if (normalizedIds.isEmpty()) return Map.of();
@@ -80,10 +94,26 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     @Transactional
-    public void update(Post post) {
+    public boolean update(Post post) {
         PostPO po = toPO(post);
-        po.setVersion(post.getVersion());
-        postMapper.updateById(po);
+        Integer expectedVersion = post.getVersion();
+        LambdaUpdateWrapper<PostPO> update = new LambdaUpdateWrapper<PostPO>()
+                .eq(PostPO::getId, post.getId())
+                .eq(PostPO::getIsDeleted, 0)
+                .set(PostPO::getAuthorId, po.getAuthorId())
+                .set(PostPO::getPostType, po.getPostType())
+                .set(PostPO::getTitle, po.getTitle())
+                .set(PostPO::getContent, po.getContent())
+                .set(PostPO::getCoverUrl, po.getCoverUrl())
+                .set(PostPO::getVisibility, po.getVisibility())
+                .set(PostPO::getPostStatus, po.getPostStatus());
+        if (expectedVersion != null) {
+            update.eq(PostPO::getVersion, expectedVersion)
+                    .set(PostPO::getVersion, expectedVersion + 1);
+        }
+        if (postMapper.update(null, update) != 1) {
+            return false;
+        }
         if (post.getExtJson() != null) {
             PostExtensionPO existing = extMapper.selectById(post.getId());
             PostExtensionPO ext = new PostExtensionPO();
@@ -96,6 +126,27 @@ public class PostRepositoryImpl implements PostRepository {
                 extMapper.updateById(ext);
             }
         }
+        if (expectedVersion != null) {
+            post.setVersion(expectedVersion + 1);
+        }
+        return true;
+    }
+
+    @Override
+    public boolean updateStatusIfCurrent(Long postId, Integer expectedStatus, Integer nextStatus, Integer expectedVersion) {
+        if (postId == null || expectedStatus == null || nextStatus == null) {
+            return false;
+        }
+        LambdaUpdateWrapper<PostPO> update = new LambdaUpdateWrapper<PostPO>()
+                .eq(PostPO::getId, postId)
+                .eq(PostPO::getPostStatus, expectedStatus)
+                .eq(PostPO::getIsDeleted, 0)
+                .set(PostPO::getPostStatus, nextStatus);
+        if (expectedVersion != null) {
+            update.eq(PostPO::getVersion, expectedVersion)
+                    .set(PostPO::getVersion, expectedVersion + 1);
+        }
+        return postMapper.update(null, update) == 1;
     }
 
     @Override
@@ -106,14 +157,17 @@ public class PostRepositoryImpl implements PostRepository {
     @Override
     public List<Post> findByAuthor(Long authorId, long cursor, int size) {
         int limit = listLimit(size);
+        ListCursor decoded = ListCursor.parse(cursor);
         LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
                 .eq(PostPO::getAuthorId, authorId)
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
-                .orderByDesc(PostPO::getCreateTime)
+                .orderByDesc(PostPO::getId)
                 .last(SqlLimits.limit(limit, 1, 101));
-        if (cursor > 0) {
-            q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        if (decoded.id() != null) {
+            q.lt(PostPO::getId, decoded.id());
+        } else if (decoded.legacyTime() != null) {
+            q.lt(PostPO::getCreateTime, decoded.legacyTime());
         }
         return toDomainListWithExt(postMapper.selectList(q));
     }
@@ -126,8 +180,31 @@ public class PostRepositoryImpl implements PostRepository {
 
     @Override
     public List<Post> findPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
+        ListCursor decoded = ListCursor.parse(cursor);
         List<PostPO> posts = postMapper.selectPublicPosts(authorId, tagId != null && tagId > 0 ? tagId : null, postType,
-                featured, domain, cursorTime(cursor), cursorId(cursor), listLimit(size));
+                featured, domain, decoded.legacyTime(), decoded.id(), listLimit(size));
+        return toDomainListWithExt(posts);
+    }
+
+    @Override
+    public List<Post> findPostsByKeyset(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain,
+                                        LocalDateTime cursorTime, Long cursorId, int size) {
+        Long effectiveCursorId = cursorTime == null ? null : cursorId == null ? Long.MAX_VALUE : cursorId;
+        List<PostPO> posts = postMapper.selectPublicPostsByTimeKeyset(
+                authorId, tagId != null && tagId > 0 ? tagId : null, postType,
+                featured, domain, cursorTime, effectiveCursorId, listLimit(size));
+        return toDomainListWithExt(posts);
+    }
+
+    @Override
+    public List<Post> findFollowingPostsByKeyset(Long viewerUid, Integer domain,
+                                                 LocalDateTime cursorTime, Long cursorId, int size) {
+        if (viewerUid == null || viewerUid <= 0) {
+            return List.of();
+        }
+        Long effectiveCursorId = cursorTime == null ? null : cursorId == null ? Long.MAX_VALUE : cursorId;
+        List<PostPO> posts = postMapper.selectFollowingPublicPostsByTimeKeyset(
+                viewerUid, domain, cursorTime, effectiveCursorId, listLimit(size));
         return toDomainListWithExt(posts);
     }
 
@@ -145,13 +222,16 @@ public class PostRepositoryImpl implements PostRepository {
 
     private static LambdaQueryWrapper<PostPO> baseListQuery(long cursor, int size) {
         int limit = listLimit(size);
+        ListCursor decoded = ListCursor.parse(cursor);
         LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
-                .orderByDesc(PostPO::getCreateTime)
+                .orderByDesc(PostPO::getId)
                 .last(SqlLimits.limit(limit, 1, 101));
-        if (cursor > 0) {
-            q.lt(PostPO::getCreateTime, LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC));
+        if (decoded.id() != null) {
+            q.lt(PostPO::getId, decoded.id());
+        } else if (decoded.legacyTime() != null) {
+            q.lt(PostPO::getCreateTime, decoded.legacyTime());
         }
         return q;
     }
@@ -172,19 +252,28 @@ public class PostRepositoryImpl implements PostRepository {
                 .toList();
     }
 
-    private static LocalDateTime cursorTime(long cursor) {
-        if (cursor <= 0) {
-            return null;
+    private record ListCursor(Long id, LocalDateTime legacyTime) {
+        private static ListCursor parse(long rawCursor) {
+            if (rawCursor <= 0) {
+                return new ListCursor(null, null);
+            }
+            long latestAcceptedMillis = System.currentTimeMillis() + CURSOR_CLOCK_SKEW_MILLIS;
+            long legacyMillis = rawCursor / LEGACY_CURSOR_SCALE;
+            long snowflakeMillis = SNOWFLAKE_EPOCH_MILLIS
+                    + (rawCursor >>> SNOWFLAKE_TIMESTAMP_SHIFT);
+            // Legacy cursors encode epochMillis * 1_000_000 + an id suffix. When
+            // decoded as current Snowflake ids, those values point years ahead.
+            boolean legacyShape = legacyMillis >= LEGACY_CURSOR_MIN_MILLIS
+                    && legacyMillis <= latestAcceptedMillis
+                    && snowflakeMillis > latestAcceptedMillis;
+            if (legacyShape) {
+                return new ListCursor(
+                        null,
+                        LocalDateTime.ofInstant(
+                                Instant.ofEpochMilli(legacyMillis), ZoneOffset.UTC));
+            }
+            return new ListCursor(rawCursor, null);
         }
-        long time = cursor > 10_000_000_000_000L ? cursor / 1_000_000L : cursor;
-        return LocalDateTime.ofInstant(Instant.ofEpochMilli(time), ZoneOffset.UTC);
-    }
-
-    private static Long cursorId(long cursor) {
-        if (cursor <= 0 || cursor <= 10_000_000_000_000L) {
-            return Long.MAX_VALUE;
-        }
-        return cursor % 1_000_000L;
     }
 
     private static PostPO toPO(Post p) {
@@ -226,7 +315,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .updateTime(po.getUpdateTime())
                 .extJson(ext == null ? null : ext.getExtJson())
                 .version(po.getVersion())
-                .domain(PostDomain.fromCode(domain).getCode())
+                .domain(PostDomain.isValid(domain) ? domain : null)
                 .build();
     }
 }

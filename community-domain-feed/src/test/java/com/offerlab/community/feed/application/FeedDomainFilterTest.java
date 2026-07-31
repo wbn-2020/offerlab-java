@@ -6,8 +6,7 @@ import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
-import com.offerlab.community.interaction.api.dto.CommentCreateCmd;
-import com.offerlab.community.interaction.api.dto.CommentDTO;
+import com.offerlab.community.interaction.api.dto.*;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
@@ -18,6 +17,8 @@ import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
+import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
@@ -32,18 +33,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FeedDomainFilterTest {
 
     @Test
-    void latestDomainFilterTreatsMissingDomainAsTech() {
-        PostBriefDTO legacyTechPost = post(701L, 71L, null);
+    void latestDomainFilterExcludesUnclassifiedPostsFromConcreteDomains() {
+        PostBriefDTO unclassifiedPost = post(701L, 71L, null);
         PostBriefDTO careerPost = post(702L, 72L, Post.DOMAIN_CAREER);
         FeedFacadeImpl facade = new FeedFacadeImpl(
                 new EmptyFeedInboxRedis(),
                 new FixedHiddenFeedFeedbackStore(Set.of()),
-                new FakePostFacade(PageResult.of(List.of(legacyTechPost, careerPost), null, false)),
+                new FakePostFacade(PageResult.of(List.of(unclassifiedPost, careerPost), null, false)),
                 new FakeUserFacade(),
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
@@ -52,8 +55,10 @@ class FeedDomainFilterTest {
         PageResult<FeedItemVO> techPage = facade.getLatestFeed(null, null, 3, Post.DOMAIN_TECH);
         PageResult<FeedItemVO> careerPage = facade.getLatestFeed(null, null, 3, Post.DOMAIN_CAREER);
 
-        assertEquals(List.of(701L), postIds(techPage));
+        assertEquals(List.of(), postIds(techPage));
         assertEquals(List.of(702L), postIds(careerPage));
+        assertEquals("LATEST", careerPage.getItems().get(0).getSourceType());
+        assertEquals("RECENT_PUBLISHED", careerPage.getItems().get(0).getReasonCode());
     }
 
     @Test
@@ -103,6 +108,7 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, Post.DOMAIN_CAREER);
 
@@ -129,6 +135,7 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, Post.DOMAIN_CAREER);
 
@@ -173,10 +180,200 @@ class FeedDomainFilterTest {
                 new FakeInteractionFacade(),
                 new ObjectMapper(),
                 (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
 
         PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
 
         assertEquals(List.of(922L), postIds(page));
+    }
+
+    @Test
+    void recommendFeedDemotesDomainsMarkedLessLikeThis() {
+        PostBriefDTO tech = post(931L, 1931L, Post.DOMAIN_TECH);
+        PostBriefDTO career = post(932L, 1932L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of(Post.DOMAIN_TECH)),
+                new FakePostFacade(PageResult.of(List.of(tech, career), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 2, null);
+
+        assertEquals(List.of(932L, 931L), postIds(page));
+        assertEquals("RECOMMEND", page.getItems().get(0).getSourceType());
+        assertEquals("RULE_MATCH", page.getItems().get(0).getReasonCode());
+    }
+
+    @Test
+    void recommendFeedHandlesTwentyMixedDomainCandidatesAndKeepsKnownDomainPenalty() {
+        List<PostBriefDTO> candidates = new ArrayList<>();
+        for (int index = 0; index < 20; index++) {
+            Integer domain = switch (index) {
+                case 0 -> null;
+                case 1 -> 999;
+                case 2 -> Post.DOMAIN_TECH;
+                default -> Post.DOMAIN_CAREER;
+            };
+            candidates.add(post(1_000L + index, 2_000L + index, domain));
+        }
+        PageResult<PostBriefDTO> candidatePage = PageResult.of(candidates, null, false);
+        FeedFacadeImpl noPreferenceFacade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of()),
+                new FakePostFacade(candidatePage),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> noPreferencePage = assertDoesNotThrow(
+                () -> noPreferenceFacade.getRecommendFeed(7L, null, 20, null));
+
+        assertEquals(20, noPreferencePage.getItems().size());
+        assertTrue(postIds(noPreferencePage).containsAll(List.of(1_000L, 1_001L)));
+
+        FeedFacadeImpl reducedTechFacade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of(Post.DOMAIN_TECH)),
+                new FakePostFacade(candidatePage),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> reducedTechPage = assertDoesNotThrow(
+                () -> reducedTechFacade.getRecommendFeed(7L, null, 20, null));
+
+        assertEquals(20, reducedTechPage.getItems().size());
+        assertEquals(1_002L, postIds(reducedTechPage).get(19));
+    }
+
+    @Test
+    void followingFeedFallsBackToDatabaseWithoutCrossAccountState() {
+        PostBriefDTO followed = post(941L, 1941L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new FailingFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(941L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
+        assertTrue(page.getDegraded());
+        assertEquals("FOLLOWING", page.getItems().get(0).getSourceType());
+    }
+
+    @Test
+    void emptyFollowingInboxFallsBackToDatabaseForUnfannedPosts() {
+        PostBriefDTO followed = post(951L, 1951L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(951L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
+        assertTrue(page.getDegraded());
+    }
+
+    @Test
+    void kafkaBackedEmptyInboxDoesNotTriggerRepeatedDatabaseScans() {
+        PostBriefDTO followed = post(961L, 1961L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(), postIds(page));
+    }
+
+    @Test
+    void disabledFeedConsumerUsesDatabaseFollowingFallback() {
+        PostBriefDTO followed = post(971L, 1971L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(followed), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(true);
+        facade.setFeedKafkaConsumerEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(971L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
+    }
+
+    @Test
+    void kafkaDisabledFeedKeepsDatabaseAsTheCorrectnessSourceWhenRedisHasData() {
+        PostBriefDTO fanned = post(981L, 1981L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new ScriptedFeedInboxRedis(List.of(tuple("981", 9810D))),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(fanned), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 2, null);
+
+        assertEquals(List.of(981L), postIds(page));
+        assertEquals("FOLLOWING", page.getItems().get(0).getSourceType());
+        assertEquals("following-db-fallback", page.getSource());
+        assertTrue(page.getDegraded());
+    }
+
+    @Test
+    void databaseFollowingQueryDoesNotLoseOlderFollowedPostsBehindGlobalTraffic() {
+        List<PostBriefDTO> unrelatedLatest = new ArrayList<>();
+        for (long id = 10_000L; id < 11_100L; id++) {
+            unrelatedLatest.add(post(id, id + 50_000L, Post.DOMAIN_TECH));
+        }
+        PostBriefDTO olderFollowed = post(9_999L, 77L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(
+                        PageResult.of(unrelatedLatest, null, false),
+                        List.of(olderFollowed)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        facade.setKafkaEnabled(false);
+
+        PageResult<FeedItemVO> page = facade.getFollowingFeed(7L, null, 20, null);
+
+        assertEquals(List.of(9_999L), postIds(page));
+        assertEquals("following-db-fallback", page.getSource());
     }
 
     private static PostBriefDTO post(Long id, Long authorId, Integer domain) {
@@ -235,25 +432,49 @@ class FeedDomainFilterTest {
         }
     }
 
+    private static class FailingFeedInboxRedis extends EmptyFeedInboxRedis {
+        @Override
+        public Set<ZSetOperations.TypedTuple<String>> readInboxWithScore(Long uid, double maxScoreExclusive, int size) {
+            throw new IllegalStateException("redis unavailable");
+        }
+    }
+
     private static class FixedHiddenFeedFeedbackStore extends FeedFeedbackStore {
         private final Set<Long> hiddenPostIds;
+        private final Set<Integer> lessLikedDomains;
 
         FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds) {
+            this(hiddenPostIds, Set.of());
+        }
+
+        FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds, Set<Integer> lessLikedDomains) {
             super(null);
             this.hiddenPostIds = hiddenPostIds;
+            this.lessLikedDomains = lessLikedDomains;
         }
 
         @Override
         public Set<Long> hiddenPostIds(Long uid) {
             return hiddenPostIds;
         }
+
+        @Override
+        public Set<Integer> lessLikedDomains(Long uid) {
+            return lessLikedDomains;
+        }
     }
 
     private static class FakePostFacade implements PostFacade {
         private final PageResult<PostBriefDTO> latestPage;
+        private final List<PostBriefDTO> followingPosts;
 
         FakePostFacade(PageResult<PostBriefDTO> latestPage) {
+            this(latestPage, latestPage.getItems());
+        }
+
+        FakePostFacade(PageResult<PostBriefDTO> latestPage, List<PostBriefDTO> followingPosts) {
             this.latestPage = latestPage;
+            this.followingPosts = followingPosts;
         }
 
         @Override
@@ -283,7 +504,25 @@ class FeedDomainFilterTest {
                             java.util.stream.Collectors.counting()));
         }
 
+        @Override
+        public List<PostBriefDTO> listFollowingPostsByKeyset(Long viewerUid, Integer domain,
+                                                             LocalDateTime cursorTime, Long cursorId, int size) {
+            return followingPosts.stream()
+                    .filter(post -> domain == null || java.util.Objects.equals(post.getDomain(), domain))
+                    .filter(post -> cursorTime == null
+                            || post.getCreateTime().isBefore(cursorTime)
+                            || (post.getCreateTime().equals(cursorTime)
+                            && cursorId != null
+                            && post.getId() < cursorId))
+                    .sorted(java.util.Comparator
+                            .comparing(PostBriefDTO::getCreateTime).reversed()
+                            .thenComparing(PostBriefDTO::getId, java.util.Comparator.reverseOrder()))
+                    .limit(size)
+                    .toList();
+        }
+
         @Override public PostDTO getPost(Long postId) { throw unsupported(); }
+        @Override public PostDTO getPostMetadata(Long postId) { return getPost(postId); }
         @Override public PostDTO getPost(Long postId, Long viewerUid) { throw unsupported(); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) { return batchGetPosts(postIds, null); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) { return batchGetPosts(postIds, viewerUid, false); }
@@ -294,7 +533,7 @@ class FeedDomainFilterTest {
                     .collect(java.util.stream.Collectors.toMap(PostBriefDTO::getId, post -> post));
         }
         @Override public Long publishPost(PostCreateCmd cmd) { throw unsupported(); }
-        @Override public void updatePost(PostUpdateCmd cmd) { throw unsupported(); }
+        @Override public boolean updatePost(PostUpdateCmd cmd) { throw unsupported(); }
         @Override public void deletePost(Long postId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getHot(String cursor, int size) { throw unsupported(); }
@@ -302,7 +541,7 @@ class FeedDomainFilterTest {
         @Override
         public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
             List<PostBriefDTO> filtered = latestPage.getItems().stream()
-                    .filter(post -> domain == null || (post.getDomain() == null ? Post.DOMAIN_TECH : post.getDomain()) == domain)
+                    .filter(post -> domain == null || java.util.Objects.equals(post.getDomain(), domain))
                     .limit(size)
                     .toList();
             return PageResult.of(filtered, null, false);
@@ -323,14 +562,17 @@ class FeedDomainFilterTest {
         @Override public UserBriefDTO getUserBrief(Long uid) { throw unsupported(); }
         @Override public Map<String, Long> findUserIdsByNicknames(Collection<String> nicknames) { throw unsupported(); }
         @Override public boolean isFollowing(Long fromUid, Long toUid) { return false; }
-        @Override public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) { throw unsupported(); }
+        @Override
+        public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) {
+            return toUids.stream().collect(java.util.stream.Collectors.toMap(uid -> uid, uid -> true));
+        }
         @Override public List<Long> getFollowerIds(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<FollowCursorDTO> getFollowerPage(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<Long> getFollowingIds(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public List<FollowCursorDTO> getFollowingPage(Long uid, long cursor, int size) { throw unsupported(); }
         @Override public long getFollowerCount(Long uid) { throw unsupported(); }
         @Override public boolean isBigV(Long uid) { throw unsupported(); }
-        @Override public UserIntentDTO getUserIntent(Long uid) { throw unsupported(); }
+        @Override public UserIntentDTO getUserIntent(Long uid) { return null; }
         @Override public boolean isProfileVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
         @Override public boolean isIntentVisible(Long viewerUid, Long targetUid) { return !Long.valueOf(0L).equals(targetUid); }
         @Override public boolean isSearchable(Long uid) { throw unsupported(); }
@@ -341,6 +583,8 @@ class FeedDomainFilterTest {
         @Override public boolean allowsFollowNotification(Long uid) { throw unsupported(); }
         @Override public boolean allowsFavoriteNotification(Long uid) { throw unsupported(); }
         @Override public boolean allowsMentionNotification(Long uid) { throw unsupported(); }
+        @Override public ContactRequestSettingsDTO getContactRequestSettings(Long uid) { throw unsupported(); }
+        @Override public ContactRequestPolicyCheckDTO checkContactRequestPolicy(Long requesterUid, Long receiverUid) { throw unsupported(); }
     }
 
     private static class FakeInteractionFacade implements InteractionFacade {
@@ -348,15 +592,35 @@ class FeedDomainFilterTest {
         @Override public void unlike(Long uid, Long postId) { throw unsupported(); }
         @Override public boolean hasLiked(Long uid, Long postId) { return false; }
         @Override public boolean hasFavorited(Long uid, Long postId) { return false; }
+        @Override public Set<Long> likedPostIds(Long uid, List<Long> postIds) { return Set.of(); }
+        @Override public Set<Long> favoritedPostIds(Long uid, List<Long> postIds) { return Set.of(); }
         @Override public void likeComment(Long uid, Long commentId) { throw unsupported(); }
         @Override public void unlikeComment(Long uid, Long commentId) { throw unsupported(); }
         @Override public void favorite(Long uid, Long postId) { throw unsupported(); }
+        @Override public void favorite(Long uid, Long postId, Long folderId) { throw unsupported(); }
         @Override public void unfavorite(Long uid, Long postId) { throw unsupported(); }
         @Override public Long addComment(CommentCreateCmd cmd) { throw unsupported(); }
         @Override public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, long cursor, int size) { throw unsupported(); }
+        @Override public PageResult<CommentDTO> listComments(Long postId, Long viewerUid, String cursor, int size, String sort) { throw unsupported(); }
+        @Override public CommentDTO getCommentContext(Long postId, Long commentId, Long viewerUid) { throw unsupported(); }
+        @Override public PageResult<CommentDTO> listCommentReplies(Long postId, Long rootId, Long viewerUid, String cursor, int size) { throw unsupported(); }
         @Override public void deleteComment(Long commentId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> listLikedPosts(Long uid, long cursor, int size) { throw unsupported(); }
+        @Override public PageResult<PostBriefDTO> listLikedPosts(Long uid, String cursor, int size) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> listFavoritePosts(Long uid, long cursor, int size) { throw unsupported(); }
+        @Override public PageResult<PostBriefDTO> listFavoritePosts(Long uid, String cursor, int size) { throw unsupported(); }
+        @Override public List<FavoriteFolderDTO> listFavoriteFolders(Long uid) { throw unsupported(); }
+        @Override public FavoriteFolderDTO createFavoriteFolder(Long uid, FavoriteFolderCreateCmd cmd) { throw unsupported(); }
+        @Override public FavoriteFolderDTO updateFavoriteFolder(Long uid, Long folderId, FavoriteFolderUpdateCmd cmd) { throw unsupported(); }
+        @Override public FavoriteFolderDTO sortFavoriteFolder(Long uid, Long folderId, FavoriteFolderSortCmd cmd) { throw unsupported(); }
+        @Override public List<FavoriteFolderDTO> reorderFavoriteFolders(Long uid, FavoriteFolderReorderCmd cmd) { throw unsupported(); }
+        @Override public void deleteFavoriteFolder(Long uid, Long folderId, Long targetFolderId) { throw unsupported(); }
+        @Override public PageResult<PostBriefDTO> listFavoritePostsInFolder(Long uid, Long folderId, String cursor, int size) { throw unsupported(); }
+        @Override public FavoriteFolderDTO moveFavorite(Long uid, Long postId, FavoriteMoveCmd cmd) { throw unsupported(); }
+        @Override public FavoriteFolderDTO batchMoveFavorites(Long uid, FavoriteBatchMoveCmd cmd) { throw unsupported(); }
+        @Override public FavoriteFolderDTO getPublicFavoriteFolder(Long folderId) { throw unsupported(); }
+        @Override public List<FavoriteFolderDTO> listPublicFavoriteFoldersByUser(Long uid, int limit) { throw unsupported(); }
+        @Override public PageResult<PostBriefDTO> listPublicFavoritePostsInFolder(Long folderId, String cursor, int size) { throw unsupported(); }
     }
 
     private static UnsupportedOperationException unsupported() {

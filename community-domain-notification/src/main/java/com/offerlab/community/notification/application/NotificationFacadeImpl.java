@@ -1,22 +1,26 @@
 package com.offerlab.community.notification.application;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.notification.api.NotificationFacade;
+import com.offerlab.community.notification.api.dto.NotificationReadAllResultDTO;
 import com.offerlab.community.notification.api.dto.NotificationRealtimeStatusDTO;
+import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationAggregateWindow;
 import com.offerlab.community.notification.infrastructure.persistence.mapper.NotificationMessageMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationMessagePO;
+import com.offerlab.community.notification.realtime.NotificationRealtimeCapability;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -39,6 +43,8 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private static final int REALTIME_POLL_INTERVAL_SECONDS = 20;
     private static final long AGGREGATION_WINDOW_MINUTES = 30L;
     private static final int MAX_READ_BATCH_SIZE = 200;
+    private static final int MARK_ALL_READ_BATCH_SIZE = 500;
+    private static final int MAX_MARK_ALL_READ_BATCHES = 20;
 
     private static final int TYPE_LIKE = 1;
     private static final int TYPE_COMMENT = 2;
@@ -50,36 +56,55 @@ public class NotificationFacadeImpl implements NotificationFacade {
     private static final int TARGET_POST = 1;
     private static final int TARGET_COMMENT = 2;
     private static final int TARGET_USER = 3;
+    private static final String ACTION_REPORT_RECEIPT = "report_receipt";
+    private static final String ACTION_CONTACT_REQUEST_RECEIVED = "contact_request_received";
+    private static final String ACTION_CONTACT_REQUEST_ACCEPTED = "contact_request_accepted";
+    private static final String ACTION_CONTACT_REQUEST_REJECTED = "contact_request_rejected";
+    private static final String REPORT_USER_STATUS_ACTION_TAKEN = "ACTION_TAKEN";
+    private static final String REPORT_USER_STATUS_NOT_ACCEPTED = "NOT_ACCEPTED";
+    private static final String REPORT_USER_STATUS_CLOSED = "CLOSED";
+    private static final String CONTACT_REQUEST_INBOX_PATH = "/me/contact-requests?tab=inbox";
+    private static final String CONTACT_REQUEST_OUTBOX_PATH = "/me/contact-requests?tab=outbox";
 
     private final NotificationMessageMapper mapper;
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
     private final UserFacade userFacade;
-
-    @Value("${offerlab.realtime.websocket-enabled:false}")
-    private boolean websocketEnabled;
+    @Autowired(required = false)
+    private AfterCommitExecutor afterCommitExecutor;
+    @Autowired(required = false)
+    private NotificationRealtimePublisher realtimePublisher;
+    @Autowired(required = false)
+    private NotificationRealtimeCapability realtimeCapability;
+    private volatile Boolean messageTableReadyCache;
+    private volatile Boolean dedupKeyColumnReadyCache;
 
     @Override
-    public PageResult<Map<String, Object>> listNotifications(Long uid, String type, long cursor, int size) {
+    public PageResult<Map<String, Object>> listNotifications(Long uid, String type, String cursor, int size) {
         if (!messageTableReady()) {
             return PageResult.empty();
         }
         int limit = clampPageSize(size);
         Integer notifType = parseType(type);
-        LocalDateTime cursorTime = cursor > 0
-                ? LocalDateTime.ofInstant(Instant.ofEpochMilli(cursor), ZoneOffset.UTC)
-                : null;
-        List<NotificationMessagePO> rows = mapper.listByUser(uid, notifType, cursorTime, limit);
+        NotificationCursor parsedCursor = parseCursor(cursor);
+        List<NotificationMessagePO> rows = mapper.listByUser(uid, notifType, parsedCursor.time(), parsedCursor.id(), limit + 1);
         if (rows.isEmpty()) return PageResult.empty();
-        Set<Long> senderIds = rows.stream()
+        boolean hasMore = rows.size() > limit;
+        List<NotificationMessagePO> pageRows = hasMore ? rows.subList(0, limit) : rows;
+        Set<Long> senderIds = pageRows.stream()
                 .map(NotificationMessagePO::getSenderUid)
                 .filter(id -> id != null && id > 0)
                 .collect(Collectors.toSet());
         Map<Long, UserBriefDTO> senders = userFacade.batchGetUserBriefs(senderIds);
-        List<Map<String, Object>> items = aggregateItems(rows, senders);
-        boolean hasMore = rows.size() == limit;
-        String next = hasMore && rows.get(rows.size() - 1).getCreateTime() != null
-                ? String.valueOf(rows.get(rows.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+        List<NotificationGroup> groups = notificationGroups(pageRows);
+        Map<String, AggregateCounts> aggregateCounts = aggregateCounts(uid, groups);
+        List<Map<String, Object>> items = groups.stream()
+                .map(group -> toGroupedItem(group, senders, aggregateCounts.get(group.key())))
+                .toList();
+        NotificationMessagePO last = pageRows.get(pageRows.size() - 1);
+        String next = hasMore && last.getCreateTime() != null
+                ? last.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli()
+                + ":" + last.getId()
                 : null;
         return PageResult.of(items, next, hasMore);
     }
@@ -89,20 +114,32 @@ public class NotificationFacadeImpl implements NotificationFacade {
         if (!messageTableReady()) {
             return 0L;
         }
-        Long count = mapper.selectCount(baseUnread(uid));
-        return count == null ? 0L : count;
+        return unreadCountByType(uid).getOrDefault("total", 0L);
     }
 
     @Override
     public Map<String, Long> getUnreadCountByType(Long uid) {
+        if (!messageTableReady()) {
+            return emptyUnreadCounts();
+        }
+        return unreadCountByType(uid);
+    }
+
+    private Map<String, Long> unreadCountByType(Long uid) {
         Map<String, Long> result = new LinkedHashMap<>();
-        result.put("total", getUnreadCount(uid));
-        result.put("like", countByType(uid, TYPE_LIKE));
-        result.put("comment", countByType(uid, TYPE_COMMENT));
-        result.put("favorite", countByType(uid, TYPE_FAVORITE));
-        result.put("follower", countByType(uid, TYPE_FOLLOWER));
-        result.put("mention", countByType(uid, TYPE_MENTION));
-        result.put("system", countByType(uid, TYPE_SYSTEM));
+        emptyUnreadCounts().forEach(result::put);
+        List<Map<String, Object>> rows = mapper.countUnreadGroupedByType(uid);
+        if (rows == null || rows.isEmpty()) {
+            return result;
+        }
+        long total = 0L;
+        for (Map<String, Object> row : rows) {
+            Integer type = asInteger(row, "notifType", "notif_type", "NOTIFTYPE", "NOTIF_TYPE");
+            long count = asLong(row, "unreadCount", "unread_count", "UNREADCOUNT", "UNREAD_COUNT");
+            total += count;
+            result.put(typeName(type), count);
+        }
+        result.put("total", total);
         return result;
     }
 
@@ -115,7 +152,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .latestUnreadAt(latestUnread == null ? null : latestUnread.getCreateTime())
                 .serverTime(System.currentTimeMillis())
                 .pollIntervalSeconds(REALTIME_POLL_INTERVAL_SECONDS)
-                .websocketEnabled(websocketEnabled)
+                .websocketEnabled(realtimeCapability != null && realtimeCapability.isWebSocketAvailable())
                 .build();
     }
 
@@ -126,35 +163,61 @@ public class NotificationFacadeImpl implements NotificationFacade {
         if (normalizedNotifIds.isEmpty() || !messageTableReady()) {
             return;
         }
-        mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
+        int updated = mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
                 .eq(NotificationMessagePO::getReceiverUid, uid)
                 .eq(NotificationMessagePO::getIsDeleted, 0)
                 .in(NotificationMessagePO::getId, normalizedNotifIds)
                 .set(NotificationMessagePO::getIsRead, 1));
-    }
-
-    @Override
-    @Transactional
-    public void markAllAsRead(Long uid) {
-        if (!messageTableReady()) {
-            return;
+        if (updated > 0) {
+            publishUnreadCountAfterCommit(uid);
         }
-        mapper.update(null, new LambdaUpdateWrapper<NotificationMessagePO>()
-                .eq(NotificationMessagePO::getReceiverUid, uid)
-                .eq(NotificationMessagePO::getIsDeleted, 0)
-                .eq(NotificationMessagePO::getIsRead, 0)
-                .set(NotificationMessagePO::getIsRead, 1));
     }
 
     @Override
-    @Transactional
+    public NotificationReadAllResultDTO markAllAsRead(Long uid) {
+        if (!messageTableReady()) {
+            return NotificationReadAllResultDTO.builder()
+                    .updatedCount(0)
+                    .capped(false)
+                    .remainingUnread(0)
+                    .build();
+        }
+        int batches = 0;
+        int updatedCount = 0;
+        boolean capped = false;
+        while (batches < MAX_MARK_ALL_READ_BATCHES) {
+            int updated = mapper.markUnreadBatchAsRead(uid, MARK_ALL_READ_BATCH_SIZE);
+            updatedCount += updated;
+            if (updated < MARK_ALL_READ_BATCH_SIZE) {
+                break;
+            }
+            batches++;
+            capped = batches >= MAX_MARK_ALL_READ_BATCHES;
+        }
+        long remainingUnread = getUnreadCount(uid);
+        if (updatedCount > 0) {
+            publishUnreadCountAfterCommit(uid);
+        }
+        if (capped && remainingUnread > 0) {
+            log.warn("mark all notifications as read capped, uid={}, batchSize={}, maxBatches={}",
+                    LogMask.id(uid), MARK_ALL_READ_BATCH_SIZE, MAX_MARK_ALL_READ_BATCHES);
+        }
+        return NotificationReadAllResultDTO.builder()
+                .updatedCount(updatedCount)
+                .capped(capped && remainingUnread > 0)
+                .remainingUnread(remainingUnread)
+                .build();
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyLike(Long receiverUid, Long senderUid, Integer targetType, Long targetId) {
         create(receiverUid, senderUid, TYPE_LIKE, targetType, targetId,
                 Map.of("action", "like", "targetType", targetType, "targetId", targetId));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyCommentLike(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_LIKE, TARGET_COMMENT, commentId,
                 Map.of("action", "like", "targetType", TARGET_COMMENT, "targetId", commentId,
@@ -162,28 +225,65 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
                 Map.of("action", "comment", "postId", postId, "commentId", commentId));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyAnswerAccepted(Long receiverUid, Long senderUid, Long postId, Long commentId,
+                                     Map<String, Object> content) {
+        create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
+                content == null ? Map.of(
+                        "action", "answerAccepted",
+                        "postId", postId,
+                        "commentId", commentId
+                ) : content);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyDiscussionFollowComment(Long receiverUid, Long senderUid, Long postId, Long commentId) {
+        create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
+                Map.of("action", "discussion_follow_comment",
+                        "postId", postId,
+                        "commentId", commentId,
+                        "targetPath", commentsTargetPath(postId)));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyDiscussionFollowQualityComment(Long receiverUid, Long senderUid, Long postId, Long commentId, String action) {
+        String normalizedAction = normalizeDiscussionFollowQualityAction(action);
+        if (normalizedAction == null) {
+            return;
+        }
+        create(receiverUid, senderUid, TYPE_COMMENT, TARGET_COMMENT, commentId,
+                Map.of("action", normalizedAction,
+                        "postId", postId,
+                        "commentId", commentId,
+                        "targetPath", commentsTargetPath(postId),
+                        "message", discussionFollowQualityMessage(normalizedAction)));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyFollower(Long receiverUid, Long senderUid) {
         create(receiverUid, senderUid, TYPE_FOLLOWER, TARGET_USER, senderUid,
                 Map.of("action", "follow", "userId", senderUid));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyFavorite(Long receiverUid, Long senderUid, Long postId) {
         create(receiverUid, senderUid, TYPE_FAVORITE, TARGET_POST, postId,
                 Map.of("action", "favorite", "postId", postId));
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyMention(Long receiverUid, Long senderUid, Long postId, Long commentId) {
         Map<String, Object> content = commentId == null
                 ? Map.of("action", "mention", "postId", postId)
@@ -193,10 +293,41 @@ public class NotificationFacadeImpl implements NotificationFacade {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifySystem(Long receiverUid, Long targetType, Long targetId, Map<String, Object> content) {
         create(receiverUid, 0L, TYPE_SYSTEM, targetType == null ? null : targetType.intValue(), targetId,
                 content == null ? Map.of() : content);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyReportReceipt(Long receiverUid, String sourceType, Long reportId, String userStatus, String targetPath) {
+        create(receiverUid, 0L, TYPE_SYSTEM, null, reportId,
+                reportReceiptContent(sourceType, reportId, userStatus, targetPath));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyContactRequestReceived(Long receiverUid, Long requesterUid, Long requestId) {
+        create(receiverUid, requesterUid, TYPE_SYSTEM, null, requestId,
+                contactRequestContent(ACTION_CONTACT_REQUEST_RECEIVED, requestId,
+                        CONTACT_REQUEST_INBOX_PATH, "有人发来了联系请求。"));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyContactRequestAccepted(Long requesterUid, Long receiverUid, Long requestId) {
+        create(requesterUid, receiverUid, TYPE_SYSTEM, null, requestId,
+                contactRequestContent(ACTION_CONTACT_REQUEST_ACCEPTED, requestId,
+                        CONTACT_REQUEST_OUTBOX_PATH, "你的联系请求已被接受。"));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void notifyContactRequestRejected(Long requesterUid, Long receiverUid, Long requestId) {
+        create(requesterUid, receiverUid, TYPE_SYSTEM, null, requestId,
+                contactRequestContent(ACTION_CONTACT_REQUEST_REJECTED, requestId,
+                        CONTACT_REQUEST_OUTBOX_PATH, "你的联系请求已被拒绝。"));
     }
 
     private void create(Long receiverUid, Long senderUid, Integer notifType,
@@ -204,9 +335,7 @@ public class NotificationFacadeImpl implements NotificationFacade {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
             return;
         }
-        if (!messageTableReady()) {
-            return;
-        }
+        ensureMessageTableReadyForWrite();
         if (TYPE_SYSTEM == notifType) {
             if (!userFacade.allowsSystemNotification(receiverUid)) {
                 return;
@@ -225,13 +354,37 @@ public class NotificationFacadeImpl implements NotificationFacade {
         po.setDedupKey(NotificationDedupKey.of(receiverUid, senderUid, notifType, targetType, targetId, content));
         po.setIsRead(0);
         po.setIsDeleted(0);
-        int inserted = dedupKeyColumnReady() ? mapper.insertIgnore(po) : mapper.insertLegacy(po);
+        if (!dedupKeyColumnReady()) {
+            throw new IllegalStateException("notification dedup key column is unavailable");
+        }
+        int inserted = mapper.insertIgnore(po);
         if (inserted <= 0) {
             log.debug("duplicate notification skipped: dedupKey={}", LogMask.key(po.getDedupKey()));
+            return;
         }
+        publishNotificationAfterCommit(po.getReceiverUid(), po.getId());
     }
 
-    @Transactional
+    private void publishNotificationAfterCommit(Long receiverUid, Long notificationId) {
+        if (receiverUid == null || notificationId == null
+                || afterCommitExecutor == null || realtimePublisher == null) {
+            return;
+        }
+        afterCommitExecutor.execute(() -> realtimePublisher.publishNotification(
+                receiverUid, notificationId, getUnreadCountByType(receiverUid)),
+                "notification realtime publish");
+    }
+
+    private void publishUnreadCountAfterCommit(Long receiverUid) {
+        if (receiverUid == null || afterCommitExecutor == null || realtimePublisher == null) {
+            return;
+        }
+        afterCommitExecutor.execute(() -> realtimePublisher.publishUnreadCount(
+                receiverUid, getUnreadCountByType(receiverUid)),
+                "notification unread count publish");
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     void createFromRetryTask(Long receiverUid, Long senderUid, Integer notifType,
                              Integer targetType, Long targetId, Map<String, Object> content) {
         create(receiverUid, senderUid, notifType, targetType, targetId, content == null ? Map.of() : content);
@@ -251,33 +404,89 @@ public class NotificationFacadeImpl implements NotificationFacade {
         };
     }
 
-    private LambdaQueryWrapper<NotificationMessagePO> baseUnread(Long uid) {
-        return new LambdaQueryWrapper<NotificationMessagePO>()
-                .eq(NotificationMessagePO::getReceiverUid, uid)
-                .eq(NotificationMessagePO::getIsRead, 0)
-                .eq(NotificationMessagePO::getIsDeleted, 0);
+    private Map<String, Object> reportReceiptContent(String sourceType, Long reportId,
+                                                     String userStatus, String targetPath) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        String normalizedStatus = normalizeReportUserStatus(userStatus);
+        content.put("action", ACTION_REPORT_RECEIPT);
+        content.put("sourceType", sourceType);
+        content.put("reportId", reportId);
+        content.put("userStatus", normalizedStatus);
+        content.put("targetPath", targetPath);
+        content.put("title", "你提交的举报已有处理结果。");
+        content.put("message", REPORT_USER_STATUS_ACTION_TAKEN.equals(normalizedStatus)
+                ? "平台已处理你举报的内容。"
+                : "经复核，暂未发现明确违规。");
+        content.put("message", reportReceiptMessage(normalizedStatus));
+        content.put("dedupKey", ACTION_REPORT_RECEIPT + ":" + sourceType + ":" + reportId);
+        return content;
     }
 
-    private long countByType(Long uid, int type) {
-        if (!messageTableReady()) {
-            return 0L;
+    private String normalizeReportUserStatus(String userStatus) {
+        if (REPORT_USER_STATUS_ACTION_TAKEN.equals(userStatus)) {
+            return REPORT_USER_STATUS_ACTION_TAKEN;
         }
-        Long count = mapper.selectCount(baseUnread(uid).eq(NotificationMessagePO::getNotifType, type));
-        return count == null ? 0L : count;
+        if (REPORT_USER_STATUS_CLOSED.equals(userStatus)) {
+            return REPORT_USER_STATUS_CLOSED;
+        }
+        return REPORT_USER_STATUS_NOT_ACCEPTED;
+    }
+
+    private String reportReceiptMessage(String status) {
+        if (REPORT_USER_STATUS_ACTION_TAKEN.equals(status)) {
+            return "平台已处理你举报的内容。";
+        }
+        if (REPORT_USER_STATUS_CLOSED.equals(status)) {
+            return "举报已关闭，平台已记录该反馈。";
+        }
+        return "经复核，暂未发现明确违规。";
+    }
+
+    private Map<String, Object> contactRequestContent(String action, Long requestId,
+                                                      String targetPath, String message) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("action", action);
+        content.put("requestId", requestId);
+        content.put("targetPath", targetPath);
+        content.put("message", message);
+        content.put("dedupKey", action + ":" + requestId);
+        return content;
     }
 
     private boolean messageTableReady() {
+        if (Boolean.TRUE.equals(messageTableReadyCache)) {
+            return true;
+        }
         try {
-            return mapper.tableExists() > 0;
+            boolean ready = mapper.tableExists() > 0;
+            if (ready) {
+                messageTableReadyCache = true;
+            }
+            return ready;
         } catch (RuntimeException e) {
+            log.warn("notification message table readiness check failed: {}", LogMask.message(e));
             return false;
         }
     }
 
+    private void ensureMessageTableReadyForWrite() {
+        if (!messageTableReady()) {
+            throw new IllegalStateException("notification message table is unavailable");
+        }
+    }
+
     private boolean dedupKeyColumnReady() {
+        if (Boolean.TRUE.equals(dedupKeyColumnReadyCache)) {
+            return true;
+        }
         try {
-            return mapper.dedupKeyColumnExists() > 0;
+            boolean ready = mapper.dedupKeyColumnExists() > 0;
+            if (ready) {
+                dedupKeyColumnReadyCache = true;
+            }
+            return ready;
         } catch (RuntimeException e) {
+            log.warn("notification dedup key column readiness check failed: {}", LogMask.message(e));
             return false;
         }
     }
@@ -294,22 +503,22 @@ public class NotificationFacadeImpl implements NotificationFacade {
                 .toList();
     }
 
-    private List<Map<String, Object>> aggregateItems(List<NotificationMessagePO> rows, Map<Long, UserBriefDTO> senders) {
-        List<Map<String, Object>> items = new ArrayList<>();
+    private List<NotificationGroup> notificationGroups(List<NotificationMessagePO> rows) {
+        List<NotificationGroup> groups = new ArrayList<>();
         List<NotificationMessagePO> group = new ArrayList<>();
         for (NotificationMessagePO row : rows) {
             if (group.isEmpty() || canAggregate(group.get(0), row)) {
                 group.add(row);
                 continue;
             }
-            items.add(toGroupedItem(group, senders));
+            groups.add(new NotificationGroup("g" + groups.size(), List.copyOf(group)));
             group = new ArrayList<>();
             group.add(row);
         }
         if (!group.isEmpty()) {
-            items.add(toGroupedItem(group, senders));
+            groups.add(new NotificationGroup("g" + groups.size(), List.copyOf(group)));
         }
-        return items;
+        return groups;
     }
 
     private boolean canAggregate(NotificationMessagePO head, NotificationMessagePO candidate) {
@@ -338,22 +547,71 @@ public class NotificationFacadeImpl implements NotificationFacade {
         return notifType != null && (notifType == TYPE_LIKE || notifType == TYPE_FAVORITE);
     }
 
-    private Map<String, Object> toGroupedItem(List<NotificationMessagePO> group, Map<Long, UserBriefDTO> senders) {
-        NotificationMessagePO head = group.get(0);
-        if (group.size() == 1) {
+    private Map<String, AggregateCounts> aggregateCounts(Long uid, List<NotificationGroup> groups) {
+        List<NotificationAggregateWindow> windows = groups.stream()
+                .filter(group -> isAggregatableType(group.head().getNotifType()))
+                .map(this::toAggregateWindow)
+                .filter(Objects::nonNull)
+                .toList();
+        if (windows.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            Map<String, AggregateCounts> result = new LinkedHashMap<>();
+            List<Map<String, Object>> rows = mapper.countAggregateWindows(uid, windows);
+            if (rows == null) {
+                return Map.of();
+            }
+            for (Map<String, Object> row : rows) {
+                String windowKey = String.valueOf(row.get("windowKey"));
+                result.put(windowKey, new AggregateCounts(
+                        asLong(row, "aggregateCount"),
+                        asLong(row, "unreadCount")));
+            }
+            return result;
+        } catch (RuntimeException e) {
+            log.warn("notification aggregate count query failed, uid={}", LogMask.id(uid), e);
+            return Map.of();
+        }
+    }
+
+    private NotificationAggregateWindow toAggregateWindow(NotificationGroup group) {
+        NotificationMessagePO head = group.head();
+        if (head.getCreateTime() == null) {
+            return null;
+        }
+        return new NotificationAggregateWindow(
+                group.key(),
+                head.getNotifType(),
+                head.getTargetType(),
+                head.getTargetId(),
+                head.getCreateTime().minusMinutes(AGGREGATION_WINDOW_MINUTES),
+                head.getCreateTime());
+    }
+
+    private Map<String, Object> toGroupedItem(NotificationGroup group, Map<Long, UserBriefDTO> senders,
+                                               AggregateCounts actualCounts) {
+        List<NotificationMessagePO> rows = group.rows();
+        NotificationMessagePO head = group.head();
+        int pageUnreadCount = (int) rows.stream()
+                .filter(row -> row.getIsRead() == null || row.getIsRead() == 0)
+                .count();
+        long aggregateCount = actualCounts == null
+                ? rows.size()
+                : Math.max(rows.size(), actualCounts.aggregateCount());
+        long unreadCount = actualCounts == null ? pageUnreadCount : actualCounts.unreadCount();
+        boolean aggregated = isAggregatableType(head.getNotifType()) && aggregateCount > 1;
+        if (!aggregated && rows.size() == 1) {
             return toItem(head, senders.get(head.getSenderUid()));
         }
         Map<String, Object> item = toItem(head, senders.get(head.getSenderUid()));
-        int unreadCount = (int) group.stream()
-                .filter(row -> row.getIsRead() == null || row.getIsRead() == 0)
-                .count();
         Map<String, Object> content = new LinkedHashMap<>(parseContent(head.getContentJson()));
-        content.put("aggregateCount", group.size());
+        content.put("aggregateCount", aggregateCount);
         content.put("unreadCount", unreadCount);
         content.put("aggregated", true);
         item.put("content", content);
-        item.put("notificationIds", group.stream().map(NotificationMessagePO::getId).toList());
-        item.put("aggregateCount", group.size());
+        item.put("notificationIds", rows.stream().map(NotificationMessagePO::getId).toList());
+        item.put("aggregateCount", aggregateCount);
         item.put("unreadCount", unreadCount);
         item.put("isRead", unreadCount == 0);
         return item;
@@ -401,6 +659,27 @@ public class NotificationFacadeImpl implements NotificationFacade {
         };
     }
 
+    private NotificationCursor parseCursor(String cursor) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return NotificationCursor.empty();
+        }
+        try {
+            String[] parts = cursor.trim().split(":", 2);
+            long millis = Long.parseLong(parts[0]);
+            LocalDateTime time = millis > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneOffset.UTC) : null;
+            Long id = parts.length > 1 && !parts[1].isBlank() ? Long.parseLong(parts[1]) : null;
+            return new NotificationCursor(time, id != null && id > 0 ? id : null);
+        } catch (NumberFormatException e) {
+            return NotificationCursor.empty();
+        }
+    }
+
+    private record NotificationCursor(LocalDateTime time, Long id) {
+        private static NotificationCursor empty() {
+            return new NotificationCursor(null, null);
+        }
+    }
+
     private String typeName(Integer type) {
         if (type == null) return "system";
         return switch (type) {
@@ -413,7 +692,87 @@ public class NotificationFacadeImpl implements NotificationFacade {
         };
     }
 
+    private Map<String, Long> emptyUnreadCounts() {
+        Map<String, Long> result = new LinkedHashMap<>();
+        result.put("total", 0L);
+        result.put("like", 0L);
+        result.put("comment", 0L);
+        result.put("favorite", 0L);
+        result.put("follower", 0L);
+        result.put("mention", 0L);
+        result.put("system", 0L);
+        return result;
+    }
+
+    private Long asLong(Map<String, Object> row, String... keys) {
+        Object value = value(row, keys);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Long.parseLong(text);
+        }
+        return 0L;
+    }
+
+    private Integer asInteger(Map<String, Object> row, String... keys) {
+        Object value = value(row, keys);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Integer.parseInt(text);
+        }
+        return null;
+    }
+
+    private Object value(Map<String, Object> row, String... keys) {
+        if (row == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (row.containsKey(key)) {
+                return row.get(key);
+            }
+        }
+        return null;
+    }
+
     private int clampPageSize(int size) {
         return Math.max(1, Math.min(size, 50));
+    }
+
+    private String normalizeDiscussionFollowQualityAction(String action) {
+        if (action == null || action.isBlank()) {
+            return null;
+        }
+        return switch (action) {
+            case "discussion_follow_featured_reply",
+                 "discussion_follow_author_pinned",
+                 "discussion_follow_author_reply" -> action;
+            default -> null;
+        };
+    }
+
+    private String discussionFollowQualityMessage(String action) {
+        return switch (action) {
+            case "discussion_follow_featured_reply" -> "你关注的讨论有一条精选回复。";
+            case "discussion_follow_author_pinned" -> "作者置顶了一条关键回应。";
+            case "discussion_follow_author_reply" -> "作者补充了新的回应。";
+            default -> "你关注的讨论有新的回应。";
+        };
+    }
+
+    private String commentsTargetPath(Long postId) {
+        return "/post/" + postId + "#comments";
+    }
+
+    private record NotificationGroup(String key, List<NotificationMessagePO> rows) {
+        private NotificationMessagePO head() {
+            return rows.get(0);
+        }
+    }
+
+    private record AggregateCounts(long aggregateCount, long unreadCount) {
     }
 }

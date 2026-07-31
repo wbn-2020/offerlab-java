@@ -53,6 +53,11 @@ public class DiscoveryMapService {
     private static final int DEFAULT_FEATURED_LIMIT = 5;
     private static final int DEFAULT_TOPIC_LIMIT = 8;
     private static final int DEFAULT_SEARCH_LIMIT = 6;
+    private static final int TYPE_CHECKLIST = 10;
+    private static final int TYPE_RETROSPECTIVE = 11;
+    private static final int TYPE_QUESTION = 13;
+    private static final int TYPE_RESOURCE = 14;
+    private static final int TYPE_DISCUSSION = 16;
 
     private final OperationCurationService operationCurationService;
     private final CommunityTopicService communityTopicService;
@@ -60,6 +65,7 @@ public class DiscoveryMapService {
     public DiscoveryMapDTO getPublicMap(int featuredLimit, int topicLimit) {
         List<DiscoveryMapDTO.DiscoveryItemDTO> featuredTopics = loadFeaturedTopics(featuredLimit);
         List<DiscoveryMapDTO.DiscoveryItemDTO> channels = channelEntrypoints();
+        List<DiscoveryMapDTO.DiscoveryItemDTO> contentForms = contentFormEntrypoints();
         List<DiscoveryMapDTO.DiscoveryItemDTO> activeTopics = loadActiveTopics(topicLimit);
         List<DiscoveryMapDTO.DiscoveryItemDTO> searchEntrypoints = searchEntrypoints();
 
@@ -68,6 +74,8 @@ public class DiscoveryMapService {
                 featuredTopics, "discovery_featured_topics_empty"));
         modules.put("channels", module("channels", "频道入口", SOURCE_PUBLIC_CONTENT_QUERY,
                 channels, null));
+        modules.put("contentForms", module("contentForms", "内容形式", SOURCE_PUBLIC_CONTENT_QUERY,
+                contentForms, null));
         modules.put("activeTopics", module("activeTopics", "活跃话题", SOURCE_COMMUNITY_TOPIC,
                 activeTopics, "community_topics_empty"));
         modules.put("searchEntrypoints", module("searchEntrypoints", "搜索延展", SOURCE_SEARCH_ANALYTICS,
@@ -87,6 +95,7 @@ public class DiscoveryMapService {
                 .modules(modules)
                 .featuredTopics(featuredTopics)
                 .channels(channels)
+                .contentForms(contentForms)
                 .activeTopics(activeTopics)
                 .searchEntrypoints(searchEntrypoints)
                 .build();
@@ -202,8 +211,17 @@ public class DiscoveryMapService {
                 channel("career-experience", "职场经验", "求职经验、工作复盘和职场选择。", "/search?domain=2&sort=hot", "2"),
                 channel("learning-growth", "学习成长", "学习方法、读书笔记和技能提升。", "/search?domain=3&sort=hot", "3"),
                 channel("lifestyle", "生活方式", "租房、城市生活、消费经验和健康日常。", "/search?domain=4&sort=hot", "4"),
-                channel("resources", "资源推荐", "工具、书单、公开资料索引和模板经验。", "/search?type=4&sort=hot", "R"),
-                channel("qa-discussion", "问答讨论", "求建议、观点讨论和经验征集。", "/search?type=2&sort=hot", "Q")
+                channel("investment", "投资理财", "预算、应急金、风险教育和理财经验交流，不构成投资建议。", "/search?domain=5&sort=hot", "5")
+        );
+    }
+
+    private List<DiscoveryMapDTO.DiscoveryItemDTO> contentFormEntrypoints() {
+        return List.of(
+                contentForm("resource", "资源推荐", "工具、网站、书单、课程、模板和资料合集。", TYPE_RESOURCE, "R"),
+                contentForm("question", "问题求助", "提出具体问题，补充背景、已尝试方法和期待获得的建议。", TYPE_QUESTION, "Q"),
+                contentForm("discussion", "观点讨论", "表达观点、分享观察，并邀请社区成员一起讨论。", TYPE_DISCUSSION, "D"),
+                contentForm("retrospective", "复盘记录", "记录一次经历、项目、活动或决策的背景、过程、结果和下一步。", TYPE_RETROSPECTIVE, "R"),
+                contentForm("checklist", "攻略清单", "整理步骤、方法、清单、避坑指南和可执行经验。", TYPE_CHECKLIST, "C")
         );
     }
 
@@ -215,6 +233,28 @@ public class DiscoveryMapService {
                 .summary(summary)
                 .href(href)
                 .source(SOURCE_PUBLIC_CONTENT_QUERY)
+                .icon(icon)
+                .assetStatus(ASSET_STATUS_ACTIVE)
+                .visibilityState(VISIBILITY_VISIBLE)
+                .previewSource(PREVIEW_REMOTE)
+                .build();
+    }
+
+    private DiscoveryMapDTO.DiscoveryItemDTO contentForm(
+            String key,
+            String title,
+            String summary,
+            int postType,
+            String icon
+    ) {
+        return DiscoveryMapDTO.DiscoveryItemDTO.builder()
+                .id("content-form:" + key)
+                .type("content-form")
+                .title(title)
+                .summary(summary)
+                .href("/search?type=" + postType + "&sort=hot")
+                .source(SOURCE_PUBLIC_CONTENT_QUERY)
+                .postType(postType)
                 .icon(icon)
                 .assetStatus(ASSET_STATUS_ACTIVE)
                 .visibilityState(VISIBILITY_VISIBLE)

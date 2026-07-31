@@ -1,5 +1,7 @@
 package com.offerlab.community.search.application;
 
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRebuildTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRetryTaskMapper;
 import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRetryTaskPO;
 import org.junit.jupiter.api.Test;
@@ -8,8 +10,13 @@ import java.time.LocalDateTime;
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SearchIndexRetryServiceTest {
 
@@ -77,6 +84,54 @@ class SearchIndexRetryServiceTest {
         assertEquals(0L, status.get("duePending"));
     }
 
+    @Test
+    void requiredEnqueueFailsWhenRetryTableIsUnavailable() {
+        SearchIndexRetryService service = new SearchIndexRetryService(unavailableMapper(), null, null);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> service.enqueueIndexRequired(42L, new IllegalStateException("Elasticsearch down")));
+    }
+
+    @Test
+    void requiredEnqueueFailsWhenUpsertDoesNotPersistATask() {
+        SearchIndexRetryTaskMapper mapper = proxy(methodName -> switch (methodName) {
+            case "tableExists" -> 1;
+            case "upsertPending" -> 0;
+            default -> throw new UnsupportedOperationException(methodName);
+        });
+        SnowflakeIdGenerator idGenerator = mock(SnowflakeIdGenerator.class);
+        when(idGenerator.nextId()).thenReturn(100L);
+        SearchIndexRetryService service = new SearchIndexRetryService(mapper, idGenerator, null);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> service.enqueueDeleteRequired(42L, new IllegalStateException("Elasticsearch down")));
+    }
+
+    @Test
+    void retryClaimPausesWithoutConsumingAttemptsWhileRebuildIsActive() {
+        AtomicBoolean claimCalled = new AtomicBoolean(false);
+        SearchIndexRetryTaskMapper retryMapper = proxy(methodName -> switch (methodName) {
+            case "tableExists" -> 1;
+            case "claimDue" -> {
+                claimCalled.set(true);
+                yield 0;
+            }
+            default -> throw new UnsupportedOperationException(methodName);
+        });
+        SearchIndexRebuildTaskMapper rebuildMapper = rebuildProxy(methodName -> switch (methodName) {
+            case "tableExists", "countActive" -> 1;
+            case "failExpiredLease" -> 0;
+            default -> throw new UnsupportedOperationException(methodName);
+        });
+        SearchIndexRetryService service = new SearchIndexRetryService(retryMapper, null, null, rebuildMapper);
+
+        service.retryDueTasks();
+
+        assertFalse(claimCalled.get());
+    }
+
     private static SearchIndexRetryTaskMapper availableMapper(List<Map<String, Object>> rows, long duePending) {
         return proxy((methodName) -> switch (methodName) {
             case "tableExists" -> 1;
@@ -111,6 +166,19 @@ class SearchIndexRetryServiceTest {
         return (SearchIndexRetryTaskMapper) Proxy.newProxyInstance(
                 SearchIndexRetryTaskMapper.class.getClassLoader(),
                 new Class<?>[]{SearchIndexRetryTaskMapper.class},
+                (proxy, method, args) -> {
+                    if (method.getDeclaringClass() == Object.class) {
+                        return method.invoke(thisProxyName(), args);
+                    }
+                    return result.invoke(method.getName());
+                }
+        );
+    }
+
+    private static SearchIndexRebuildTaskMapper rebuildProxy(MethodResult result) {
+        return (SearchIndexRebuildTaskMapper) Proxy.newProxyInstance(
+                SearchIndexRebuildTaskMapper.class.getClassLoader(),
+                new Class<?>[]{SearchIndexRebuildTaskMapper.class},
                 (proxy, method, args) -> {
                     if (method.getDeclaringClass() == Object.class) {
                         return method.invoke(thisProxyName(), args);

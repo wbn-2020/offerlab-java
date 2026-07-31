@@ -1,5 +1,6 @@
 package com.offerlab.community.interaction.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,6 +12,7 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class CommentReportDTO {
     private Long id;
     private Long commentId;
@@ -21,6 +23,10 @@ public class CommentReportDTO {
     private String reason;
     private String detail;
     private Integer reportStatus;
+    private String userStatus;
+    private Boolean postAvailable;
+    private Boolean commentAvailable;
+    private String contentStatus;
     private Long reviewerUid;
     private String reviewNote;
     private LocalDateTime reviewTime;

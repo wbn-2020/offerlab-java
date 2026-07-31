@@ -2,13 +2,24 @@
 
 Use the folders differently:
 
-- `db/migration`: additive scripts for existing databases. Review and run these
-  manually in the target environment.
+- `db/migration`: canonical additive sources for existing databases. The
+  application applies the generated core Flyway resources automatically. Run a
+  source file manually only under an explicit migration runbook, and never
+  manually apply a version that Flyway will later try to execute.
 - `db/init`: fresh local initialization scripts. These files may contain
   `DROP TABLE IF EXISTS` and must not be run against an existing database unless
   you intentionally want to rebuild it from scratch. Run
   `db/init/00_empty_database_guard.sql` first when applying the init folder; it
   aborts if the current schema already contains tables.
+- The `local` Spring profile uses this fresh-init path and therefore disables
+  Flyway by default. Use the `dev` profile for migration rehearsal against a
+  legacy schema; production-like profiles require Flyway and must not load
+  `db/init`.
+- `db/init/14_collaboration.sql`, `db/init/15_incentive.sql`, and
+  `db/init/16_database_integrity_hardening.sql` mirror the Stage 2-5 canonical
+  schema and its integrity hardening so a fresh Docker database exposes the
+  same collaboration, non-cash incentive, virtual benefit, and community-role
+  structures as the Flyway migration path.
 - `db/schema-ledger.md`: static acceptance ledger for recording which schema
   source and migration scripts were reviewed for a target environment.
 
@@ -30,7 +41,8 @@ Use `db/migration` for existing environments. Before executing any migration:
 3. For scripts that alter indexes or uniqueness rules, run the precheck queries
    in the script first and confirm the result set is empty or expected.
 4. Record the backup point, maintenance window, operator, and rollback plan.
-5. Execute one script at a time and record success or failure.
+5. Deploy through Flyway and record success or failure. A manual execution must
+   also record how the corresponding Flyway history row will be established.
 
 Before running an existing-database migration, use:
 

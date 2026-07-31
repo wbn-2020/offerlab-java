@@ -28,6 +28,8 @@ public class PostBriefDTO {
     private Boolean anonymous;
     private List<TagDTO> tags;
     private PostCounterDTO counter;
+    private PostTrustSignalsDTO trustSignals;
     private List<String> recommendationReasons;
+    private List<String> rankingReasons;
     private LocalDateTime createTime;
 }

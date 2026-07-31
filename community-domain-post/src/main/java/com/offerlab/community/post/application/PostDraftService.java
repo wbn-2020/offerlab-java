@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostDraftCmd;
 import com.offerlab.community.post.api.dto.PostDraftDTO;
@@ -22,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Objects;
 
 @Slf4j
 @Service
@@ -135,7 +137,7 @@ public class PostDraftService {
         po.setPostType(cmd.getPostType() == null ? 1 : cmd.getPostType());
         po.setTitle(limit(cmd.getTitle(), 255));
         po.setContent(limit(cmd.getContent(), PostContentLimits.MAX_CONTENT_LEN));
-        po.setCoverUrl(limit(cmd.getCoverUrl(), 512));
+        po.setCoverUrl(normalizeCoverUrl(cmd.getCoverUrl()));
         po.setVisibility(cmd.getVisibility() == null ? 1 : cmd.getVisibility());
         po.setExtJson(limit(normalizeDraftExtJson(baseExtJson, domain, anonymous), PostContentLimits.MAX_EXT_JSON_LEN));
         po.setTagIdsJson(writeJson(cmd.getTagIds()));
@@ -205,11 +207,24 @@ public class PostDraftService {
         return normalized.length() <= max ? normalized : normalized.substring(0, max);
     }
 
+    private String normalizeCoverUrl(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return ExternalUrlSafety.requireSafeHttpUrl(value, "coverUrl", 512);
+    }
+
     private String normalizeDraftExtJson(String extJson, Integer domain, Boolean anonymous) {
         try {
             ObjectNode object = readObjectExtJson(extJson);
-            object.put("domain", draftDomain(domain, extJson));
-            object.put("anonymous", Boolean.TRUE.equals(anonymous) && draftDomain(domain, extJson) == Post.DOMAIN_CAREER);
+            Integer resolvedDomain = draftDomain(domain, extJson);
+            if (resolvedDomain == null) {
+                object.remove("domain");
+            } else {
+                object.put("domain", resolvedDomain);
+            }
+            object.put("anonymous", Boolean.TRUE.equals(anonymous)
+                    && Objects.equals(resolvedDomain, Post.DOMAIN_CAREER));
             return objectMapper.writeValueAsString(object);
         } catch (Exception e) {
             throw new BizException(ErrorCode.PARAM_ERROR);
@@ -221,7 +236,7 @@ public class PostDraftService {
             return requireDomain(explicitDomain);
         }
         Integer legacyDomain = readDomain(extJson);
-        return PostDomain.fromCode(legacyDomain).getCode();
+        return legacyDomain == null ? null : requireDomain(legacyDomain);
     }
 
     private Boolean draftAnonymous(Boolean explicitAnonymous, String extJson, Integer domain) {

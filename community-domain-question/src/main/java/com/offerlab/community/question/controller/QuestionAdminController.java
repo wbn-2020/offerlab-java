@@ -31,6 +31,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,6 +41,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -243,14 +245,19 @@ public class QuestionAdminController {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         String remark = RiskConfirmation.requireHigh(request == null ? null : request.remark());
+        LocalDateTime expectedUpdateTime = request == null ? null : request.expectedUpdateTime();
+        if (expectedUpdateTime == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "缺少题目内容版本，请刷新后重试");
+        }
         adminAuditService.requireWritable("QUESTION_REVIEW", "QUESTION", id);
-        Map<String, Object> result = questionFacade.reviewQuestion(id, status);
+        Map<String, Object> result = questionFacade.reviewQuestion(id, status, expectedUpdateTime);
         adminAuditService.recordRequired(uid, "QUESTION_REVIEW", "QUESTION", id, null, result,
                 remark);
         return Result.ok(result);
     }
 
     @PostMapping("/questions/batch-review")
+    @Transactional
     public Result<Map<String, Object>> batchReviewQuestions(@Valid @RequestBody QuestionBatchReviewRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -261,7 +268,13 @@ public class QuestionAdminController {
         String remark = RiskConfirmation.requireCritical(request.remark(), request.confirmationPhrase());
         adminAuditService.requireWritable("QUESTION_REVIEW_BATCH", "QUESTION", null);
         List<Map<String, Object>> reviewed = ids.stream()
-                .map(id -> questionFacade.reviewQuestion(id, status))
+                .map(id -> {
+                    LocalDateTime expectedUpdateTime = request.expectedUpdateTimes().get(id);
+                    if (expectedUpdateTime == null) {
+                        throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "缺少题目内容版本，请刷新后重试");
+                    }
+                    return questionFacade.reviewQuestion(id, status, expectedUpdateTime);
+                })
                 .toList();
         Map<String, Object> result = Map.of(
                 "requested", ids.size(),
@@ -436,6 +449,7 @@ public class QuestionAdminController {
     public record QuestionBatchReviewRequest(
             @NotEmpty @Size(max = 100) List<@NotNull @Positive Long> ids,
             @NotNull @Min(QuestionConstants.QUESTION_PENDING) @Max(QuestionConstants.QUESTION_HIDDEN) Integer status,
+            @NotNull Map<@NotNull @Positive Long, @NotNull LocalDateTime> expectedUpdateTimes,
             @Size(max = 500) String remark,
             @Size(max = 32) String confirmationPhrase) {
     }
@@ -461,7 +475,8 @@ public class QuestionAdminController {
     public record RemarkRequest(@Size(max = 500) String remark,
                                 @Size(max = 32) String confirmationPhrase,
                                 @Size(max = 80) String idempotencyKey,
-                                @Size(max = 80) String previewNonce) {
+                                @Size(max = 80) String previewNonce,
+                                LocalDateTime expectedUpdateTime) {
     }
 
     private Map<String, Object> previewResult(Long uid, String operation, List<?> ids, List<Map<String, Object>> items) {

@@ -29,6 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.Map;
+import java.time.LocalDateTime;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -149,7 +150,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"remark\":\"rebuild question index\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -539,8 +540,8 @@ class QuestionAdminControllerApiTest {
         when(jwtService.parseUid("token")).thenReturn(7L);
 
         for (String body : List.of(
-                "{\"questionText\":\"updated question text\"}",
-                "{\"questionText\":\"updated question text\",\"remark\":\"   \"}"
+                "{\"questionText\":\"updated question text\",\"expectedUpdateTime\":\"2026-07-23T10:00:00\"}",
+                "{\"questionText\":\"updated question text\",\"expectedUpdateTime\":\"2026-07-23T10:00:00\",\"remark\":\"   \"}"
         )) {
             mvc.perform(post("/api/v1/admin/questions/42")
                             .header("Authorization", "Bearer token")
@@ -564,8 +565,12 @@ class QuestionAdminControllerApiTest {
         mvc.perform(post("/api/v1/admin/questions/42")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"questionText\":\"updated question text\",\"remark\":\"fix low quality answer\"}"))
-                .andExpect(status().isInternalServerError())
+                        .content("""
+                                {"questionText":"updated question text",
+                                 "expectedUpdateTime":"2026-07-23T10:00:00",
+                                 "remark":"fix low quality answer"}
+                                """))
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -579,14 +584,18 @@ class QuestionAdminControllerApiTest {
         QuestionDTO dto = QuestionDTO.builder()
                 .id(42L)
                 .questionText("updated question text")
-                .status(1)
+                .status(0)
                 .build();
         when(questionFacade.updateQuestionAdmin(eq(42L), any(QuestionAdminUpdateCmd.class))).thenReturn(dto);
 
         mvc.perform(post("/api/v1/admin/questions/42")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"questionText\":\"updated question text\",\"remark\":\"fix low quality answer\"}"))
+                        .content("""
+                                {"questionText":"updated question text",
+                                 "expectedUpdateTime":"2026-07-23T10:00:00",
+                                 "remark":"fix low quality answer"}
+                                """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.id").value(42))
@@ -637,7 +646,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"canonicalQuestionId\":99,\"remark\":\"choose canonical question\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -764,7 +773,7 @@ class QuestionAdminControllerApiTest {
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"remark\":\"disable obsolete alias\"}"))
-                .andExpect(status().isInternalServerError())
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -809,7 +818,11 @@ class QuestionAdminControllerApiTest {
         mvc.perform(post("/api/v1/admin/questions/batch-review")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"ids\":[1,2],\"status\":1,\"remark\":\"approve reviewed questions\",\"confirmationPhrase\":\"CONFIRM\"}"))
+                        .content("""
+                                {"ids":[1,2],"status":1,
+                                 "expectedUpdateTimes":{"1":"2026-07-23T10:00:00","2":"2026-07-23T10:01:00"},
+                                 "remark":"approve reviewed questions","confirmationPhrase":"CONFIRM"}
+                                """))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(ErrorCode.FORBIDDEN.getCode()));
 
@@ -826,8 +839,12 @@ class QuestionAdminControllerApiTest {
         mvc.perform(post("/api/v1/admin/questions/batch-review")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"ids\":[1,2],\"status\":1,\"remark\":\"approve reviewed questions\",\"confirmationPhrase\":\"CONFIRM\"}"))
-                .andExpect(status().isInternalServerError())
+                        .content("""
+                                {"ids":[1,2],"status":1,
+                                 "expectedUpdateTimes":{"1":"2026-07-23T10:00:00","2":"2026-07-23T10:01:00"},
+                                 "remark":"approve reviewed questions","confirmationPhrase":"CONFIRM"}
+                                """))
+                .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.SYSTEM_ERROR.getCode()));
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
@@ -840,9 +857,9 @@ class QuestionAdminControllerApiTest {
         when(jwtService.parseUid("token")).thenReturn(7L);
 
         for (String body : List.of(
-                "{\"ids\":[1,2],\"status\":1}",
-                "{\"ids\":[1,2],\"status\":1,\"remark\":\"approve reviewed questions\"}",
-                "{\"ids\":[1,2],\"status\":1,\"remark\":\"approve reviewed questions\",\"confirmationPhrase\":\"WRONG\"}"
+                "{\"ids\":[1,2],\"status\":1,\"expectedUpdateTimes\":{\"1\":\"2026-07-23T10:00:00\",\"2\":\"2026-07-23T10:01:00\"}}",
+                "{\"ids\":[1,2],\"status\":1,\"expectedUpdateTimes\":{\"1\":\"2026-07-23T10:00:00\",\"2\":\"2026-07-23T10:01:00\"},\"remark\":\"approve reviewed questions\"}",
+                "{\"ids\":[1,2],\"status\":1,\"expectedUpdateTimes\":{\"1\":\"2026-07-23T10:00:00\",\"2\":\"2026-07-23T10:01:00\"},\"remark\":\"approve reviewed questions\",\"confirmationPhrase\":\"WRONG\"}"
         )) {
             mvc.perform(post("/api/v1/admin/questions/batch-review")
                             .header("Authorization", "Bearer token")
@@ -859,13 +876,19 @@ class QuestionAdminControllerApiTest {
     @Test
     void questionOperatorCanBatchReviewQuestions() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
-        when(questionFacade.reviewQuestion(1L, 1)).thenReturn(Map.of("questionId", 1L, "status", 1));
-        when(questionFacade.reviewQuestion(2L, 1)).thenReturn(Map.of("questionId", 2L, "status", 1));
+        LocalDateTime firstVersion = LocalDateTime.of(2026, 7, 23, 10, 0);
+        LocalDateTime secondVersion = LocalDateTime.of(2026, 7, 23, 10, 1);
+        when(questionFacade.reviewQuestion(1L, 1, firstVersion)).thenReturn(Map.of("questionId", 1L, "status", 1));
+        when(questionFacade.reviewQuestion(2L, 1, secondVersion)).thenReturn(Map.of("questionId", 2L, "status", 1));
 
         mvc.perform(post("/api/v1/admin/questions/batch-review")
                         .header("Authorization", "Bearer token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"ids\":[1,2,1],\"status\":1,\"remark\":\"approve reviewed questions\",\"confirmationPhrase\":\"CONFIRM\"}"))
+                        .content("""
+                                {"ids":[1,2,1],"status":1,
+                                 "expectedUpdateTimes":{"1":"2026-07-23T10:00:00","2":"2026-07-23T10:01:00"},
+                                 "remark":"approve reviewed questions","confirmationPhrase":"CONFIRM"}
+                                """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.requested").value(2))
@@ -874,8 +897,8 @@ class QuestionAdminControllerApiTest {
 
         verify(adminPermissionService).requireScope(7L, AdminPermissionService.ROLE_QUESTION_OPERATOR);
         verify(adminAuditService).requireWritable("QUESTION_REVIEW_BATCH", "QUESTION", null);
-        verify(questionFacade).reviewQuestion(1L, 1);
-        verify(questionFacade).reviewQuestion(2L, 1);
+        verify(questionFacade).reviewQuestion(1L, 1, firstVersion);
+        verify(questionFacade).reviewQuestion(2L, 1, secondVersion);
         verify(adminAuditService).recordRequired(7L, "QUESTION_REVIEW_BATCH", "QUESTION", null,
                 Map.of("ids", List.of(1L, 2L), "status", 1), Map.of("requested", 2, "reviewed", 2, "status", 1),
                 "approve reviewed questions");

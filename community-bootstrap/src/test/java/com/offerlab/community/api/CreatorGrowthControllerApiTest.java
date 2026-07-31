@@ -6,6 +6,7 @@ import com.offerlab.community.analytics.api.dto.CreatorRepresentativePostCmd;
 import com.offerlab.community.analytics.application.CreatorCurationFeedbackService;
 import com.offerlab.community.analytics.application.CreatorGrowthService;
 import com.offerlab.community.analytics.controller.CreatorGrowthController;
+import com.offerlab.community.analytics.controller.TrustedContentDashboardController;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.security.JwtService;
 import org.springframework.http.MediaType;
@@ -52,6 +53,46 @@ class CreatorGrowthControllerApiTest {
                 .andExpect(jsonPath("$.code").value(ErrorCode.UNAUTHORIZED.getCode()));
 
         verifyNoInteractions(creatorGrowthService);
+    }
+
+    @Test
+    void trustedContentDashboardRequiresLogin() throws Exception {
+        MockMvc trustedContentMvc = ApiTestSupport.mvc(
+                new TrustedContentDashboardController(creatorGrowthService), jwtService);
+
+        trustedContentMvc.perform(get("/api/v1/dashboard/trusted-content"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorCode.UNAUTHORIZED.getCode()));
+
+        verifyNoInteractions(creatorGrowthService);
+    }
+
+    @Test
+    void authenticatedUserCanReadStandaloneTrustedContentDashboard() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(18L);
+        when(creatorGrowthService.trustedContent(eq(18L))).thenReturn(
+                CreatorGrowthWorkspaceDTO.TrustedContentDTO.builder()
+                        .degraded(false)
+                        .pendingSuggestions(2L)
+                        .freshnessAwaitingConfirmation(1L)
+                        .unresolvedQuestions(3L)
+                        .usefulFeedback7Days(4L)
+                        .usefulFeedback30Days(8L)
+                        .effectiveReads7Days(20L)
+                        .effectiveReads30Days(70L)
+                        .build());
+        MockMvc trustedContentMvc = ApiTestSupport.mvc(
+                new TrustedContentDashboardController(creatorGrowthService), jwtService);
+
+        trustedContentMvc.perform(get("/api/v1/dashboard/trusted-content")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.degraded").value(false))
+                .andExpect(jsonPath("$.data.pendingSuggestions").value(2))
+                .andExpect(jsonPath("$.data.effectiveReads30Days").value(70));
+
+        verify(creatorGrowthService).trustedContent(18L);
     }
 
     @Test

@@ -1,0 +1,126 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - dev-v2
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: offerlab-java
+
+    steps:
+      - name: Check out backend source
+        uses: actions/checkout@v4
+        with:
+          path: offerlab-java
+
+      - name: Check out frontend contract source
+        uses: actions/checkout@v4
+        with:
+          repository: wbn-2020/offerlab-vue
+          ref: ${{ vars.OFFERLAB_FRONTEND_REF || (github.head_ref == 'main' || github.head_ref == 'dev-v2') && github.head_ref || (github.ref_name == 'main' || github.ref_name == 'dev-v2') && github.ref_name || github.base_ref || 'dev-v2' }}
+          path: offerlab-vue
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Validate migration assets and destructive SQL policy
+        shell: pwsh
+        run: |
+          node ./scripts/test-ci-workflow.mjs
+          node ./scripts/test-sql-source-quality.mjs
+          ./scripts/test-migration-content-hash.ps1
+          ./scripts/check-migration-safety.ps1
+          ./scripts/test-migration-safety-policy.ps1
+
+      - name: Verify migration validation did not rewrite tracked assets
+        shell: pwsh
+        run: |
+          $changes = @(git status --porcelain --untracked-files=all)
+          if ($changes.Count -gt 0) {
+            $changes | ForEach-Object { Write-Host $_ }
+            throw "Migration validation changed the checked-out source tree"
+          }
+
+      - name: Compile and run unit and contract tests
+        run: mvn -B -ntp test
+
+      - name: Run disposable middleware integration tests
+        run: >-
+          mvn -B -ntp
+          -pl community-infrastructure,community-domain-user
+          -am -Pintegration-tests verify
+
+      - name: Verify integration-test discovery and execution
+        shell: pwsh
+        run: |
+          $reports = @(Get-ChildItem -Recurse -Path . -Filter "TEST-*.xml" |
+            Where-Object { $_.FullName -match "[\\/]failsafe-reports[\\/]" })
+          if ($reports.Count -lt 5) {
+            throw "Expected at least 5 Failsafe reports, found $($reports.Count)"
+          }
+          $tests = 0
+          $failures = 0
+          $errors = 0
+          $skipped = 0
+          foreach ($report in $reports) {
+            [xml]$xml = Get-Content -LiteralPath $report.FullName -Raw
+            $tests += [int]$xml.testsuite.tests
+            $failures += [int]$xml.testsuite.failures
+            $errors += [int]$xml.testsuite.errors
+            $skipped += [int]$xml.testsuite.skipped
+          }
+          if ($tests -lt 5 -or $failures -ne 0 -or $errors -ne 0 -or $skipped -ne 0) {
+            throw "Invalid integration-test result: tests=$tests failures=$failures errors=$errors skipped=$skipped"
+          }
+
+      - name: Package executable JAR and aggregate SBOM
+        run: mvn -B -ntp -Psbom -DskipTests package
+
+      - name: Generate artifact checksums
+        run: >-
+          sha256sum
+          community-bootstrap/target/community-bootstrap-*.jar
+          target/offerlab-sbom.json
+          target/offerlab-sbom.xml
+          > target/offerlab-artifacts.sha256
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offerlab-backend-test-reports
+          path: |
+            offerlab-java/**/target/surefire-reports/**
+            offerlab-java/**/target/failsafe-reports/**
+          if-no-files-found: warn
+
+      - name: Upload immutable release inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: offerlab-backend-release-inputs
+          path: |
+            offerlab-java/community-bootstrap/target/community-bootstrap-*.jar
+            offerlab-java/target/offerlab-sbom.json
+            offerlab-java/target/offerlab-sbom.xml
+            offerlab-java/target/offerlab-artifacts.sha256
+          if-no-files-found: error

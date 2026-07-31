@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AdminPermissionServiceTest {
+    private static final String LOCAL_OPEN_TOKEN = "test-local-open-token";
 
     @AfterEach
     void resetRequestContext() {
@@ -30,30 +31,39 @@ class AdminPermissionServiceTest {
 
     @Test
     void localOpenBootstrapRequiresLoopbackRequestInLocalProfiles() {
-        for (String profile : List.of("dev", "local", "test")) {
-            AdminPermissionService service = service(profile);
+        AdminPermissionService service = service("local");
 
-            assertFalse(service.isLocalOpenMode(), profile + " must not allow local-open without request context");
-            assertEquals("LOCKED", service.mode(), profile + " must report locked without request context");
-            assertThrows(BizException.class, () -> service.requireAdmin(10001L));
+        assertFalse(service.isLocalOpenMode(), "local must not allow local-open without request context");
+        assertEquals("LOCKED", service.mode(), "local must report locked without request context");
+        assertThrows(BizException.class, () -> service.requireAdmin(10001L));
 
-            bindRequest("203.0.113.10");
-            assertFalse(service.isLocalOpenMode(), profile + " must not allow local-open from remote clients");
-            assertEquals("LOCKED", service.mode(), profile + " must report locked for remote clients");
-            assertThrows(BizException.class, () -> service.requireAdmin(10001L));
+        bindRequest("203.0.113.10");
+        assertFalse(service.isLocalOpenMode(), "local must not allow local-open from remote clients");
+        assertEquals("LOCKED", service.mode(), "local must report locked for remote clients");
+        assertThrows(BizException.class, () -> service.requireAdmin(10001L));
 
-            bindRequest("127.0.0.1");
-            assertTrue(service.isLocalOpenMode(), profile + " may allow local-open from loopback clients");
-            assertEquals("LOCAL_OPEN", service.mode(), profile + " must report local-open for loopback clients");
-            assertDoesNotThrow(() -> service.requireAdmin(10001L));
+        bindRequest("127.0.0.1");
+        assertTrue(service.isLocalOpenMode(), "local may allow local-open from loopback clients with token");
+        assertEquals("LOCAL_OPEN", service.mode(), "local must report local-open for loopback clients with token");
+        assertDoesNotThrow(() -> service.requireAdmin(10001L));
 
-            RequestContextHolder.resetRequestAttributes();
-        }
+        RequestContextHolder.resetRequestAttributes();
+    }
+
+    @Test
+    void localOpenBootstrapRequiresConfiguredToken() {
+        AdminPermissionService service = service("local");
+
+        bindRequest("127.0.0.1", "wrong-token");
+
+        assertFalse(service.isLocalOpenMode());
+        assertEquals("LOCKED", service.mode());
+        assertThrows(BizException.class, () -> service.requireAdmin(10001L));
     }
 
     @Test
     void localOpenBootstrapDoesNotGrantScopeToRemoteClients() {
-        AdminPermissionService service = service("dev");
+        AdminPermissionService service = service("local");
 
         bindRequest("198.51.100.42");
 
@@ -73,7 +83,7 @@ class AdminPermissionServiceTest {
     }
 
     private static AdminPermissionService service(String profile) {
-        return new AdminPermissionService("", true, mapperWithoutAdminTable(), profiles(profile));
+        return new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), profiles(profile));
     }
 
     private static Environment profiles(String... activeProfiles) {
@@ -94,14 +104,18 @@ class AdminPermissionServiceTest {
     }
 
     private static void bindRequest(String remoteAddr) {
+        bindRequest(remoteAddr, LOCAL_OPEN_TOKEN);
+    }
+
+    private static void bindRequest(String remoteAddr, String localOpenToken) {
         HttpServletRequest request = (HttpServletRequest) Proxy.newProxyInstance(
                 HttpServletRequest.class.getClassLoader(),
                 new Class[]{HttpServletRequest.class},
-                (proxy, method, args) -> requestValue(method, remoteAddr));
+                (proxy, method, args) -> requestValue(method, args, remoteAddr, localOpenToken));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     }
 
-    private static Object requestValue(Method method, String remoteAddr) {
+    private static Object requestValue(Method method, Object[] args, String remoteAddr, String localOpenToken) {
         return switch (method.getName()) {
             case "getRemoteAddr" -> remoteAddr;
             case "getMethod" -> "GET";
@@ -109,7 +123,8 @@ class AdminPermissionServiceTest {
             case "getContextPath", "getServletPath" -> "";
             case "getLocale" -> Locale.getDefault();
             case "getLocales" -> Collections.enumeration(List.of(Locale.getDefault()));
-            case "getAttribute", "getHeader", "getSession" -> null;
+            case "getHeader" -> "X-OfferLab-Local-Open-Token".equals(args == null ? null : args[0]) ? localOpenToken : null;
+            case "getAttribute", "getSession" -> null;
             case "getAttributeNames", "getHeaderNames", "getParameterNames" -> Collections.emptyEnumeration();
             case "getParameterMap" -> Map.of();
             case "setAttribute", "removeAttribute" -> null;
@@ -162,6 +177,11 @@ class AdminPermissionServiceTest {
             @Override
             public int countEnabledAdmins() {
                 return 0;
+            }
+
+            @Override
+            public List<Long> lockEnabledAdminUids() {
+                return List.of();
             }
 
             @Override

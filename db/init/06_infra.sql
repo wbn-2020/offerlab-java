@@ -1,7 +1,6 @@
--- 06_infra.sql
+﻿-- 06_infra.sql
 -- Infrastructure: transactional outbox table.
 SET NAMES utf8mb4;
-USE offerlab;
 
 DROP TABLE IF EXISTS t_outbox_message;
 CREATE TABLE t_outbox_message (

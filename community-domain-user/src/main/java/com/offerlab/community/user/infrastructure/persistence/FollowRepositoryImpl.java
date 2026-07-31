@@ -14,6 +14,9 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Collection;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Repository
 @RequiredArgsConstructor
@@ -48,10 +51,7 @@ public class FollowRepositoryImpl implements FollowRepository {
         } catch (DuplicateKeyException e) {
             return false;
         }
-        counterMapper.initIfAbsent(fromUid);
-        counterMapper.initIfAbsent(toUid);
-        counterMapper.incrFollowing(fromUid, 1);
-        counterMapper.incrFollower(toUid, 1);
+        updateFollowCountersOrdered(fromUid, toUid, 1);
         return true;
     }
 
@@ -67,8 +67,7 @@ public class FollowRepositoryImpl implements FollowRepository {
         if (followMapper.softDeleteById(existing.getId()) <= 0) {
             return false;
         }
-        counterMapper.incrFollowing(fromUid, -1);
-        counterMapper.incrFollower(toUid, -1);
+        updateFollowCountersOrdered(fromUid, toUid, -1);
         return true;
     }
 
@@ -79,6 +78,24 @@ public class FollowRepositoryImpl implements FollowRepository {
                 .eq(UserFollowPO::getToUid, toUid)
                 .eq(UserFollowPO::getIsDeleted, 0));
         return cnt != null && cnt > 0;
+    }
+
+    @Override
+    public Set<Long> followingTargets(Long fromUid, Collection<Long> toUids) {
+        if (fromUid == null || toUids == null || toUids.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> normalized = toUids.stream()
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .limit(MAX_PAGE_LIMIT)
+                .toList();
+        if (normalized.isEmpty()) {
+            return Set.of();
+        }
+        return followMapper.selectFollowingTargets(fromUid, normalized).stream()
+                .filter(id -> id != null && id > 0)
+                .collect(Collectors.toSet());
     }
 
     @Override
@@ -143,5 +160,32 @@ public class FollowRepositoryImpl implements FollowRepository {
 
     private static int pageLimit(int size) {
         return Math.max(1, Math.min(size, MAX_PAGE_LIMIT));
+    }
+
+    private void updateFollowCountersOrdered(Long fromUid, Long toUid, long delta) {
+        if (fromUid == null || toUid == null) {
+            return;
+        }
+        boolean fromFirst = fromUid <= toUid;
+        initCountersOrdered(fromUid, toUid, fromFirst);
+        if (fromFirst) {
+            counterMapper.incrFollowing(fromUid, delta);
+            counterMapper.incrFollower(toUid, delta);
+            return;
+        }
+        counterMapper.incrFollower(toUid, delta);
+        counterMapper.incrFollowing(fromUid, delta);
+    }
+
+    private void initCountersOrdered(Long fromUid, Long toUid, boolean fromFirst) {
+        if (fromFirst) {
+            counterMapper.initIfAbsent(fromUid);
+            if (!fromUid.equals(toUid)) {
+                counterMapper.initIfAbsent(toUid);
+            }
+            return;
+        }
+        counterMapper.initIfAbsent(toUid);
+        counterMapper.initIfAbsent(fromUid);
     }
 }

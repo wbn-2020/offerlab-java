@@ -2,13 +2,16 @@ package com.offerlab.community.search.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.utils.CursorUtils;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
-import com.offerlab.community.post.api.dto.PostCounterDTO;
+import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
@@ -18,22 +21,25 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.search.api.SearchFacade;
+import com.offerlab.community.search.api.dto.SearchTrustFilter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -45,6 +51,8 @@ public class SearchFacadeImpl implements SearchFacade {
 
     private static final int SUMMARY_LEN = 120;
     private static final int MYSQL_FALLBACK_MAX_SCAN = 200;
+    private static final String SEARCH_CURSOR_VERSION = "sr2";
+    private static final String LEGACY_SEARCH_CURSOR_VERSION = "sr1";
 
     private final PostMapper postMapper;
     private final PostExtensionMapper extensionMapper;
@@ -59,50 +67,130 @@ public class SearchFacadeImpl implements SearchFacade {
     @Override
     public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
                                                 Integer type, String sort, String cursor, int size) {
-        return searchPosts(keyword, company, position, type, sort, cursor, size, false);
+        return searchPosts(keyword, company, position, type, null, sort, cursor, size, false);
     }
 
     @Override
     public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
                                                 Integer type, String sort, String cursor, int size,
                                                 boolean includeTestData) {
+        return searchPosts(keyword, company, position, type, null, sort, cursor, size, includeTestData);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
+                                                Integer type, Integer domain, String sort, String cursor, int size) {
+        return searchPosts(keyword, company, position, type, domain, sort, cursor, size, false);
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
+                                                Integer type, Integer domain, String sort, String cursor, int size,
+                                                boolean includeTestData) {
+        return searchPosts(keyword, company, position, type, domain, sort, cursor, size, includeTestData,
+                SearchTrustFilter.empty());
+    }
+
+    @Override
+    public PageResult<PostBriefDTO> searchPosts(String keyword, String company, String position,
+                                                Integer type, Integer domain, String sort, String cursor, int size,
+                                                boolean includeTestData, SearchTrustFilter trustFilter) {
         int limit = Math.min(size <= 0 ? 20 : size, 50);
         String normalizedSort = normalizeSort(sort);
-        boolean firstPage = parseCursor(cursor) <= 0;
+        SearchTrustFilter normalizedTrustFilter = trustFilter == null ? SearchTrustFilter.empty() : trustFilter;
+        boolean trustedSort = "trusted".equals(normalizedSort);
+        boolean trustConstrained = trustedSort || normalizedTrustFilter.active();
+        SearchCursor searchCursor = trustedSort ? null : parseSearchCursor(cursor, normalizedSort);
+        boolean firstPage = trustedSort
+                ? trustedOffset(cursor) == 0
+                : !searchCursor.present();
+        if (trustConstrained && !migrationCheckService.trustedDistributionReady()) {
+            PageResult<PostBriefDTO> unavailable = withSearchMetadata(
+                    PageResult.empty(),
+                    "mysql",
+                    true,
+                    "trusted_distribution_migration_pending",
+                    0,
+                    includeTestData,
+                    keyword,
+                    type,
+                    domain,
+                    normalizedTrustFilter,
+                    normalizedSort
+            );
+            searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, 0, firstPage);
+            return unavailable;
+        }
         PageResult<PostBriefDTO> result;
-        if (!"hot".equals(normalizedSort) && postSearchIndexer.ensurePostIndex()) {
-            Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(keyword, company, position, type,
-                    normalizedSort, cursor, limit, includeTestData);
-            if (esResult.isPresent()) {
-                ElasticsearchSearchPage esPage = esResult.get();
-                result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit(),
-                        includeTestData, keyword, type);
-                boolean emptyFirstPage = firstPage && isEmptyPage(result);
-                boolean sparseAfterVisibilityFilter = isSparseAfterVisibilityFiltering(esPage, limit);
-                if (emptyFirstPage || sparseAfterVisibilityFilter) {
-                    PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type,
-                            normalizedSort, cursor, limit, includeTestData);
-                    if (shouldUseMysqlFallback(result, mysqlFallback)) {
-                        result = withSearchMetadata(mysqlFallback, "mysql", true,
-                                emptyFirstPage ? "elasticsearch_empty" : "elasticsearch_visibility_filtered",
-                                fallbackScanLimit(limit), includeTestData, keyword, type);
-                    }
-                }
-                searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
+        if (trustedSort) {
+            result = searchTrustedByMysql(keyword, company, position, type, domain, cursor, limit, includeTestData,
+                    normalizedTrustFilter);
+            result = withSearchMetadata(result, "mysql", false, null, MYSQL_FALLBACK_MAX_SCAN,
+                    includeTestData, keyword, type, domain, normalizedTrustFilter, normalizedSort);
+            searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                    result.getItems().size(), firstPage);
+            return result;
+        }
+        if (!trustConstrained && !"hot".equals(normalizedSort)) {
+            if (searchCursor.requiresMysqlContinuation(normalizedSort)) {
+                result = searchByMysql(keyword, company, position, type, domain, normalizedSort, cursor, limit,
+                        includeTestData, normalizedTrustFilter);
+                result = withSearchMetadata(result, "mysql", true, "mysql_fallback_continuation",
+                        fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                        normalizedTrustFilter, normalizedSort);
+                searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                        result.getItems().size(), false);
                 return result;
             }
+            boolean elasticsearchReady = postSearchIndexer.ensurePostIndex();
+            if (elasticsearchReady) {
+                Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(
+                        keyword, company, position, type, domain, normalizedSort, cursor, limit, includeTestData);
+                if (esResult.isPresent()) {
+                    ElasticsearchSearchPage esPage = esResult.get();
+                    result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit(),
+                            includeTestData, keyword, type, domain, normalizedTrustFilter, normalizedSort);
+                    boolean emptyFirstPage = firstPage && isEmptyPage(result);
+                    boolean sparseAfterVisibilityFilter = isSparseAfterVisibilityFiltering(esPage, limit);
+                    boolean mysqlFallbackAllowed = !searchCursor.requiresElasticsearchContinuation(normalizedSort);
+                    if (mysqlFallbackAllowed && (emptyFirstPage || sparseAfterVisibilityFilter)) {
+                        PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type, domain,
+                                normalizedSort, cursor, limit, includeTestData, normalizedTrustFilter);
+                        if (shouldUseMysqlFallback(result, mysqlFallback)) {
+                            result = withSearchMetadata(mysqlFallback, "mysql", true,
+                                    emptyFirstPage ? "elasticsearch_empty" : "elasticsearch_visibility_filtered",
+                                    fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                                    normalizedTrustFilter, normalizedSort);
+                        }
+                    }
+                    searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                            result.getItems().size(), firstPage);
+                    return result;
+                }
+            }
+            if (searchCursor.requiresElasticsearchContinuation(normalizedSort)) {
+                throw new BizException(
+                        ErrorCode.ELASTICSEARCH_ERROR.getCode(),
+                        "elasticsearch relevance continuation unavailable; retry with the same cursor"
+                );
+            }
         }
-        result = searchByMysql(keyword, company, position, type, normalizedSort, cursor, limit, includeTestData);
-        result = withSearchMetadata(result, "mysql", !"hot".equals(normalizedSort),
-                "hot".equals(normalizedSort) ? "hot_sort_mysql" : "elasticsearch_unavailable",
-                fallbackScanLimit(limit), includeTestData, keyword, type);
+        result = searchByMysql(keyword, company, position, type, domain, normalizedSort, cursor, limit,
+                includeTestData, normalizedTrustFilter);
+        result = withSearchMetadata(result, "mysql", !("hot".equals(normalizedSort) || trustConstrained),
+                "hot".equals(normalizedSort) ? "hot_sort_mysql"
+                        : trustConstrained ? "trust_filter_mysql"
+                        : "elasticsearch_unavailable",
+                fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                normalizedTrustFilter, normalizedSort);
         searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
         return result;
     }
 
     private PageResult<PostBriefDTO> withSearchMetadata(PageResult<PostBriefDTO> result, String source,
                                                         boolean degraded, String fallbackReason, int scanLimit,
-                                                        boolean includeTestData, String keyword, Integer type) {
+                                                        boolean includeTestData, String keyword, Integer type,
+                                                        Integer domain, SearchTrustFilter trustFilter, String sort) {
         boolean syntheticQuery = PublicContentFilter.isSyntheticText(keyword);
         attachHitReasons(result, keyword);
         result.withMetadata(source, degraded, fallbackReason, scanLimit)
@@ -110,6 +198,12 @@ public class SearchFacadeImpl implements SearchFacade {
                 .withDiagnostic("testDataFilterActive", !includeTestData)
                 .withDiagnostic("syntheticQuery", syntheticQuery)
                 .withDiagnostic("type", type)
+                .withDiagnostic("domain", domain)
+                .withDiagnostic("trustProfile", trustFilter == null ? null : trustFilter.trustProfile())
+                .withDiagnostic("freshnessStatus", trustFilter == null ? null : trustFilter.freshnessStatus())
+                .withDiagnostic("resolved", trustFilter == null ? null : trustFilter.resolved())
+                .withDiagnostic("sourceComplete", trustFilter == null ? null : trustFilter.sourceComplete())
+                .withDiagnostic("sort", sort)
                 .withDiagnostic("hitExplanation", hitExplanation(source));
         if (isEmptyPage(result) && syntheticQuery && !includeTestData) {
             result.withDiagnostic("emptyReason", "test_data_filtered_unless_includeTestData");
@@ -195,8 +289,7 @@ public class SearchFacadeImpl implements SearchFacade {
     public List<String> getHotKeywords(int size) {
         int limit = Math.min(size <= 0 ? 10 : size, 20);
         Set<String> result = new LinkedHashSet<>();
-        activeTags().stream()
-                .sorted(Comparator.comparing(TagPO::getUseCount, Comparator.nullsLast(Comparator.reverseOrder())))
+        hotTags(limit).stream()
                 .map(TagPO::getTagName)
                 .filter(name -> name != null && !name.isBlank()
                         && !PublicContentFilter.isSyntheticText(name)
@@ -210,12 +303,19 @@ public class SearchFacadeImpl implements SearchFacade {
     }
 
     private Optional<ElasticsearchSearchPage> searchByElasticsearch(String keyword, String company, String position,
-                                                                    Integer type, String sort, String cursor, int limit,
+                                                                    Integer type, Integer domain, String sort, String cursor, int limit,
                                                                     boolean includeTestData) {
+        SearchCursor parsedCursor = parseSearchCursor(cursor, sort);
+        if (parsedCursor.present() && !parsedCursor.supportsElasticsearch(sort)) {
+            return Optional.empty();
+        }
         int scanLimit = elasticsearchScanLimit(limit);
         Map<String, Object> body = new HashMap<>();
-        body.put("query", buildEsQuery(keyword, company, position, type, cursor));
+        body.put("query", buildEsQuery(keyword, company, position, type, domain));
         body.put("sort", buildEsSort(sort));
+        if (parsedCursor.present()) {
+            body.put("search_after", parsedCursor.elasticsearchSortValues(sort));
+        }
         body.put("highlight", Map.of(
                 "pre_tags", List.of("<em>"),
                 "post_tags", List.of("</em>"),
@@ -226,7 +326,7 @@ public class SearchFacadeImpl implements SearchFacade {
         ));
         body.put("size", scanLimit);
         return elasticsearch.search(elasticsearch.postIndex(), body)
-                .map(json -> toElasticsearchPage(json, limit, scanLimit, includeTestData));
+                .map(json -> toElasticsearchPage(json, sort, limit, scanLimit, includeTestData, domain));
     }
 
     private List<Object> buildEsSort(String sort) {
@@ -234,13 +334,17 @@ public class SearchFacadeImpl implements SearchFacade {
             return List.of(
                     Map.of("_score", Map.of("order", "desc")),
                     Map.of("createTime", Map.of("order", "desc")),
-                    Map.of("id", Map.of("order", "asc"))
+                    Map.of("postId", Map.of("order", "desc"))
             );
         }
-        return List.of(Map.of("createTime", Map.of("order", "desc")), Map.of("id", Map.of("order", "asc")));
+        return List.of(
+                Map.of("createTime", Map.of("order", "desc")),
+                Map.of("postId", Map.of("order", "desc"))
+        );
     }
 
-    private Map<String, Object> buildEsQuery(String keyword, String company, String position, Integer type, String cursor) {
+    private Map<String, Object> buildEsQuery(String keyword, String company, String position, Integer type,
+                                             Integer domain) {
         List<Object> must = new ArrayList<>();
         List<Object> filter = new ArrayList<>();
         String kw = clean(keyword);
@@ -267,6 +371,9 @@ public class SearchFacadeImpl implements SearchFacade {
         if (type != null) {
             filter.add(Map.of("term", Map.of("type", type)));
         }
+        if (domain != null) {
+            filter.add(Map.of("term", Map.of("domain", domain)));
+        }
         if (!clean(company).isBlank()) {
             filter.add(Map.of("bool", Map.of("should", List.of(
                     Map.of("match_phrase", Map.of("company", clean(company))),
@@ -283,26 +390,27 @@ public class SearchFacadeImpl implements SearchFacade {
                     Map.of("match_phrase", Map.of("tagSearchTerms", clean(position)))
             ), "minimum_should_match", 1)));
         }
-        long c = parseCursor(cursor);
-        if (c > 0) {
-            filter.add(Map.of("range", Map.of("createTime", Map.of("lt", c))));
-        }
         return Map.of("bool", Map.of("must", must, "filter", filter));
     }
 
-    private ElasticsearchSearchPage toElasticsearchPage(JsonNode json, int limit, int scanLimit, boolean includeTestData) {
+    private ElasticsearchSearchPage toElasticsearchPage(JsonNode json, String sort, int limit, int scanLimit,
+                                                         boolean includeTestData, Integer domain) {
         JsonNode hits = json.path("hits").path("hits");
         if (!hits.isArray() || hits.isEmpty()) {
             return new ElasticsearchSearchPage(PageResult.empty(), 0, scanLimit);
         }
         List<PostBriefDTO> items = new ArrayList<>();
+        Map<Long, SearchSortValues> sortValuesByPostId = new HashMap<>();
+        List<SearchSortValues> rawSortValues = new ArrayList<>();
         for (JsonNode hit : hits) {
             JsonNode source = hit.path("_source");
             String summary = source.path("summary").asText("");
-            items.add(PostBriefDTO.builder()
-                    .id(source.path("id").asLong())
+            long postId = source.path("postId").asLong(source.path("id").asLong());
+            PostBriefDTO item = PostBriefDTO.builder()
+                    .id(postId)
                     .authorId(source.path("authorId").asLong())
                     .postType(source.path("type").asInt())
+                    .domain(validDomain(source.path("domain")))
                     .title(source.path("title").asText(""))
                     .summary(summary)
                     .highlightTitle(firstHighlight(hit, "title").orElse(null))
@@ -311,18 +419,27 @@ public class SearchFacadeImpl implements SearchFacade {
                     .extJson(source.path("extJson").asText(null))
                     .tags(toTags(source.path("tags")))
                     .createTime(toLocalDateTime(source.path("createTime").asLong(0L)))
-                    .build());
+                    .build();
+            SearchSortValues hitSortValues = SearchSortValues.fromElasticsearchHit(hit, sort, item);
+            items.add(item);
+            sortValuesByPostId.put(postId, hitSortValues);
+            rawSortValues.add(hitSortValues);
         }
-        List<PostBriefDTO> visibleItems = filterVisibleSearchResults(items, includeTestData);
+        List<PostBriefDTO> visibleItems = filterVisibleSearchResults(items, includeTestData, domain);
         int syntheticFiltered = includeTestData ? 0 : (int) items.stream()
                 .filter(PublicContentFilter::isSyntheticPost)
                 .count();
         boolean hasMore = visibleItems.size() > limit;
+        boolean rawHasMore = items.size() >= scanLimit;
         List<PostBriefDTO> pageItems = hasMore ? visibleItems.subList(0, limit) : visibleItems;
-        PostBriefDTO cursorItem = pageItems.isEmpty() ? null : pageItems.get(pageItems.size() - 1);
-        String next = hasMore && cursorItem.getCreateTime() != null
-                ? String.valueOf(cursorItem.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
-                : null;
+        SearchSortValues cursorValues = null;
+        if (hasMore && !pageItems.isEmpty()) {
+            cursorValues = sortValuesByPostId.get(pageItems.get(pageItems.size() - 1).getId());
+        } else if (rawHasMore && !rawSortValues.isEmpty()) {
+            cursorValues = rawSortValues.get(rawSortValues.size() - 1);
+        }
+        hasMore = (hasMore || rawHasMore) && cursorValues != null;
+        String next = hasMore ? searchCursor(sort, cursorValues) : null;
         PageResult<PostBriefDTO> page = PageResult.of(pageItems, next, hasMore)
                 .withDiagnostic("rawHits", items.size())
                 .withDiagnostic("visibleHits", visibleItems.size())
@@ -331,6 +448,11 @@ public class SearchFacadeImpl implements SearchFacade {
     }
 
     private List<PostBriefDTO> filterVisibleSearchResults(List<PostBriefDTO> esItems, boolean includeTestData) {
+        return filterVisibleSearchResults(esItems, includeTestData, null);
+    }
+
+    private List<PostBriefDTO> filterVisibleSearchResults(List<PostBriefDTO> esItems, boolean includeTestData,
+                                                          Integer domain) {
         if (esItems == null || esItems.isEmpty()) {
             return List.of();
         }
@@ -342,6 +464,11 @@ public class SearchFacadeImpl implements SearchFacade {
             PostBriefDTO current = visibleById.get(esItem.getId());
             if (current == null) {
                 log.debug("stale elasticsearch post filtered: postId={}", esItem.getId());
+                continue;
+            }
+            if (domain != null && !domain.equals(current.getDomain())) {
+                log.debug("stale elasticsearch domain filtered: postId={} indexedDomain={} currentDomain={}",
+                        esItem.getId(), esItem.getDomain(), current.getDomain());
                 continue;
             }
             current.setHighlightTitle(verifiedHighlight(esItem.getHighlightTitle(), current.getTitle()).orElse(null));
@@ -371,7 +498,35 @@ public class SearchFacadeImpl implements SearchFacade {
             if (!reasons.isEmpty()) {
                 post.setRecommendationReasons(reasons);
             }
+            post.setRankingReasons(rankingReasons(post));
         }
+    }
+
+    private List<String> rankingReasons(PostBriefDTO post) {
+        if (post == null || post.getTrustSignals() == null) {
+            return List.of();
+        }
+        PostTrustSignalsDTO trust = post.getTrustSignals();
+        LinkedHashSet<String> reasons = new LinkedHashSet<>();
+        if (Boolean.TRUE.equals(trust.getProfileAvailable())) {
+            reasons.add("trust_profile_available");
+        }
+        if ((trust.getCompletenessScore() == null ? 0 : trust.getCompletenessScore()) >= 60) {
+            reasons.add("experience_context_complete");
+        }
+        if (trust.getLastConfirmedAt() != null) {
+            reasons.add("author_recently_confirmed");
+        }
+        if (Boolean.TRUE.equals(trust.getSourceComplete())) {
+            reasons.add("source_or_disclosure_provided");
+        }
+        if (Boolean.TRUE.equals(trust.getHasAcceptedAnswer())) {
+            reasons.add("accepted_public_answer");
+        }
+        if ((trust.getPublicCorrectionCount() == null ? 0 : trust.getPublicCorrectionCount()) > 0) {
+            reasons.add("public_correction_history");
+        }
+        return reasons.stream().limit(3).toList();
     }
 
     private List<String> hitReasons(PostBriefDTO post, String keyword) {
@@ -551,12 +706,26 @@ public class SearchFacadeImpl implements SearchFacade {
     }
 
     private PageResult<PostBriefDTO> searchByMysql(String keyword, String company, String position,
-                                                   Integer type, String sort, String cursor, int limit,
-                                                   boolean includeTestData) {
-        long c = parseCursor(cursor);
+                                                   Integer type, Integer domain, String sort, String cursor, int limit,
+                                                   boolean includeTestData, SearchTrustFilter trustFilter) {
+        SearchCursor parsedCursor = parseSearchCursor(cursor, sort);
         String kw = clean(keyword);
         Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
-        LocalDateTime cursorTime = c > 0 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(c), ZoneOffset.UTC) : null;
+        if ("hot".equals(sort)) {
+            return searchHotByMysql(
+                    blankToNull(kw),
+                    keywordPostId,
+                    blankToNull(clean(company)),
+                    blankToNull(clean(position)),
+                    type,
+                    domain,
+                    parsedCursor,
+                    limit,
+                    includeTestData,
+                    trustFilter
+            );
+        }
+        int scanLimit = fallbackScanLimit(limit);
         List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
                 ? postMapper.searchPublicPostsFallback(
                         blankToNull(kw),
@@ -564,19 +733,25 @@ public class SearchFacadeImpl implements SearchFacade {
                         blankToNull(clean(company)),
                         blankToNull(clean(position)),
                         type,
-                        cursorTime,
-                        fallbackScanLimit(limit))
+                        domain,
+                        parsedCursor.time(),
+                        parsedCursor.id(),
+                        scanLimit)
                 : postMapper.searchPublicPostsFallbackCompat(
                         blankToNull(kw),
                         keywordPostId,
                         blankToNull(clean(company)),
                         blankToNull(clean(position)),
                         type,
-                        cursorTime,
-                        fallbackScanLimit(limit));
+                        domain,
+                        parsedCursor.time(),
+                        parsedCursor.id(),
+                        scanLimit);
         if (candidates.isEmpty()) {
             return PageResult.empty();
         }
+        Map<Long, PostPO> candidatesById = candidates.stream()
+                .collect(Collectors.toMap(PostPO::getId, post -> post, (left, right) -> left));
         Map<Long, String> extByPostId = loadExtJson(candidates.stream().map(PostPO::getId).toList());
         List<PostPO> filtered = candidates;
         if (filtered.isEmpty()) {
@@ -587,6 +762,7 @@ public class SearchFacadeImpl implements SearchFacade {
                 .id(p.getId())
                 .authorId(p.getAuthorId())
                 .postType(p.getPostType())
+                .domain(domainOf(extByPostId.get(p.getId())))
                 .title(p.getTitle())
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
@@ -598,21 +774,204 @@ public class SearchFacadeImpl implements SearchFacade {
                 .filter(PublicContentFilter::isSyntheticPost)
                 .count();
         items = filterVisibleSearchResults(items, includeTestData);
-        if ("hot".equals(sort)) {
-            items = items.stream()
-                    .sorted(Comparator.comparingDouble(this::hotScore).reversed()
-                            .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
+        items = filterTrust(items, trustFilter);
+        int visibleHits = items.size();
+        boolean visibleHasMore = visibleHits > limit;
+        boolean scanWindowExhausted = candidates.size() >= scanLimit;
+        List<PostBriefDTO> pageItems = items.stream().limit(limit).toList();
+        PostPO cursorRow = null;
+        if (visibleHasMore && !pageItems.isEmpty()) {
+            cursorRow = candidatesById.get(pageItems.get(pageItems.size() - 1).getId());
+        } else if (scanWindowExhausted) {
+            cursorRow = candidates.get(candidates.size() - 1);
+        }
+        String next = cursorRow == null
+                ? null
+                : searchCursor(sort, SearchSortValues.fromPostRow(cursorRow));
+        boolean hasMore = next != null && (visibleHasMore || scanWindowExhausted);
+        return PageResult.of(pageItems, next, hasMore)
+                .withDiagnostic("rawHits", candidates.size())
+                .withDiagnostic("visibleHits", visibleHits)
+                .withDiagnostic("syntheticFiltered", syntheticFiltered)
+                .withDiagnostic("scanWindowExhausted", scanWindowExhausted);
+    }
+
+    private PageResult<PostBriefDTO> searchHotByMysql(String keyword, Long keywordPostId,
+                                                       String company, String position,
+                                                       Integer type, Integer domain,
+                                                       SearchCursor cursor, int limit,
+                                                       boolean includeTestData,
+                                                       SearchTrustFilter trustFilter) {
+        int scanLimit = fallbackScanLimit(limit);
+        long rankingMillis = cursor.rankingMillis() > 0
+                ? cursor.rankingMillis()
+                : Instant.now().toEpochMilli();
+        LocalDateTime rankingTime = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(rankingMillis), ZoneOffset.UTC);
+        List<PostMapper.SearchHotRow> candidates = postMapper.searchPublicPostsHotFallback(
+                keyword,
+                keywordPostId,
+                company,
+                position,
+                type,
+                domain,
+                migrationCheckService.tagGovernanceReady(),
+                rankingTime,
+                cursor.hotScore(),
+                cursor.time(),
+                cursor.id(),
+                scanLimit
+        );
+        if (candidates == null || candidates.isEmpty()) {
+            return PageResult.empty();
+        }
+        Map<Long, PostMapper.SearchHotRow> rowsByPostId = candidates.stream()
+                .collect(Collectors.toMap(
+                        PostMapper.SearchHotRow::getPostId,
+                        row -> row,
+                        (left, right) -> left
+                ));
+        List<PostBriefDTO> stubs = candidates.stream()
+                .map(row -> PostBriefDTO.builder()
+                        .id(row.getPostId())
+                        .createTime(row.getCreateTime())
+                        .build())
+                .toList();
+        List<PostBriefDTO> currentItems = filterVisibleSearchResults(stubs, true, domain);
+        int syntheticFiltered = includeTestData ? 0 : (int) currentItems.stream()
+                .filter(PublicContentFilter::isSyntheticPost)
+                .count();
+        if (!includeTestData) {
+            currentItems = currentItems.stream()
+                    .filter(item -> !PublicContentFilter.isSyntheticPost(item))
                     .toList();
         }
-        boolean hasMore = items.size() > limit;
-        items = items.stream().limit(limit).toList();
-        String next = hasMore && !items.isEmpty()
-                ? String.valueOf(items.get(items.size() - 1).getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli())
+        currentItems = filterTrust(currentItems, trustFilter);
+        int visibleHits = currentItems.size();
+        boolean visibleHasMore = visibleHits > limit;
+        boolean rawHasMore = candidates.size() >= scanLimit;
+        List<PostBriefDTO> pageItems = currentItems.stream().limit(limit).toList();
+        PostMapper.SearchHotRow cursorRow = null;
+        if (visibleHasMore && !pageItems.isEmpty()) {
+            cursorRow = rowsByPostId.get(pageItems.get(pageItems.size() - 1).getId());
+        } else if (rawHasMore) {
+            cursorRow = candidates.get(candidates.size() - 1);
+        }
+        boolean hasMore = (visibleHasMore || rawHasMore) && cursorRow != null;
+        String next = hasMore
+                ? searchCursor("hot", SearchSortValues.fromHotRow(cursorRow, rankingMillis))
                 : null;
-        return PageResult.of(items, next, hasMore)
+        return PageResult.of(pageItems, next, hasMore)
                 .withDiagnostic("rawHits", candidates.size())
-                .withDiagnostic("visibleHits", items.size())
+                .withDiagnostic("visibleHits", visibleHits)
                 .withDiagnostic("syntheticFiltered", syntheticFiltered);
+    }
+
+    private PageResult<PostBriefDTO> searchTrustedByMysql(String keyword, String company, String position,
+                                                          Integer type, Integer domain, String cursor, int limit,
+                                                          boolean includeTestData, SearchTrustFilter trustFilter) {
+        String kw = clean(keyword);
+        Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
+        List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
+                ? postMapper.searchPublicPostsFallback(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
+                blankToNull(clean(position)), type, domain, null, null, MYSQL_FALLBACK_MAX_SCAN)
+                : postMapper.searchPublicPostsFallbackCompat(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
+                blankToNull(clean(position)), type, domain, null, null, MYSQL_FALLBACK_MAX_SCAN);
+        if (candidates.isEmpty()) {
+            return PageResult.empty();
+        }
+        Map<Long, String> extByPostId = loadExtJson(candidates.stream().map(PostPO::getId).toList());
+        Map<Long, List<TagDTO>> tags = tagsByPostIds(candidates.stream().map(PostPO::getId).toList());
+        List<PostBriefDTO> candidatesBriefs = candidates.stream().map(p -> PostBriefDTO.builder()
+                .id(p.getId())
+                .authorId(p.getAuthorId())
+                .postType(p.getPostType())
+                .domain(domainOf(extByPostId.get(p.getId())))
+                .title(p.getTitle())
+                .summary(summary(p.getContent()))
+                .coverUrl(p.getCoverUrl())
+                .extJson(extByPostId.get(p.getId()))
+                .tags(tags.getOrDefault(p.getId(), List.of()))
+                .createTime(p.getCreateTime())
+                .build()).toList();
+        List<PostBriefDTO> visible = filterTrust(filterVisibleSearchResults(candidatesBriefs, includeTestData), trustFilter)
+                .stream()
+                .sorted(trustedComparator())
+                .toList();
+        int offset = trustedOffset(cursor);
+        if (offset >= visible.size()) {
+            return PageResult.empty();
+        }
+        int toIndex = Math.min(offset + limit, visible.size());
+        List<PostBriefDTO> page = visible.subList(offset, toIndex);
+        boolean hasMore = toIndex < visible.size();
+        String next = hasMore ? "trusted:" + toIndex : null;
+        return PageResult.of(page, next, hasMore)
+                .withDiagnostic("trustedCandidateBound", MYSQL_FALLBACK_MAX_SCAN)
+                .withDiagnostic("rawHits", candidates.size())
+                .withDiagnostic("visibleHits", visible.size())
+                .withDiagnostic("trustedOffset", offset);
+    }
+
+    private List<PostBriefDTO> filterTrust(List<PostBriefDTO> posts, SearchTrustFilter trustFilter) {
+        if (posts == null || posts.isEmpty() || trustFilter == null || !trustFilter.active()) {
+            return posts == null ? List.of() : posts;
+        }
+        return posts.stream().filter(post -> {
+            PostTrustSignalsDTO signals = post.getTrustSignals();
+            if (signals == null) {
+                return false;
+            }
+            if (trustFilter.trustProfile() != null
+                    && !trustFilter.trustProfile().equals(Boolean.TRUE.equals(signals.getProfileAvailable()))) {
+                return false;
+            }
+            if (trustFilter.freshnessStatus() != null
+                    && !trustFilter.freshnessStatus().equals(signals.getFreshnessStatus())) {
+                return false;
+            }
+            if (trustFilter.resolved() != null
+                    && !trustFilter.resolved().equals(Boolean.TRUE.equals(signals.getResolved()))) {
+                return false;
+            }
+            return trustFilter.sourceComplete() == null
+                    || trustFilter.sourceComplete().equals(Boolean.TRUE.equals(signals.getSourceComplete()));
+        }).toList();
+    }
+
+    private Comparator<PostBriefDTO> trustedComparator() {
+        return Comparator.comparing((PostBriefDTO post) -> Boolean.TRUE.equals(post.getTrustSignals() == null
+                        ? null : post.getTrustSignals().getProfileAvailable()))
+                .reversed()
+                .thenComparing(post -> Boolean.TRUE.equals(post.getTrustSignals() == null
+                        ? null : post.getTrustSignals().getSourceComplete()), Comparator.reverseOrder())
+                .thenComparing(post -> post.getTrustSignals() == null || post.getTrustSignals().getCompletenessScore() == null
+                        ? 0 : post.getTrustSignals().getCompletenessScore(), Comparator.reverseOrder())
+                .thenComparing(post -> post.getTrustSignals() == null ? null : post.getTrustSignals().getLastConfirmedAt(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(post -> Boolean.TRUE.equals(post.getTrustSignals() == null
+                        ? null : post.getTrustSignals().getResolved()), Comparator.reverseOrder())
+                .thenComparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(PostBriefDTO::getId, Comparator.nullsLast(Comparator.reverseOrder()));
+    }
+
+    private int trustedOffset(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return 0;
+        }
+        String value = cursor.trim();
+        if (!value.startsWith("trusted:")) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid trusted search cursor");
+        }
+        try {
+            int offset = Integer.parseInt(value.substring("trusted:".length()));
+            if (offset < 0 || offset > MYSQL_FALLBACK_MAX_SCAN) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid trusted search cursor");
+            }
+            return offset;
+        } catch (NumberFormatException ex) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid trusted search cursor");
+        }
     }
 
     private int fallbackScanLimit(int limit) {
@@ -647,10 +1006,10 @@ public class SearchFacadeImpl implements SearchFacade {
                         Collectors.mapping(this::toTagDto, Collectors.toList())));
     }
 
-    private List<TagPO> activeTags() {
+    private List<TagPO> hotTags(int limit) {
         return migrationCheckService.tagGovernanceReady()
-                ? tagMapper.selectActiveTags()
-                : tagMapper.selectActiveTagsCompat();
+                ? tagMapper.selectHotTags(limit)
+                : tagMapper.selectHotTagsCompat(limit);
     }
 
     private List<PostTagView> selectTagsByPostIds(Collection<Long> postIds) {
@@ -712,6 +1071,23 @@ public class SearchFacadeImpl implements SearchFacade {
         }
     }
 
+    private Integer domainOf(String extJson) {
+        JsonNode domain = parseExt(extJson).path("domain");
+        if (!domain.canConvertToInt()) {
+            return null;
+        }
+        int value = domain.asInt();
+        return value >= 1 && value <= 5 ? value : null;
+    }
+
+    private Integer validDomain(JsonNode domain) {
+        if (domain == null || !domain.canConvertToInt()) {
+            return null;
+        }
+        int value = domain.asInt();
+        return value >= 1 && value <= 5 ? value : null;
+    }
+
     private void addArrayMatches(Set<String> result, JsonNode values, String prefix) {
         if (values == null || !values.isArray()) {
             addIfMatches(result, values == null ? null : values.asText(null), prefix);
@@ -766,13 +1142,149 @@ public class SearchFacadeImpl implements SearchFacade {
         return values;
     }
 
-    private long parseCursor(String c) {
-        if (c == null || c.isBlank()) return 0L;
-        try {
-            return Long.parseLong(c);
-        } catch (Exception e) {
-            return 0L;
+    private SearchCursor parseSearchCursor(String cursor, String requestedSort) {
+        if (cursor == null || cursor.isBlank() || "0".equals(cursor.trim())) {
+            return SearchCursor.empty(requestedSort);
         }
+        String value = cursor.trim();
+        if (value.chars().allMatch(Character::isDigit)) {
+            if ("hot".equals(requestedSort)) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "legacy hot search cursor is unsupported");
+            }
+            if ("relevance".equals(requestedSort)) {
+                throw new BizException(
+                        ErrorCode.PARAM_ERROR.getCode(),
+                        "legacy relevance cursor is ambiguous; restart the search");
+            }
+            try {
+                long millis = Long.parseLong(value);
+                if (millis <= 0) {
+                    return SearchCursor.empty(requestedSort);
+                }
+                return SearchCursor.legacy(requestedSort, LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(millis), ZoneOffset.UTC), Long.MAX_VALUE, millis);
+            } catch (NumberFormatException e) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid search cursor");
+            }
+        }
+        try {
+            return decodeSearchCursor(value, requestedSort);
+        } catch (IllegalArgumentException currentVersionError) {
+            if ("hot".equals(requestedSort)) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid hot search cursor");
+            }
+            try {
+                CursorUtils.TimeIdCursor decoded = CursorUtils.decodeTimeId(value, LEGACY_SEARCH_CURSOR_VERSION);
+                if ("relevance".equals(requestedSort)) {
+                    throw new BizException(
+                            ErrorCode.PARAM_ERROR.getCode(),
+                            "legacy relevance cursor is ambiguous; restart the search");
+                }
+                return SearchCursor.legacy(requestedSort, decoded.time(), decoded.id(), decoded.millis());
+            } catch (BizException businessError) {
+                throw businessError;
+            } catch (IllegalArgumentException legacyError) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid search cursor");
+            }
+        }
+    }
+
+    private SearchCursor decodeSearchCursor(String cursor, String requestedSort) {
+        String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+        String canonical = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+        if (!canonical.equals(cursor)) {
+            throw new IllegalArgumentException("non-canonical cursor");
+        }
+        String[] parts = raw.split("\\|", -1);
+        if (parts.length != 6 || !SEARCH_CURSOR_VERSION.equals(parts[0])) {
+            throw new IllegalArgumentException("cursor version mismatch");
+        }
+        String encodedSort = parts[1];
+        if (!encodedSort.equals(requestedSort)
+                || !("latest".equals(encodedSort)
+                || "relevance".equals(encodedSort)
+                || "hot".equals(encodedSort))) {
+            throw new IllegalArgumentException("cursor sort mismatch");
+        }
+        long millis = parsePositiveCursorLong(parts[3], "cursor time");
+        long id = parsePositiveCursorLong(parts[4], "cursor id");
+        long rankingMillis = parts[5].isBlank()
+                ? 0L
+                : parsePositiveCursorLong(parts[5], "cursor ranking time");
+        Double relevanceScore = null;
+        Long hotScore = null;
+        if ("relevance".equals(encodedSort) && !parts[2].isBlank()) {
+            relevanceScore = Double.parseDouble(parts[2]);
+            if (!Double.isFinite(relevanceScore) || relevanceScore < 0D) {
+                throw new IllegalArgumentException("invalid relevance score");
+            }
+        } else if ("hot".equals(encodedSort)) {
+            hotScore = parseNonNegativeCursorLong(parts[2], "cursor hot score");
+            if (rankingMillis <= 0) {
+                throw new IllegalArgumentException("hot cursor ranking time is required");
+            }
+        } else if (!parts[2].isBlank()) {
+            throw new IllegalArgumentException("unexpected cursor score");
+        } else if (rankingMillis != 0L) {
+            throw new IllegalArgumentException("unexpected cursor ranking time");
+        }
+        return new SearchCursor(
+                encodedSort,
+                relevanceScore,
+                hotScore,
+                LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneOffset.UTC),
+                id,
+                millis,
+                rankingMillis,
+                false
+        );
+    }
+
+    private static String searchCursor(String sort, SearchSortValues values) {
+        if (values == null || values.millis() <= 0 || values.id() <= 0) {
+            return null;
+        }
+        String score = "";
+        if ("relevance".equals(sort)) {
+            if (values.relevanceScore() != null) {
+                if (!Double.isFinite(values.relevanceScore()) || values.relevanceScore() < 0D) {
+                    return null;
+                }
+                score = Double.toString(values.relevanceScore());
+            }
+        } else if ("hot".equals(sort)) {
+            if (values.hotScore() == null || values.hotScore() < 0L || values.rankingMillis() <= 0L) {
+                return null;
+            }
+            score = Long.toString(values.hotScore());
+        }
+        String ranking = "hot".equals(sort) ? Long.toString(values.rankingMillis()) : "";
+        String raw = SEARCH_CURSOR_VERSION + "|" + sort + "|" + score + "|"
+                + values.millis() + "|" + values.id() + "|" + ranking;
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static long parsePositiveCursorLong(String value, String label) {
+        long parsed = parseNonNegativeCursorLong(value, label);
+        if (parsed <= 0) {
+            throw new IllegalArgumentException(label + " must be positive");
+        }
+        return parsed;
+    }
+
+    private static long parseNonNegativeCursorLong(String value, String label) {
+        if (value == null || value.isBlank() || !value.chars().allMatch(Character::isDigit)) {
+            throw new IllegalArgumentException(label + " must be digits");
+        }
+        long parsed = Long.parseLong(value);
+        if (parsed < 0) {
+            throw new IllegalArgumentException(label + " must not be negative");
+        }
+        return parsed;
     }
 
     private Optional<Long> parsePostIdKeyword(String keyword) {
@@ -787,9 +1299,117 @@ public class SearchFacadeImpl implements SearchFacade {
         }
     }
 
+    private record SearchCursor(String sort, Double relevanceScore, Long hotScore,
+                                LocalDateTime time, Long id, long millis,
+                                long rankingMillis, boolean legacy) {
+        private static SearchCursor empty(String sort) {
+            return new SearchCursor(sort, null, null, null, null, 0L, 0L, false);
+        }
+
+        private static SearchCursor legacy(String sort, LocalDateTime time, Long id, long millis) {
+            return new SearchCursor(sort, null, null, time, id, millis, 0L, true);
+        }
+
+        private boolean present() {
+            return time != null;
+        }
+
+        private boolean supportsElasticsearch(String requestedSort) {
+            if (!present() || !Objects.equals(sort, requestedSort)) {
+                return false;
+            }
+            return "latest".equals(requestedSort)
+                    || ("relevance".equals(requestedSort) && relevanceScore != null);
+        }
+
+        private boolean requiresElasticsearchContinuation(String requestedSort) {
+            return present()
+                    && "relevance".equals(requestedSort)
+                    && Objects.equals(sort, requestedSort)
+                    && relevanceScore != null;
+        }
+
+        private boolean requiresMysqlContinuation(String requestedSort) {
+            return present()
+                    && "relevance".equals(requestedSort)
+                    && Objects.equals(sort, requestedSort)
+                    && relevanceScore == null;
+        }
+
+        private List<Object> elasticsearchSortValues(String requestedSort) {
+            if (!supportsElasticsearch(requestedSort)) {
+                throw new IllegalStateException("cursor does not contain the Elasticsearch sort tuple");
+            }
+            if ("relevance".equals(requestedSort)) {
+                return List.of(relevanceScore, millis, id);
+            }
+            return List.of(millis, id);
+        }
+    }
+
+    private record SearchSortValues(Double relevanceScore, Long hotScore,
+                                    long millis, long id, long rankingMillis) {
+        private static SearchSortValues fromElasticsearchHit(JsonNode hit, String sort, PostBriefDTO fallback) {
+            JsonNode values = hit.path("sort");
+            if ("relevance".equals(sort) && values.isArray() && values.size() == 3) {
+                return new SearchSortValues(
+                        values.get(0).asDouble(),
+                        null,
+                        values.get(1).asLong(),
+                        values.get(2).asLong(),
+                        0L
+                );
+            }
+            if (!"relevance".equals(sort) && values.isArray() && values.size() == 2) {
+                return new SearchSortValues(
+                        null,
+                        null,
+                        values.get(0).asLong(),
+                        values.get(1).asLong(),
+                        0L
+                );
+            }
+            SearchSortValues fallbackValues = fromPost(fallback);
+            return "relevance".equals(sort)
+                    ? new SearchSortValues(hit.path("_score").asDouble(), null,
+                    fallbackValues.millis(), fallbackValues.id(), 0L)
+                    : fallbackValues;
+        }
+
+        private static SearchSortValues fromPost(PostBriefDTO post) {
+            long millis = post == null || post.getCreateTime() == null
+                    ? 0L
+                    : post.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+            long id = post == null || post.getId() == null ? 0L : post.getId();
+            return new SearchSortValues(null, null, millis, id, 0L);
+        }
+
+        private static SearchSortValues fromPostRow(PostPO post) {
+            long millis = post == null || post.getCreateTime() == null
+                    ? 0L
+                    : post.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+            long id = post == null || post.getId() == null ? 0L : post.getId();
+            return new SearchSortValues(null, null, millis, id, 0L);
+        }
+
+        private static SearchSortValues fromHotRow(PostMapper.SearchHotRow row, long rankingMillis) {
+            long millis = row == null || row.getCreateTime() == null
+                    ? 0L
+                    : row.getCreateTime().toInstant(ZoneOffset.UTC).toEpochMilli();
+            long id = row == null || row.getPostId() == null ? 0L : row.getPostId();
+            return new SearchSortValues(
+                    null,
+                    row == null ? null : row.getHotScore(),
+                    millis,
+                    id,
+                    rankingMillis
+            );
+        }
+    }
+
     private String normalizeSort(String sort) {
         String value = clean(sort).toLowerCase();
-        if ("hot".equals(value) || "latest".equals(value) || "relevance".equals(value)) {
+        if ("hot".equals(value) || "latest".equals(value) || "relevance".equals(value) || "trusted".equals(value)) {
             return value;
         }
         return "relevance";
@@ -814,25 +1434,6 @@ public class SearchFacadeImpl implements SearchFacade {
                 && !text.isBlank()
                 && !PublicContentFilter.isSyntheticText(text)
                 && !PublicContentFilter.isUnsafeSuggestionText(text);
-    }
-
-    private double hotScore(PostBriefDTO post) {
-        PostCounterDTO counter = post.getCounter();
-        double heat = 0D;
-        if (counter != null) {
-            heat += safe(counter.getLikeCount()) * 3D;
-            heat += safe(counter.getFavoriteCount()) * 4D;
-            heat += safe(counter.getCommentCount()) * 5D;
-            heat += safe(counter.getViewCount()) * 0.2D;
-        }
-        double recency = post.getCreateTime() == null
-                ? 0D
-                : Math.max(0D, 72D - Duration.between(post.getCreateTime(), LocalDateTime.now()).toHours());
-        return heat + recency;
-    }
-
-    private static long safe(Long value) {
-        return value == null ? 0L : value;
     }
 
     private static String clean(String value) {

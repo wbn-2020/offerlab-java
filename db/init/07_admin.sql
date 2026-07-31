@@ -1,7 +1,6 @@
--- 07_admin.sql
+﻿-- 07_admin.sql
 -- Admin roles for operations endpoints.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_user_admin (
     uid          BIGINT       NOT NULL,

@@ -23,10 +23,21 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "spring.profiles.active=test",
-                "spring.main.lazy-initialization=true",
+                "spring.main.lazy-initialization=false",
                 "spring.task.scheduling.enabled=false",
+                "spring.flyway.enabled=false",
+                "spring.data.redis.host=localhost",
+                "spring.data.redis.port=6379",
+                "spring.data.redis.password=",
+                "spring.data.redis.database=0",
+                "offerlab.jwt.secret=offerlab-context-test-secret-0123456789abcdef-0123456789abcdef",
+                "offerlab.id.snowflake.worker-id=1",
+                "offerlab.id.snowflake.datacenter-id=1",
                 "spring.autoconfigure.exclude=org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration,"
-                        + "org.springframework.boot.actuate.autoconfigure.data.redis.RedisReactiveHealthContributorAutoConfiguration",
+                        + "org.springframework.boot.actuate.autoconfigure.data.redis.RedisReactiveHealthContributorAutoConfiguration,"
+                        + "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration,"
+                        + "org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration,"
+                        + "org.redisson.spring.starter.RedissonAutoConfigurationV2",
                 "offerlab.kafka.enabled=false",
                 "offerlab.elasticsearch.enabled=false"
         }
@@ -58,7 +69,7 @@ class CommunityApplicationContextTest {
     private org.springframework.context.ApplicationContext applicationContext;
 
     @Test
-    void applicationContextLoadsWithMockedInfrastructure() {
+    void applicationContextEagerlyCreatesTheRealBeanGraph() {
         assertNotNull(applicationContext.getBean(HealthController.class));
     }
 }

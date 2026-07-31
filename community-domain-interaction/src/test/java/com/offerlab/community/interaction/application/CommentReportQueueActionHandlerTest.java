@@ -43,7 +43,7 @@ class CommentReportQueueActionHandlerTest {
         private String note;
 
         private CapturingCommentReportService() {
-            super(null, null, null, null, null, null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         @Override

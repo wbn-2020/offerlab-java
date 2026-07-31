@@ -29,6 +29,10 @@ public class NotificationRetryService {
     private static final int BATCH_SIZE = 50;
     private static final int MAX_RETRY = 5;
     private static final int CLAIM_LEASE_SECONDS = 60;
+    private static final int RETENTION_BATCH_SIZE = 1000;
+    private static final int MAX_RETENTION_BATCHES = 20;
+    private static final int DONE_RETENTION_DAYS = 30;
+    private static final int FAILED_RETENTION_DAYS = 180;
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final NotificationRetryTaskMapper taskMapper;
@@ -37,13 +41,13 @@ public class NotificationRetryService {
     private final NotificationFacadeImpl notificationFacade;
     private final String owner = buildOwner();
 
-    public void enqueue(String scene, Long receiverUid, Long senderUid, Integer notifType,
-                        Integer targetType, Long targetId, Map<String, Object> content, Throwable cause) {
+    public boolean enqueue(String scene, Long receiverUid, Long senderUid, Integer notifType,
+                           Integer targetType, Long targetId, Map<String, Object> content, Throwable cause) {
         if (receiverUid == null || senderUid == null || receiverUid.equals(senderUid)) {
-            return;
+            return false;
         }
         if (!tableReady()) {
-            return;
+            return false;
         }
         NotificationRetryTaskPO task = new NotificationRetryTaskPO();
         task.setId(idGen.nextId());
@@ -62,6 +66,7 @@ public class NotificationRetryService {
         taskMapper.upsertPending(task);
         log.warn("notification retry task enqueued: scene={} dedupKey={} receiverUid={} targetId={}",
                 scene, LogMask.key(task.getDedupKey()), LogMask.id(receiverUid), LogMask.id(targetId), cause);
+        return true;
     }
 
     @Scheduled(fixedDelay = 5000)
@@ -79,6 +84,26 @@ public class NotificationRetryService {
         }
     }
 
+    @Scheduled(cron = "${offerlab.notification.retry-retention-cleanup-cron:0 30 * * * *}")
+    public void cleanupExpiredTasks() {
+        if (!tableReady()) {
+            return;
+        }
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            int doneDeleted = deleteInBatches(
+                    NotificationRetryTaskMapper.STATUS_DONE, now.minusDays(DONE_RETENTION_DAYS));
+            int failedDeleted = deleteInBatches(
+                    NotificationRetryTaskMapper.STATUS_FAILED, now.minusDays(FAILED_RETENTION_DAYS));
+            if (doneDeleted + failedDeleted > 0) {
+                log.info("notification retry retention cleanup completed: doneDeleted={} failedDeleted={}",
+                        doneDeleted, failedDeleted);
+            }
+        } catch (RuntimeException e) {
+            log.warn("notification retry retention cleanup failed", e);
+        }
+    }
+
     public List<NotificationRetryTaskPO> listRecent(Integer status, int limit) {
         if (!tableReady()) {
             return List.of();
@@ -91,8 +116,8 @@ public class NotificationRetryService {
             return PageResult.empty();
         }
         int safePageSize = clampLimit(pageSize);
-        int safePage = Math.max(1, page);
-        int offset = (safePage - 1) * safePageSize;
+        int safePage = Math.min(Math.max(1, page), 1000);
+        int offset = Math.multiplyExact(safePage - 1, safePageSize);
         long total = taskMapper.countPage(status);
         List<NotificationRetryTaskPO> items = total <= offset
                 ? List.of()
@@ -191,6 +216,18 @@ public class NotificationRetryService {
                 retryCount, nextRetry, shortMessage(e));
         log.warn("notification retry task rescheduled: id={} dedupKey={} nextRetry={} delaySeconds={}",
                 LogMask.id(task.getId()), LogMask.key(task.getDedupKey()), nextRetry, delaySeconds, e);
+    }
+
+    private int deleteInBatches(int status, LocalDateTime before) {
+        int total = 0;
+        for (int batch = 0; batch < MAX_RETENTION_BATCHES; batch++) {
+            int deleted = taskMapper.deleteTerminalBefore(status, before, RETENTION_BATCH_SIZE);
+            total += Math.max(0, deleted);
+            if (deleted < RETENTION_BATCH_SIZE) {
+                break;
+            }
+        }
+        return total;
     }
 
     private Map<String, Object> parseContent(String json) {

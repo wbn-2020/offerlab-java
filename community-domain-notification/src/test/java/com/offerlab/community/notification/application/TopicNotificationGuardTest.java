@@ -20,14 +20,22 @@ class TopicNotificationGuardTest {
         assertContains(event, "private List<Long> followerUids");
 
         String postService = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/application/PostApplicationService.java"));
-        assertContains(postService, "CommunityTopicService communityTopicService");
-        assertContains(postService, "topicNotificationTargets(communityTopicService.notificationTargetsForPost(resolvedTagIds, cmd.getAuthorId()))");
+        assertContains(postService, "CommunityTopicNotificationTargetService communityTopicNotificationTargetService");
+        assertContains(postService, "publishPostPublishedEvent(post, resolvedTagIds)");
+        assertContains(postService, ".topicNotificationTargets(topicNotificationTargets(post, tagIds))");
+        assertContains(postService, "Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)");
+        assertContains(postService, "Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)");
+        assertContains(postService, "communityTopicNotificationTargetService.targetsForPost(tagIds, post.getExtJson(), post.getAuthorId())");
 
-        String topicService = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/application/CommunityTopicService.java"));
-        assertContains(topicService, "notificationTargetsForPost");
-        assertContains(topicService, "selectOnlineTopicsByTagIds");
-        assertContains(topicService, "selectFollowerUidsForNotification");
-        assertContains(topicService, "MAX_TOPIC_FOLLOWER_FANOUT");
+        String targetService = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/application/CommunityTopicNotificationTargetService.java"));
+        assertContains(targetService, "class CommunityTopicNotificationTargetService");
+        assertContains(targetService, "targetsForPost");
+        assertContains(targetService, "selectOnlineTopicsByTagIds");
+        assertContains(targetService, "selectFollowerUidsForNotification");
+        assertContains(targetService, "MAX_NOTIFICATION_TOPICS");
+        assertContains(targetService, "MAX_TOPIC_FOLLOWER_FANOUT");
+        assertContains(targetService, "int remainingFanout = MAX_TOPIC_FOLLOWER_FANOUT");
+        assertContains(targetService, "remainingFanout -= followerUids.size()");
 
         String topicMapper = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/CommunityTopicMapper.java"));
         assertContains(topicMapper, "selectOnlineTopicsByTagIds");

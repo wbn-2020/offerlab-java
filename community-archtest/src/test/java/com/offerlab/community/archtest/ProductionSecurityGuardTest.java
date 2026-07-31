@@ -9,6 +9,7 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.infra.web.config.WebMvcConfig;
 import com.offerlab.community.feed.controller.FeedController;
 import com.offerlab.community.interaction.controller.InteractionController;
+import com.offerlab.community.interaction.api.dto.FavoriteMoveCmd;
 import com.offerlab.community.notification.controller.NotificationController;
 import com.offerlab.community.post.controller.PostController;
 import com.offerlab.community.question.controller.QuestionAdminController;
@@ -31,17 +32,18 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProductionSecurityGuardTest {
+    private static final String LOCAL_OPEN_TOKEN = "test-local-open-token";
 
     @Test
     void publicAuthMutationEndpointsAreRateLimited() throws Exception {
@@ -53,7 +55,7 @@ class ProductionSecurityGuardTest {
     void highFrequencyUserMutationEndpointsAreRateLimited() throws Exception {
         assertRateLimited(InteractionController.class, "like", Long.class);
         assertRateLimited(InteractionController.class, "unlike", Long.class);
-        assertRateLimited(InteractionController.class, "favorite", Long.class);
+        assertRateLimited(InteractionController.class, "favorite", Long.class, FavoriteMoveCmd.class);
         assertRateLimited(InteractionController.class, "unfavorite", Long.class);
         assertRateLimited(InteractionController.class, "comment", Long.class, InteractionController.CommentReq.class);
         assertRateLimited(InteractionController.class, "deleteComment", Long.class);
@@ -111,8 +113,35 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
+    void devProfileRejectsLocalDefaultJwtSecret() throws Exception {
+        JwtService jwtService = new JwtService(nullRedis());
+        setField(jwtService, "environment", devEnvironment());
+        setField(jwtService, "secret", "offerlab-local-dev-only-secret-key-change-before-shared-env-123456");
+
+        assertThrows(IllegalStateException.class, () -> invokeValidateSecret(jwtService));
+    }
+
+    @Test
+    void localProfileAloneAllowsLocalDefaultJwtSecret() throws Exception {
+        JwtService jwtService = new JwtService(nullRedis());
+        setField(jwtService, "environment", profiles("local"));
+        setField(jwtService, "secret", "offerlab-local-dev-only-secret-key-change-before-shared-env-123456");
+
+        invokeValidateSecret(jwtService);
+    }
+
+    @Test
+    void mixedLocalAndSharedProfilesRejectLocalDefaultJwtSecret() throws Exception {
+        JwtService jwtService = new JwtService(nullRedis());
+        setField(jwtService, "environment", profiles("local", "dev"));
+        setField(jwtService, "secret", "offerlab-local-dev-only-secret-key-change-before-shared-env-123456");
+
+        assertThrows(IllegalStateException.class, () -> invokeValidateSecret(jwtService));
+    }
+
+    @Test
     void prodProfileDoesNotAllowLocalOpenAdminMode() {
-        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), prodEnvironment());
+        AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), prodEnvironment());
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -121,7 +150,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void devProfileLocksAdminModeUnlessLocalOpenIsExplicitlyEnabled() {
-        AdminPermissionService service = new AdminPermissionService("", false, mapperWithoutAdminTable(), devEnvironment());
+        AdminPermissionService service = new AdminPermissionService("", false, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), devEnvironment());
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -129,8 +158,8 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
-    void devProfileAllowsExplicitLocalOpenAdminModeForBootstrap() {
-        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), devEnvironment());
+    void localProfileAllowsExplicitLocalOpenAdminModeForBootstrap() {
+        AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), profiles("local"));
 
         bindRequest("127.0.0.1");
         try {
@@ -143,7 +172,7 @@ class ProductionSecurityGuardTest {
 
     @Test
     void stagingProfileDoesNotAllowLocalOpenAdminMode() {
-        AdminPermissionService service = new AdminPermissionService("", true, mapperWithoutAdminTable(), profiles("staging"));
+        AdminPermissionService service = new AdminPermissionService("", true, LOCAL_OPEN_TOKEN, mapperWithoutAdminTable(), profiles("staging"));
 
         assertFalse(service.isLocalOpenMode());
         assertEquals("LOCKED", service.mode());
@@ -151,34 +180,92 @@ class ProductionSecurityGuardTest {
     }
 
     @Test
-    void prodConfigMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
-        String prodConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-prod.yml"), StandardCharsets.UTF_8);
-        String baseConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
-        String devConfig = Files.readString(Path.of("../community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
+    void trackedSharedConfigsMustKeepPublicDocsAndLocalBootstrapClosed() throws Exception {
+        String baseConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application.yml"), StandardCharsets.UTF_8);
+        String devConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-dev.yml"), StandardCharsets.UTF_8);
+        String acceptanceConfig = Files.readString(RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-acceptance.yml"), StandardCharsets.UTF_8);
+        String acceptanceEnv = Files.readString(RepositoryTestPaths.resolve(".env.acceptance.example"), StandardCharsets.UTF_8);
 
         assertTrue(baseConfig.contains("api-docs:\n    path: /v3/api-docs\n    enabled: false") || baseConfig.contains("api-docs:\r\n    path: /v3/api-docs\r\n    enabled: false"), "base config must disable OpenAPI docs by default");
         assertTrue(baseConfig.contains("swagger-ui:\n    path: /swagger-ui.html\n    enabled: false") || baseConfig.contains("swagger-ui:\r\n    path: /swagger-ui.html\r\n    enabled: false"), "base config must disable Swagger UI by default");
         assertTrue(devConfig.contains("api-docs:\n    enabled: true") || devConfig.contains("api-docs:\r\n    enabled: true"), "dev profile must explicitly enable OpenAPI docs");
         assertTrue(devConfig.contains("swagger-ui:\n    enabled: true") || devConfig.contains("swagger-ui:\r\n    enabled: true"), "dev profile must explicitly enable Swagger UI");
-        assertTrue(prodConfig.contains("api-docs:\n    enabled: false") || prodConfig.contains("api-docs:\r\n    enabled: false"), "prod must disable OpenAPI docs");
-        assertTrue(prodConfig.contains("swagger-ui:\n    enabled: false") || prodConfig.contains("swagger-ui:\r\n    enabled: false"), "prod must disable Swagger UI");
-        assertFalse(prodConfig.contains("local-open-enabled: true"), "prod must not enable local-open admin bootstrap");
-        assertTrue(prodConfig.contains("secret: ${JWT_SECRET}"), "prod must require an external JWT secret");
-        assertTrue(prodConfig.contains("password: ${REDIS_PASSWORD}"), "prod must require an external Redis password without an empty default");
-        assertTrue(prodConfig.contains("bootstrap-servers: ${KAFKA_BROKERS}"), "prod must require explicit Kafka brokers");
-        assertTrue(prodConfig.contains("url: ${ELASTICSEARCH_URL}"), "prod must require an explicit Elasticsearch URL");
-        assertTrue(prodConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "prod must require explicit CORS origins");
-        assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfiguration"),
+        assertTrue(acceptanceConfig.contains("api-docs:\n    enabled: false") || acceptanceConfig.contains("api-docs:\r\n    enabled: false"), "acceptance must disable OpenAPI docs");
+        assertTrue(acceptanceConfig.contains("swagger-ui:\n    enabled: false") || acceptanceConfig.contains("swagger-ui:\r\n    enabled: false"), "acceptance must disable Swagger UI");
+        assertFalse(acceptanceConfig.contains("local-open-enabled: true"), "acceptance must not enable local-open admin bootstrap");
+        assertTrue(baseConfig.contains("secret: ${JWT_SECRET}"), "shared config must require an external JWT secret");
+        assertTrue(baseConfig.contains("password: ${REDIS_PASSWORD}"), "shared config must require an external Redis password without an empty default");
+        assertTrue(baseConfig.contains("bootstrap-servers: ${KAFKA_BROKERS}"), "shared config must require explicit Kafka brokers");
+        assertTrue(baseConfig.contains("url: ${ELASTICSEARCH_URL}"), "shared config must require an explicit Elasticsearch URL");
+        assertTrue(acceptanceConfig.contains("allowed-origins: ${OFFERLAB_WEB_CORS_ALLOWED_ORIGINS}"), "acceptance must require explicit CORS origins");
+        assertTrue(devConfig.contains("org.redisson.spring.starter.RedissonAutoConfigurationV2"),
                 "dev profile must exclude Redisson auto configuration so Redis outages do not block local startup");
         assertTrue(devConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:false}"),
                 "dev profile must disable Redis Pub/Sub by default and opt in through OFFERLAB_REDIS_PUBSUB_ENABLED");
         assertTrue(baseConfig.contains("pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}"),
                 "base profile must keep Redis Pub/Sub enabled by default unless explicitly overridden");
+        assertTrue(devConfig.contains("secret: ${JWT_SECRET}"),
+                "dev must require an external JWT secret");
+        assertFalse(devConfig.contains("JWT_SECRET:offerlab-local"),
+                "dev must not expose a shared default JWT secret");
+        assertTrue(devConfig.contains("baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}"),
+                "dev must not baseline an unmanaged database by default");
+        assertTrue(baseConfig.contains("worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID}"),
+                "shared profiles must require an explicit Snowflake worker ID");
+        assertTrue(baseConfig.contains("datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID}"),
+                "shared profiles must require an explicit Snowflake datacenter ID");
+        assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_WORKER_ID=<0-31>"),
+                "acceptance template must document the required Snowflake worker ID");
+        assertTrue(acceptanceEnv.contains("OFFERLAB_SNOWFLAKE_DATACENTER_ID=<0-31>"),
+                "acceptance template must document the required Snowflake datacenter ID");
+    }
+
+    @Test
+    void trackedLocalProfileMustRemainShareableAndExcludeCurrentRedissonAutoConfiguration() throws Exception {
+        String gitignore = Files.readString(RepositoryTestPaths.resolve(".gitignore"), StandardCharsets.UTF_8);
+        String localConfig = Files.readString(
+                RepositoryTestPaths.resolve("community-bootstrap/src/main/resources/application-local.yml"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(gitignore.lines()
+                        .map(String::trim)
+                        .anyMatch("!community-bootstrap/src/main/resources/application-local.yml"::equals),
+                "the shared local profile must remain traceable while other personal local configs stay ignored");
+        assertTrue(localConfig.lines()
+                        .map(String::trim)
+                        .anyMatch("- org.redisson.spring.starter.RedissonAutoConfigurationV2"::equals),
+                "local profile must exclude the Redisson auto configuration used by the current starter");
+        assertFalse(localConfig.lines()
+                        .map(String::trim)
+                        .anyMatch("- org.redisson.spring.starter.RedissonAutoConfiguration"::equals),
+                "local profile must not reference the obsolete Redisson auto configuration");
+        assertDoesNotThrow(
+                () -> Class.forName("org.redisson.spring.starter.RedissonAutoConfigurationV2"),
+                "the Redisson auto configuration referenced by local profile must exist on the runtime classpath");
+        assertTrue(localConfig.lines()
+                        .map(String::trim)
+                        .filter(line -> line.startsWith("password:") || line.startsWith("secret:"))
+                        .allMatch(line -> line.contains("${")),
+                "tracked local credentials must remain environment-overridable and contain no personal literals");
+        assertTrue(localConfig.contains("local-open-enabled: ${OFFERLAB_ADMIN_LOCAL_OPEN_ENABLED:false}"),
+                "tracked local profile must keep local-open admin bootstrap disabled by default");
+        assertTrue(localConfig.contains("address: ${SERVER_ADDRESS:127.0.0.1}"),
+                "tracked local profile must bind to loopback while it carries a documented development JWT default");
+        assertTrue(localConfig.contains("password: ${DB_PASSWORD:offerlab-local-db-change-me}"),
+                "tracked local database credentials must match the reviewed local Compose contract");
+        assertTrue(localConfig.contains("password: ${REDIS_PASSWORD:offerlab-local-redis-change-me}"),
+                "tracked local Redis credentials must match the reviewed local Compose contract");
+        assertTrue(localConfig.contains("enabled: ${OFFERLAB_KAFKA_ENABLED:false}"),
+                "tracked local profile must keep optional Kafka integration disabled by default");
+        assertTrue(localConfig.contains("auto-create: ${OFFERLAB_KAFKA_ENABLED:false}"),
+                "Spring Kafka admin startup must follow the same opt-in local integration toggle");
+        assertTrue(localConfig.contains("enabled: ${ELASTICSEARCH_ENABLED:false}"),
+                "tracked local profile must keep optional Elasticsearch integration disabled by default");
     }
 
     @Test
     void dockerComposeMustBeClearlyLocalOnly() throws Exception {
-        String compose = Files.readString(Path.of("../docker-compose.yml"), StandardCharsets.UTF_8);
+        String compose = Files.readString(RepositoryTestPaths.resolve("docker-compose.yml"), StandardCharsets.UTF_8);
 
         assertTrue(compose.contains("LOCAL DEVELOPMENT ONLY"), "docker-compose must warn that it is not production configuration");
         assertTrue(compose.contains("PLAINTEXT") && compose.contains("xpack.security.enabled: \"false\""),
@@ -241,6 +328,11 @@ class ProductionSecurityGuardTest {
             }
 
             @Override
+            public java.util.List<Long> lockEnabledAdminUids() {
+                return java.util.List.of();
+            }
+
+            @Override
             public int countAdminRows() {
                 return 0;
             }
@@ -282,7 +374,8 @@ class ProductionSecurityGuardTest {
             case "getContextPath", "getServletPath" -> "";
             case "getLocale" -> Locale.getDefault();
             case "getLocales" -> Collections.enumeration(java.util.List.of(Locale.getDefault()));
-            case "getAttribute", "getHeader", "getSession" -> null;
+            case "getHeader" -> LOCAL_OPEN_TOKEN;
+            case "getAttribute", "getSession" -> null;
             case "getAttributeNames", "getHeaderNames", "getParameterNames" -> Collections.emptyEnumeration();
             case "getParameterMap" -> Map.of();
             case "setAttribute", "removeAttribute" -> null;

@@ -32,8 +32,38 @@ public interface UserPrepTargetMapper extends BaseMapper<UserPrepTargetPO> {
                 ELSE 4
               END,
               create_time DESC, id DESC
+            LIMIT 20
             """)
     List<UserPrepTargetPO> selectByUser(@Param("uid") Long uid);
+
+    @Select("""
+            SELECT id
+            FROM t_user_account
+            WHERE id = #{uid}
+              AND is_deleted = 0
+            LIMIT 1
+            FOR UPDATE
+            """)
+    Long lockUser(@Param("uid") Long uid);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_user_prep_target
+            WHERE uid = #{uid}
+            """)
+    long countByUser(@Param("uid") Long uid);
+
+    @Select("""
+            SELECT *
+            FROM t_user_prep_target
+            WHERE uid = #{uid}
+              AND target_type = #{targetType}
+              AND target_value = #{targetValue}
+            LIMIT 1
+            """)
+    UserPrepTargetPO selectByNaturalKey(@Param("uid") Long uid,
+                                        @Param("targetType") String targetType,
+                                        @Param("targetValue") String targetValue);
 
     @Insert("""
             INSERT INTO t_user_prep_target (id, uid, target_type, target_value, interview_date, priority, note)

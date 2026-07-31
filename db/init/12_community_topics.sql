@@ -1,5 +1,4 @@
-SET NAMES utf8mb4;
-USE offerlab;
+﻿SET NAMES utf8mb4;
 
 CREATE TABLE IF NOT EXISTS t_community_topic (
     id              BIGINT       NOT NULL PRIMARY KEY,

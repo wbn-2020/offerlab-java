@@ -65,9 +65,9 @@ class AuthControllerApiTest {
                 .thenThrow(new BizException(ErrorCode.PASSWORD_ERROR));
 
         mvc.perform(post("/api/v1/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"u@example.com\",\"password\":\"bad-pass\"}"))
-                .andExpect(status().isOk())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"u@example.com\",\"password\":\"bad-pass\"}"))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(ErrorCode.PASSWORD_ERROR.getCode()));
     }
 

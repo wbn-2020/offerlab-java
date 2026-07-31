@@ -1,6 +1,7 @@
 package com.offerlab.community.infra.mq.outbox;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -57,7 +58,21 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
 
     @Update("""
             UPDATE t_outbox_message
+            SET lock_until = #{lockUntil},
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND msg_status = 3
+              AND lock_owner = #{owner}
+              AND lock_until > NOW(3)
+            """)
+    int renewClaim(@Param("id") Long id,
+                   @Param("owner") String owner,
+                   @Param("lockUntil") LocalDateTime lockUntil);
+
+    @Update("""
+            UPDATE t_outbox_message
             SET msg_status = 1,
+                next_retry_time = NULL,
                 lock_owner = NULL,
                 lock_until = NULL,
                 update_time = NOW(3)
@@ -84,6 +99,22 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
                     @Param("status") Integer status,
                     @Param("retryCount") Integer retryCount,
                     @Param("nextRetryTime") LocalDateTime nextRetryTime);
+
+    @Update("""
+            UPDATE t_outbox_message
+            SET msg_status = 2,
+                retry_count = #{retryCount},
+                next_retry_time = NULL,
+                lock_owner = NULL,
+                lock_until = NULL,
+                update_time = NOW(3)
+            WHERE id = #{id}
+              AND msg_status = 3
+              AND lock_owner = #{owner}
+            """)
+    int markPoisonFailed(@Param("id") Long id,
+                         @Param("owner") String owner,
+                         @Param("retryCount") Integer retryCount);
 
     @Select("SELECT msg_status AS status, COUNT(*) AS count FROM t_outbox_message GROUP BY msg_status")
     List<Map<String, Object>> countByStatus();
@@ -183,4 +214,16 @@ public interface OutboxMessageMapper extends BaseMapper<OutboxMessage> {
             </script>
             """)
     int markFailedForRetryBatch(@Param("ids") List<Long> ids);
+
+    @Delete("""
+            DELETE FROM t_outbox_message
+            WHERE msg_status = #{status}
+              AND next_retry_time IS NULL
+              AND update_time < #{before}
+            ORDER BY update_time ASC
+            LIMIT #{limit}
+            """)
+    int deleteTerminalBefore(@Param("status") Integer status,
+                             @Param("before") LocalDateTime before,
+                             @Param("limit") int limit);
 }

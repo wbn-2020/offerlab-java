@@ -43,7 +43,9 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public Result<Void> logout(@RequestHeader(value = "Authorization", required = false) String auth) {
+    @RateLimit(key = "'auth:logout:' + #http.remoteAddr", rate = 60, per = 60, failOpen = false)
+    public Result<Void> logout(@RequestHeader(value = "Authorization", required = false) String auth,
+                               HttpServletRequest http) {
         if (auth != null && auth.startsWith("Bearer ")) {
             userService.logout(auth.substring(7));
         }
@@ -70,6 +72,7 @@ public class AuthController {
         @Size(max = 128)
         private String email;
         @NotBlank
+        @Size(max = 64)
         private String password;
 
         public String accountValue() {

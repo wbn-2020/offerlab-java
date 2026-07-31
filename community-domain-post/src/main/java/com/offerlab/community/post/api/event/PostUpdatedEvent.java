@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -16,5 +18,7 @@ public class PostUpdatedEvent {
     private String content;
     private Integer visibility;
     private Integer postStatus;
+    private Integer resultVersion;
+    private List<Long> respondedSuggestionIds;
     private Long timestamp;
 }

@@ -3,10 +3,14 @@ package com.offerlab.community.user.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.NotificationPreferenceDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
@@ -25,14 +29,21 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.offerlab.community.common.utils.SqlLimits;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 用户应用服务：编排领域逻辑，事务边界
@@ -42,17 +53,25 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class UserApplicationService {
     private static final Set<String> SYNTHETIC_MARKERS = Set.of("E2E", "SMOKE", "CODEX", "TESTDATA");
+    private static final int MAX_LOGIN_FAILURES = 5;
+    private static final Duration LOGIN_FAILURE_WINDOW = Duration.ofMinutes(15);
+    private static final Duration LOGIN_LOCK_TTL = Duration.ofMinutes(15);
+    private static final String LOGIN_FAILURE_PREFIX = "auth:login:fail:";
+    private static final String LOGIN_LOCK_PREFIX = "auth:login:lock:";
 
     private final UserRepository userRepo;
     private final FollowRepository followRepo;
     private final SnowflakeIdGenerator idGen;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final StringRedisTemplate redis;
     private final EventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final UserPrivacySettingMapper privacySettingMapper;
     private final UserProfileMapper profileMapper;
     private final UserCacheService userCacheService;
+    private final ContentModerationService contentModerationService;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -62,16 +81,19 @@ public class UserApplicationService {
         if (password.length() < 6 || password.length() > 64) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
-        userRepo.findByEmail(email).ifPresent(u -> {
+        String normalizedEmail = normalizeEmail(email);
+        String normalizedNickname = normalizeNickname(nickname);
+        contentModerationService.requireContentAllowed(ContentModerationService.SCOPE_PROFILE, normalizedNickname);
+        userRepo.findByEmail(normalizedEmail).ifPresent(u -> {
             throw new BizException(ErrorCode.USER_ALREADY_EXISTS);
         });
 
         long uid = idGen.nextId();
         User user = User.builder()
                 .id(uid)
-                .email(email)
+                .email(normalizedEmail)
                 .passwordHash(passwordEncoder.encode(password))
-                .nickname(nickname)
+                .nickname(normalizedNickname)
                 .accountStatus(User.STATUS_NORMAL)
                 .build();
         userRepo.register(user);
@@ -79,19 +101,28 @@ public class UserApplicationService {
                 .uid(uid)
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
-        log.info("user registered: uid={} email={}", uid, maskEmail(email));
+        log.info("user registered: uid={} email={}", uid, maskEmail(normalizedEmail));
         return uid;
     }
 
     public String login(String email, String password, String ip) {
-        User user = userRepo.findByEmail(email)
-                .orElseThrow(() -> new BizException(ErrorCode.PASSWORD_ERROR));
+        String normalizedEmail = normalizeEmail(email);
+        requireLoginNotLocked(normalizedEmail);
+        User user = userRepo.findByEmail(normalizedEmail)
+                .or(() -> normalizedEmail.equals(email) ? java.util.Optional.empty() : userRepo.findByEmail(email))
+                .orElse(null);
+        if (user == null) {
+            recordLoginFailure(normalizedEmail);
+            throw new BizException(ErrorCode.PASSWORD_ERROR);
+        }
         if (!user.isActive()) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+            recordLoginFailure(normalizedEmail);
             throw new BizException(ErrorCode.PASSWORD_ERROR);
         }
+        clearLoginFailures(normalizedEmail);
         userRepo.updateLastLogin(user.getId(), ip);
         return jwtService.issue(user.getId());
     }
@@ -134,7 +165,8 @@ public class UserApplicationService {
                 .followeeId(toUid)
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
-        userCacheService.evictBrief(fromUid, toUid);
+        afterCommit.execute(() -> userCacheService.evictBrief(fromUid, toUid),
+                "follow cache eviction:" + fromUid + ":" + toUid);
     }
 
     @Transactional
@@ -143,7 +175,8 @@ public class UserApplicationService {
         if (!ok) {
             throw new BizException(ErrorCode.FOLLOW_NOT_EXISTS);
         }
-        userCacheService.evictBrief(fromUid, toUid);
+        afterCommit.execute(() -> userCacheService.evictBrief(fromUid, toUid),
+                "unfollow cache eviction:" + fromUid + ":" + toUid);
     }
 
     public User getUser(Long uid) {
@@ -164,11 +197,55 @@ public class UserApplicationService {
     @Transactional
     public void updateProfile(Long uid, String nickname, String avatarUrl, String bio) {
         User u = getUser(uid);
-        if (StringUtils.hasText(nickname)) u.setNickname(nickname);
-        if (avatarUrl != null) u.setAvatarUrl(avatarUrl);
-        if (bio != null) u.setBio(bio);
+        contentModerationService.requireUserCanPublish(uid);
+        if (nickname != null) {
+            u.setNickname(normalizeNickname(nickname));
+        }
+        if (avatarUrl != null) {
+            u.setAvatarUrl(normalizeAvatarUrl(avatarUrl));
+        }
+        if (bio != null) {
+            u.setBio(limitText(bio, 500, "bio"));
+        }
+        contentModerationService.requireContentAllowed(uid, ContentModerationService.SCOPE_PROFILE,
+                u.getNickname(), u.getBio());
         userRepo.updateProfile(u);
-        userCacheService.evictBrief(uid);
+        afterCommit.execute(() -> userCacheService.evictBrief(uid), "user profile cache eviction:" + uid);
+    }
+
+    private String normalizeEmail(String email) {
+        String value = limitText(email, 254, "email");
+        if (!StringUtils.hasText(value)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return value.toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeNickname(String nickname) {
+        String value = limitText(nickname, 32, "nickname");
+        if (!StringUtils.hasText(value)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "nickname cannot be blank");
+        }
+        if (value.indexOf('<') >= 0 || value.indexOf('>') >= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "nickname contains invalid characters");
+        }
+        return value;
+    }
+
+    private String normalizeAvatarUrl(String avatarUrl) {
+        String value = limitText(avatarUrl, 512, "avatarUrl");
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return ExternalUrlSafety.requireSafeHttpUrl(value, "avatarUrl", 512);
+    }
+
+    private String limitText(String value, int maxLength, String field) {
+        String normalized = value == null ? null : value.trim();
+        if (normalized != null && normalized.length() > maxLength) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), field + " is too long");
+        }
+        return normalized;
     }
 
     @Transactional
@@ -182,7 +259,7 @@ public class UserApplicationService {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
         userRepo.updateProfile(u);
-        userCacheService.evictBrief(uid);
+        afterCommit.execute(() -> userCacheService.evictBrief(uid), "user intent cache eviction:" + uid);
     }
 
     @Transactional
@@ -205,14 +282,17 @@ public class UserApplicationService {
     @Transactional
     public UserPrivacySettingDTO updatePrivacySetting(Long uid, UserPrivacySettingDTO setting) {
         getUser(uid);
+        if (setting == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
         UserPrivacySettingPO po = privacySettingMapper.selectById(uid);
         boolean exists = po != null;
         if (po == null) {
             // 允许用户在没有历史配置时直接保存，避免前端必须先调用 GET 初始化。
             po = defaultPrivacySetting(uid);
         }
-        po.setProfileVisibility(normalizeVisibility(setting.getProfileVisibility()));
-        po.setIntentVisibility(normalizeVisibility(setting.getIntentVisibility()));
+        po.setProfileVisibility(normalizeVisibility(setting.getProfileVisibility(), po.getProfileVisibility()));
+        po.setIntentVisibility(normalizeVisibility(setting.getIntentVisibility(), po.getIntentVisibility()));
         po.setSearchable(toFlag(setting.getSearchable()));
         po.setInteractionNotification(toFlag(setting.getInteractionNotification()));
         po.setSystemNotification(toFlag(setting.getSystemNotification()));
@@ -262,15 +342,46 @@ public class UserApplicationService {
         if (StringUtils.hasText(keyword)) {
             query.like(UserProfilePO::getNickname, keyword.trim());
         }
-        return profileMapper.selectList(query)
-                .stream()
+        List<Long> candidateIds = profileMapper.selectList(query).stream()
                 .map(UserProfilePO::getId)
-                .filter(uid -> userFacade.isSearchable(uid) && userFacade.isProfileVisible(viewerUid, uid))
-                .map(userFacade::getUserBrief)
+                .toList();
+        if (candidateIds.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, UserPrivacySettingPO> settings = privacySettingMapper.selectBatchIds(candidateIds).stream()
+                .collect(Collectors.toMap(UserPrivacySettingPO::getUserId, setting -> setting, (left, right) -> left));
+        Map<Long, Boolean> following = viewerUid == null
+                ? Map.of()
+                : userFacade.batchIsFollowing(viewerUid, candidateIds);
+        List<Long> discoverableIds = candidateIds.stream()
+                .filter(uid -> isDiscoverableUser(viewerUid, uid, settings.get(uid), following.get(uid)))
+                .toList();
+        Map<Long, UserBriefDTO> users = userFacade.batchGetUserBriefs(discoverableIds);
+        return discoverableIds.stream()
+                .map(users::get)
                 .filter(java.util.Objects::nonNull)
                 .filter(user -> !isSyntheticUser(user))
                 .limit(limit)
                 .toList();
+    }
+
+    private static boolean isDiscoverableUser(Long viewerUid,
+                                              Long targetUid,
+                                              UserPrivacySettingPO setting,
+                                              Boolean viewerFollowsTarget) {
+        if (targetUid == null || setting != null && Integer.valueOf(0).equals(setting.getSearchable())) {
+            return false;
+        }
+        if (targetUid.equals(viewerUid)) {
+            return true;
+        }
+        String visibility = setting == null || !StringUtils.hasText(setting.getProfileVisibility())
+                ? "PUBLIC"
+                : setting.getProfileVisibility().trim();
+        if ("PRIVATE".equalsIgnoreCase(visibility)) {
+            return false;
+        }
+        return !"FOLLOWERS".equalsIgnoreCase(visibility) || Boolean.TRUE.equals(viewerFollowsTarget);
     }
 
     private static boolean isSyntheticUser(UserBriefDTO user) {
@@ -298,6 +409,8 @@ public class UserApplicationService {
         po.setFollowNotification(1);
         po.setFavoriteNotification(1);
         po.setMentionNotification(1);
+        po.setAcceptContactRequest(1);
+        po.setContactRequestPolicy(ContactRequestSettingsService.DEFAULT_POLICY);
         return po;
     }
 
@@ -350,14 +463,20 @@ public class UserApplicationService {
         return value == null ? (fallback == null ? 1 : fallback) : toFlag(value);
     }
 
-    private static String normalizeVisibility(String value) {
+    private static String normalizeVisibility(String value, String fallback) {
+        if (!StringUtils.hasText(value)) {
+            return normalizeVisibility(fallback, "PUBLIC");
+        }
         if ("PRIVATE".equalsIgnoreCase(value)) {
             return "PRIVATE";
         }
         if ("FOLLOWERS".equalsIgnoreCase(value)) {
             return "FOLLOWERS";
         }
-        return "PUBLIC";
+        if ("PUBLIC".equalsIgnoreCase(value)) {
+            return "PUBLIC";
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "invalid visibility");
     }
 
     private static UserIntentDTO normalizeIntent(UserIntentDTO intent) {
@@ -411,5 +530,72 @@ public class UserApplicationService {
         }
         String normalized = value.trim();
         return normalized.isEmpty() ? null : normalized;
+    }
+
+    private void requireLoginNotLocked(String account) {
+        String key = loginLockKey(account);
+        try {
+            if (Boolean.TRUE.equals(redis.hasKey(key))) {
+                throw new BizException(ErrorCode.RATE_LIMIT_EXCEEDED);
+            }
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("login guard unavailable while checking lock: accountRef={} reason={}",
+                    LogMask.key(accountRef(account)), LogMask.message(e));
+            throw new BizException(ErrorCode.CACHE_ERROR.getCode(), "auth guard unavailable");
+        }
+    }
+
+    private void recordLoginFailure(String account) {
+        String failureKey = loginFailureKey(account);
+        try {
+            Long count = redis.opsForValue().increment(failureKey);
+            if (count != null && count == 1L) {
+                redis.expire(failureKey, LOGIN_FAILURE_WINDOW);
+            }
+            if (count != null && count >= MAX_LOGIN_FAILURES) {
+                redis.opsForValue().set(loginLockKey(account), "1", LOGIN_LOCK_TTL);
+                redis.expire(failureKey, LOGIN_FAILURE_WINDOW);
+                log.warn("login account temporarily locked after repeated failures: accountRef={} failures={}",
+                        LogMask.key(accountRef(account)), count);
+            }
+        } catch (Exception e) {
+            log.error("login guard unavailable while recording failure: accountRef={} reason={}",
+                    LogMask.key(accountRef(account)), LogMask.message(e));
+            throw new BizException(ErrorCode.CACHE_ERROR.getCode(), "auth guard unavailable");
+        }
+    }
+
+    private void clearLoginFailures(String account) {
+        try {
+            redis.delete(List.of(loginFailureKey(account), loginLockKey(account)));
+        } catch (Exception e) {
+            log.warn("login guard cleanup failed after successful login: accountRef={} reason={}",
+                    LogMask.key(accountRef(account)), LogMask.message(e));
+        }
+    }
+
+    private static String loginFailureKey(String account) {
+        return LOGIN_FAILURE_PREFIX + accountRef(account);
+    }
+
+    private static String loginLockKey(String account) {
+        return LOGIN_LOCK_PREFIX + accountRef(account);
+    }
+
+    private static String accountRef(String account) {
+        String normalized = account == null ? "" : account.trim().toLowerCase(Locale.ROOT);
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(normalized.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(32);
+            for (int i = 0; i < 16; i++) {
+                hex.append(String.format("%02x", bytes[i]));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            return Integer.toHexString(normalized.hashCode());
+        }
     }
 }

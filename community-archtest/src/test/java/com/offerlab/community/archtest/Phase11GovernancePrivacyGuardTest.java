@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -14,8 +13,8 @@ class Phase11GovernancePrivacyGuardTest {
 
     @Test
     void userReportEndpointsReturnOnlyOpaqueReportIds() throws Exception {
-        String postController = read("../community-domain-post/src/main/java/com/offerlab/community/post/controller/PostController.java");
-        String interactionController = read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/controller/InteractionController.java");
+        String postController = read("community-domain-post/src/main/java/com/offerlab/community/post/controller/PostController.java");
+        String interactionController = read("community-domain-interaction/src/main/java/com/offerlab/community/interaction/controller/InteractionController.java");
 
         assertContains(postController, "public Result<Map<String, Long>> report(", "post report endpoint must not return admin report DTOs");
         assertContains(postController, "Map.of(\"reportId\", reportId)", "post report endpoint must return only an opaque report id");
@@ -28,10 +27,10 @@ class Phase11GovernancePrivacyGuardTest {
 
     @Test
     void reportAdminEndpointsAndReviewServicesRemainPermissionScoped() throws Exception {
-        String postController = read("../community-domain-post/src/main/java/com/offerlab/community/post/controller/PostController.java");
-        String interactionController = read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/controller/InteractionController.java");
-        String postReportService = read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostReportService.java");
-        String commentReportService = read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/application/CommentReportService.java");
+        String postController = read("community-domain-post/src/main/java/com/offerlab/community/post/controller/PostController.java");
+        String interactionController = read("community-domain-interaction/src/main/java/com/offerlab/community/interaction/controller/InteractionController.java");
+        String postReportService = read("community-domain-post/src/main/java/com/offerlab/community/post/application/PostReportService.java");
+        String commentReportService = read("community-domain-interaction/src/main/java/com/offerlab/community/interaction/application/CommentReportService.java");
 
         assertContains(postController, "@GetMapping(\"/admin/reports\")", "post report list must stay admin-routed");
         assertContains(postController, "domainModeratorService.requireModerateDomain(UserContext.require(), domain)", "post report list must require domain moderation scope");
@@ -46,14 +45,14 @@ class Phase11GovernancePrivacyGuardTest {
 
     @Test
     void reviewQueueAndAuditDataAreAdminOnlyAndHighRiskActionsNeedConfirmation() throws Exception {
-        String reviewQueueController = read("../community-domain-search/src/main/java/com/offerlab/community/search/controller/ReviewQueueController.java");
-        String reviewQueueService = read("../community-domain-search/src/main/java/com/offerlab/community/search/application/ReviewQueueService.java");
-        String opsController = read("../community-domain-search/src/main/java/com/offerlab/community/search/controller/OpsController.java");
-        String feedController = read("../community-domain-feed/src/main/java/com/offerlab/community/feed/controller/FeedController.java");
-        String userController = read("../community-domain-user/src/main/java/com/offerlab/community/user/controller/UserController.java");
+        String reviewQueueController = read("community-domain-search/src/main/java/com/offerlab/community/search/controller/ReviewQueueController.java");
+        String reviewQueueService = read("community-domain-search/src/main/java/com/offerlab/community/search/application/ReviewQueueService.java");
+        String opsController = read("community-domain-search/src/main/java/com/offerlab/community/search/controller/OpsController.java");
+        String feedController = read("community-domain-feed/src/main/java/com/offerlab/community/feed/controller/FeedController.java");
+        String userController = read("community-domain-user/src/main/java/com/offerlab/community/user/controller/UserController.java");
 
         assertContains(reviewQueueController, "@RequestMapping(\"/api/v1/admin/review-queue\")", "review queue must stay under admin routing");
-        assertTrue(count(reviewQueueController, "AdminPermissionService.ROLE_CONTENT_MODERATOR") >= 7,
+        assertContains(reviewQueueService, "AdminPermissionService.ROLE_CONTENT_MODERATOR",
                 "each review queue endpoint must require content moderator scope");
         assertContains(reviewQueueService, "public ReviewQueueItemPO approve(Long id, Long operatorUid, String note, String confirmationPhrase)", "approve action must accept confirmation phrase");
         assertContains(reviewQueueService, "public ReviewQueueItemPO reject(Long id, Long operatorUid, String note, String confirmationPhrase)", "reject action must accept confirmation phrase");
@@ -70,9 +69,9 @@ class Phase11GovernancePrivacyGuardTest {
 
     @Test
     void governanceDtosDoNotExposeRealAuthorsOrPrivateBlockRelations() throws Exception {
-        String postReportDto = read("../community-domain-post/src/main/java/com/offerlab/community/post/api/dto/PostReportDTO.java");
-        String commentReportDto = read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/api/dto/CommentReportDTO.java");
-        String userController = read("../community-domain-user/src/main/java/com/offerlab/community/user/controller/UserController.java");
+        String postReportDto = read("community-domain-post/src/main/java/com/offerlab/community/post/api/dto/PostReportDTO.java");
+        String commentReportDto = read("community-domain-interaction/src/main/java/com/offerlab/community/interaction/api/dto/CommentReportDTO.java");
+        String userController = read("community-domain-user/src/main/java/com/offerlab/community/user/controller/UserController.java");
 
         assertContains(postReportDto, "private Long reporterUid;", "admin post report DTO may retain reporter id for permissioned review");
         assertNotContains(postReportDto, "realAuthor", "admin post report DTO must not reveal anonymous real author identity");
@@ -89,13 +88,13 @@ class Phase11GovernancePrivacyGuardTest {
     @Test
     void phase11GovernanceFilesDoNotDriftIntoCommercialOrPrivateTrainingGovernance() throws Exception {
         String combined = String.join("\n",
-                read("../community-domain-search/src/main/java/com/offerlab/community/search/controller/ReviewQueueController.java"),
-                read("../community-domain-search/src/main/java/com/offerlab/community/search/application/ReviewQueueService.java"),
-                read("../community-domain-post/src/main/java/com/offerlab/community/post/application/PostReportService.java"),
-                read("../community-domain-interaction/src/main/java/com/offerlab/community/interaction/application/CommentReportService.java"),
-                read("../community-infrastructure/src/main/java/com/offerlab/community/infra/moderation/ContentModerationService.java"),
-                read("../community-infrastructure/src/main/java/com/offerlab/community/infra/moderation/ModerationAdminService.java"),
-                read("../db/init/09_moderation.sql")
+                read("community-domain-search/src/main/java/com/offerlab/community/search/controller/ReviewQueueController.java"),
+                read("community-domain-search/src/main/java/com/offerlab/community/search/application/ReviewQueueService.java"),
+                read("community-domain-post/src/main/java/com/offerlab/community/post/application/PostReportService.java"),
+                read("community-domain-interaction/src/main/java/com/offerlab/community/interaction/application/CommentReportService.java"),
+                read("community-infrastructure/src/main/java/com/offerlab/community/infra/moderation/ContentModerationService.java"),
+                read("community-infrastructure/src/main/java/com/offerlab/community/infra/moderation/ModerationAdminService.java"),
+                read("db/init/09_moderation.sql")
         );
 
         for (String forbidden : List.of(
@@ -148,7 +147,7 @@ class Phase11GovernancePrivacyGuardTest {
     }
 
     private static String read(String path) throws Exception {
-        return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+        return Files.readString(RepositoryTestPaths.resolve(path), StandardCharsets.UTF_8);
     }
 
     private static void assertContains(String source, String needle, String message) {

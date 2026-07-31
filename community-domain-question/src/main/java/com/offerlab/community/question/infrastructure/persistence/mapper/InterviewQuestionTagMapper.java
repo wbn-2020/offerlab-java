@@ -29,6 +29,17 @@ public interface InterviewQuestionTagMapper extends BaseMapper<InterviewQuestion
             """)
     int deleteByPostId(@Param("postId") Long postId);
 
+    @Delete("""
+            <script>
+            DELETE FROM t_interview_question_tag
+            WHERE question_id IN
+            <foreach collection="questionIds" item="questionId" open="(" separator="," close=")">
+              #{questionId}
+            </foreach>
+            </script>
+            """)
+    int deleteByQuestionIds(@Param("questionIds") Collection<Long> questionIds);
+
     @Select("""
             <script>
             SELECT r.question_id AS post_id, t.id, t.tag_name, t.tag_type, t.use_count, t.is_official

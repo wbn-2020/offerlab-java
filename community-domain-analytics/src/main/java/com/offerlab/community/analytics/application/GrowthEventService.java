@@ -12,6 +12,8 @@ import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.post.domain.model.PostDomain;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -39,11 +41,12 @@ public class GrowthEventService {
     public static final String USER_REGISTER = "USER_REGISTER";
     public static final String CROSS_DOMAIN_CONSUME = "CROSS_DOMAIN_CONSUME";
     public static final String OPERATION_CURATION_SELECTED = "OPERATION_CURATION_SELECTED";
+    public static final String EFFECTIVE_READ = "EFFECTIVE_READ";
 
     private static final Set<String> ALLOWED_EVENTS = Set.of(
             PUBLIC_POST_VIEW, AUTH_REDIRECT_CLICK, POST_LIKE, POST_FAVORITE,
             POST_COMMENT, FIRST_POST_PUBLISHED, USER_REGISTER, CROSS_DOMAIN_CONSUME,
-            OPERATION_CURATION_SELECTED
+            OPERATION_CURATION_SELECTED, EFFECTIVE_READ
     );
     private static final Set<String> CLIENT_TRACKABLE_EVENTS = Set.of(
             AUTH_REDIRECT_CLICK
@@ -51,6 +54,10 @@ public class GrowthEventService {
     private static final Set<String> ANONYMOUS_ALLOWED_CLIENT_EVENTS = Set.of(
             AUTH_REDIRECT_CLICK
     );
+    private static final int MAX_EVENT_KEY_LENGTH = 128;
+    private static final int EVENT_RETENTION_DAYS = 180;
+    private static final int RETENTION_BATCH_SIZE = 5000;
+    private static final int MAX_RETENTION_BATCHES = 20;
 
     private final GrowthEventMapper mapper;
     private final SnowflakeIdGenerator idGenerator;
@@ -82,7 +89,47 @@ public class GrowthEventService {
 
     public void recordTrustedEvent(String eventType, Long uid, Integer domain, Long contentId,
                                    String targetType, String targetValue, String sourcePage) {
-        insertQuietly(newEvent(eventType, uid, domain, contentId, targetType, targetValue, sourcePage));
+        String normalizedEventType = normalizeEventType(eventType);
+        if (EFFECTIVE_READ.equals(normalizedEventType)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "effective reads require an idempotency key");
+        }
+        insertQuietly(newEvent(normalizedEventType, uid, domain, contentId, targetType, targetValue, sourcePage));
+    }
+
+    public boolean recordTrusted(String eventType, String eventKey, Long uid, Integer domain, Long contentId,
+                                 String targetType, String targetValue, String sourcePage) {
+        String normalizedEventType = normalizeEventType(eventType);
+        if (!EFFECTIVE_READ.equals(normalizedEventType)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "trusted eventType is invalid");
+        }
+        if (uid == null || uid <= 0) {
+            throw new BizException(ErrorCode.UNAUTHORIZED);
+        }
+        if (contentId == null || contentId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        String normalizedEventKey = normalizeEventKey(eventKey);
+        GrowthEventPO event = newEvent(
+                normalizedEventType,
+                uid,
+                domain,
+                contentId,
+                targetType,
+                targetValue,
+                sourcePage);
+        event.setEventKey(normalizedEventKey);
+        try {
+            if (!tableReady()) {
+                return false;
+            }
+            return mapper.insertEvent(event) > 0;
+        } catch (DuplicateKeyException e) {
+            log.debug("trusted growth event already recorded: {}", normalizedEventKey);
+            return true;
+        } catch (RuntimeException e) {
+            log.debug("record trusted growth event failed: {}", e.getMessage());
+            return false;
+        }
     }
 
     public GrowthEventSummaryDTO summary(int days, Integer domain) {
@@ -137,6 +184,25 @@ public class GrowthEventService {
                 .build();
     }
 
+    @Scheduled(cron = "${offerlab.analytics.growth-event-retention-cron:0 40 * * * *}")
+    public void cleanupExpiredEvents() {
+        if (!tableReady()) {
+            return;
+        }
+        LocalDateTime before = LocalDateTime.now().minusDays(EVENT_RETENTION_DAYS);
+        try {
+            int deleted = 0;
+            for (String eventType : ALLOWED_EVENTS) {
+                deleted += deleteInBatches(eventType, before);
+            }
+            if (deleted > 0) {
+                log.info("growth event retention cleanup completed: deleted={}", deleted);
+            }
+        } catch (RuntimeException e) {
+            log.warn("growth event retention cleanup failed", e);
+        }
+    }
+
     private void insertQuietly(GrowthEventPO event) {
         try {
             if (tableReady()) {
@@ -145,6 +211,18 @@ public class GrowthEventService {
         } catch (RuntimeException e) {
             log.debug("record growth event failed: {}", e.getMessage());
         }
+    }
+
+    private int deleteInBatches(String eventType, LocalDateTime before) {
+        int total = 0;
+        for (int batch = 0; batch < MAX_RETENTION_BATCHES; batch++) {
+            int deleted = mapper.deleteBefore(eventType, before, RETENTION_BATCH_SIZE);
+            total += Math.max(0, deleted);
+            if (deleted < RETENTION_BATCH_SIZE) {
+                break;
+            }
+        }
+        return total;
     }
 
     private GrowthEventPO newEvent(String eventType, Long uid, Integer domain, Long contentId,
@@ -177,6 +255,17 @@ public class GrowthEventService {
         String normalized = eventType.trim().toUpperCase(Locale.ROOT);
         if (!ALLOWED_EVENTS.contains(normalized)) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "eventType is invalid");
+        }
+        return normalized;
+    }
+
+    private String normalizeEventKey(String eventKey) {
+        if (!StringUtils.hasText(eventKey)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "eventKey is required");
+        }
+        String normalized = eventKey.trim();
+        if (normalized.length() > MAX_EVENT_KEY_LENGTH) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "eventKey is too long");
         }
         return normalized;
     }

@@ -3,6 +3,7 @@ package com.offerlab.community.question.application;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
@@ -12,6 +13,7 @@ import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueuePublisher;
+import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
@@ -85,6 +87,12 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class QuestionFacadeImpl implements QuestionFacade {
+    private static final int MAX_PREP_TARGETS_PER_USER = 20;
+    private static final int MAX_PUBLIC_QUESTION_OFFSET = 10_000;
+    private static final int MAX_ADMIN_QUESTION_OFFSET = 100_000;
+    static final String PENDING_REVIEW_SOURCE_TYPE = "QUESTION_PENDING";
+    private static final String SOURCE_REMOVED_REVIEW_REASON = "来源帖子重提取未再包含该题";
+    private static final String SOURCE_HIDDEN_REVIEW_REASON = "来源帖子当前不可见";
     private static final Set<String> TECHNICAL_KEYWORDS = Set.of(
             "redis", "缓存", "一致", "mysql", "索引", "事务", "锁", "并发", "线程", "jvm",
             "spring", "kafka", "mq", "消息", "es", "elasticsearch", "数据库", "分布式",
@@ -315,7 +323,10 @@ public class QuestionFacadeImpl implements QuestionFacade {
         QuestionQuery q = query == null ? new QuestionQuery() : query;
         int pageSize = Math.max(1, Math.min(q.getPageSize() == null ? 20 : q.getPageSize(), 50));
         int page = Math.max(1, q.getPage() == null ? 1 : q.getPage());
-        int offset = (page - 1) * pageSize;
+        int offset = safePageOffset(page, pageSize, MAX_PUBLIC_QUESTION_OFFSET);
+        if (offset < 0) {
+            return PageResult.of(List.of(), null, false);
+        }
         String mistakeReason = normalizeOptionalMistakeReason(q.getMistakeReason());
         String progressStatus = normalizeOptionalProgress(q.getProgressStatus());
         boolean hasNote = Boolean.TRUE.equals(q.getHasNote());
@@ -544,12 +555,20 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (value.isBlank() || value.length() > 128) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        if (prepTargetMapper.lockUser(uid) == null) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND);
+        }
+        UserPrepTargetPO existing = prepTargetMapper.selectByNaturalKey(uid, type, value);
+        if (existing == null && prepTargetMapper.countByUser(uid) >= MAX_PREP_TARGETS_PER_USER) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "A user can keep at most " + MAX_PREP_TARGETS_PER_USER + " prep targets");
+        }
         prepTargetMapper.insertIgnore(idGen.nextId(), uid, type, value, cmd == null ? null : cmd.getInterviewDate(), priority, note);
-        return prepTargetMapper.selectByUser(uid).stream()
-                .filter(item -> type.equals(item.getTargetType()) && value.equals(item.getTargetValue()))
-                .findFirst()
-                .map(this::toPrepTargetDto)
-                .orElseThrow(() -> new BizException(ErrorCode.SYSTEM_ERROR));
+        UserPrepTargetPO saved = prepTargetMapper.selectByNaturalKey(uid, type, value);
+        if (saved == null) {
+            throw new BizException(ErrorCode.SYSTEM_ERROR);
+        }
+        return toPrepTargetDto(saved);
     }
 
     @Override
@@ -587,7 +606,24 @@ public class QuestionFacadeImpl implements QuestionFacade {
             minQuality = maxQuality;
             maxQuality = tmp;
         }
-        int offset = (safePage - 1) * safePageSize;
+        int offset = safePageOffset(safePage, safePageSize, MAX_ADMIN_QUESTION_OFFSET);
+        long total = questionMapper.countAdminRecent(
+                query == null ? null : query.getStatus(),
+                cleanToNull(query == null ? null : query.getKeyword()),
+                cleanToNull(query == null ? null : query.getCompany()),
+                cleanToNull(query == null ? null : query.getPosition()),
+                minQuality,
+                maxQuality,
+                positiveLong(query == null ? null : query.getSourcePostId()),
+                normalizeTaskStatus(query == null ? null : query.getTaskStatus()));
+        if (offset < 0) {
+            return PageResult.<QuestionDTO>builder()
+                    .items(List.of())
+                    .nextCursor(null)
+                    .hasMore(false)
+                    .total(total)
+                    .build();
+        }
         List<QuestionDTO> items = toAdminQuestionDtos(questionMapper.selectAdminRecent(
                 query == null ? null : query.getStatus(),
                 cleanToNull(query == null ? null : query.getKeyword()),
@@ -599,16 +635,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 normalizeTaskStatus(query == null ? null : query.getTaskStatus()),
                 offset,
                 safePageSize), null);
-        long total = questionMapper.countAdminRecent(
-                query == null ? null : query.getStatus(),
-                cleanToNull(query == null ? null : query.getKeyword()),
-                cleanToNull(query == null ? null : query.getCompany()),
-                cleanToNull(query == null ? null : query.getPosition()),
-                minQuality,
-                maxQuality,
-                positiveLong(query == null ? null : query.getSourcePostId()),
-                normalizeTaskStatus(query == null ? null : query.getTaskStatus()));
-        boolean hasMore = (long) safePage * safePageSize < total;
+        boolean hasMore = (long) offset + items.size() < total;
         return PageResult.<QuestionDTO>builder()
                 .items(items)
                 .nextCursor(hasMore ? String.valueOf(safePage + 1) : null)
@@ -659,6 +686,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (questionId == null || questionId <= 0 || cmd == null || !cmd.hasEditableField()) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        if (cmd.getStatus() != null) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "题目状态只能通过审核接口变更");
+        }
+        if (cmd.getExpectedUpdateTime() == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "缺少题目内容版本，请刷新后重试");
+        }
         List<InterviewQuestionPO> rows = questionMapper.selectVisibleByIds(List.of(questionId), true);
         if (rows.isEmpty()) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
@@ -684,10 +717,6 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (cmd.getDifficulty() != null) {
             update.setDifficulty(normalizeDifficulty(cmd.getDifficulty()));
         }
-        if (cmd.getStatus() != null) {
-            validateQuestionStatus(cmd.getStatus());
-            update.setStatus(cmd.getStatus());
-        }
         InterviewQuestionPO scoreBase = rows.get(0);
         scoreBase.setQuestionText(update.getQuestionText() == null ? scoreBase.getQuestionText() : update.getQuestionText());
         scoreBase.setCompany(update.getCompany() == null ? scoreBase.getCompany() : update.getCompany());
@@ -697,29 +726,56 @@ public class QuestionFacadeImpl implements QuestionFacade {
         scoreBase.setReferenceAnswer(update.getReferenceAnswer() == null ? scoreBase.getReferenceAnswer() : update.getReferenceAnswer());
         scoreBase.setSourceSnippet(update.getSourceSnippet() == null ? scoreBase.getSourceSnippet() : update.getSourceSnippet());
         update.setQualityScore(score(scoreBase));
-        questionMapper.updateAdmin(update);
+        int updated = questionMapper.updateAdminIfCurrent(update, cmd.getExpectedUpdateTime());
+        if (updated != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "题目内容或状态已更新，请刷新后重试");
+        }
+        List<InterviewQuestionPO> updatedRows = questionMapper.selectVisibleByIds(List.of(questionId), true);
+        if (updatedRows.isEmpty()) {
+            throw new BizException(ErrorCode.DATABASE_ERROR);
+        }
+        InterviewQuestionPO updatedQuestion = updatedRows.get(0);
+        publishPendingQuestionQueueItem(updatedQuestion);
+        evictQuestionDetail(questionId);
         afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index update:" + questionId);
-        return toAdminQuestionDtos(questionMapper.selectVisibleByIds(List.of(questionId), true), null).get(0);
+        return toAdminQuestionDtos(updatedRows, null).get(0);
     }
 
     @Override
     @Transactional
-    public Map<String, Object> reviewQuestion(Long questionId, int status) {
+    public Map<String, Object> reviewQuestion(Long questionId, int status, LocalDateTime expectedUpdateTime) {
         validateQuestionStatus(status);
-        int updated = questionMapper.updateStatus(questionId, status);
+        if (status == QuestionConstants.QUESTION_PENDING || expectedUpdateTime == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        resolvePendingQuestionStatus(questionId, status, expectedUpdateTime);
+        reviewQueuePublisher.resolveRequired(PENDING_REVIEW_SOURCE_TYPE, questionId,
+                status == QuestionConstants.QUESTION_APPROVED ? "approved" : "rejected",
+                status == QuestionConstants.QUESTION_APPROVED ? "question approved" : "question hidden",
+                "question review status=" + status,
+                UserContext.get());
+        return Map.of("questionId", questionId, "status", status);
+    }
+
+    @Transactional
+    public void resolvePendingQuestionReview(Long questionId, boolean approved, LocalDateTime expectedUpdateTime) {
+        if (expectedUpdateTime == null) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "审核任务缺少题目内容版本，请重新生成审核任务");
+        }
+        resolvePendingQuestionStatus(
+                questionId,
+                approved ? QuestionConstants.QUESTION_APPROVED : QuestionConstants.QUESTION_HIDDEN,
+                expectedUpdateTime
+        );
+    }
+
+    private void resolvePendingQuestionStatus(Long questionId, int status, LocalDateTime expectedUpdateTime) {
+        int updated = questionMapper.reviewStatusIfPendingAndCurrent(questionId, status, expectedUpdateTime);
         if (updated == 0) {
-            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "题目内容或状态已更新，请刷新后重新审核");
         }
         evictQuestionDetail(questionId);
         afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index review:" + questionId);
-        if (status != QuestionConstants.QUESTION_PENDING) {
-            reviewQueuePublisher.resolve("QUESTION_PENDING", questionId,
-                    status == QuestionConstants.QUESTION_APPROVED ? "approved" : "rejected",
-                    status == QuestionConstants.QUESTION_APPROVED ? "question approved" : "question hidden",
-                    "question review status=" + status,
-                    null);
-        }
-        return Map.of("questionId", questionId, "status", status);
     }
 
     @Override
@@ -741,8 +797,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
         }
         int appearCount = Math.max(1, questionMapper.countVisibleSourcesByHash(question.getNormalizedHash()));
         questionMapper.updateAdminCanonicalGroup(question.getNormalizedHash(), canonical.getId(), appearCount);
-        questionMapper.selectAdminByHash(question.getNormalizedHash(), canonical.getId())
-                .forEach(row -> questionSearchIndexer.indexQuestion(row.getId()));
+        scheduleQuestionIndexes(questionMapper.selectAdminByHash(question.getNormalizedHash(), canonical.getId()).stream()
+                .map(InterviewQuestionPO::getId)
+                .toList(), "question canonical group index");
         return duplicateGroupDto(question.getId(), question.getNormalizedHash());
     }
 
@@ -770,8 +827,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         int appearCount = Math.max(1, questionMapper.countVisibleSourcesByHash(question.getNormalizedHash()))
                 + Math.max(1, questionMapper.countVisibleSourcesByHash(candidate.getNormalizedHash()));
         questionMapper.updateAdminCanonicalGroup(question.getNormalizedHash(), canonicalId, appearCount);
-        questionSearchIndexer.indexQuestion(question.getId());
-        questionSearchIndexer.indexQuestion(candidate.getId());
+        scheduleQuestionIndexes(List.of(question.getId(), candidate.getId()), "question duplicate merge index");
         return duplicateGroupDto(question.getId(), question.getNormalizedHash());
     }
 
@@ -786,10 +842,18 @@ public class QuestionFacadeImpl implements QuestionFacade {
         Map<Long, InterviewQuestionPO> groupById = questionMapper.selectAdminByHash(question.getNormalizedHash(), canonicalIdFor(question)).stream()
                 .collect(Collectors.toMap(InterviewQuestionPO::getId, item -> item, (a, b) -> a));
         for (Long id : ids) {
-            if (!groupById.containsKey(id)) {
+            InterviewQuestionPO duplicate = groupById.get(id);
+            if (duplicate == null) {
                 throw new BizException(ErrorCode.PARAM_ERROR);
             }
-            reviewQuestion(id, QuestionConstants.QUESTION_HIDDEN);
+            if (questionMapper.updateStatus(id, QuestionConstants.QUESTION_HIDDEN) == 0) {
+                throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+            }
+            evictQuestionDetail(id);
+            afterCommit.execute(() -> questionSearchIndexer.indexQuestion(id), "question duplicate hide index:" + id);
+            if (Objects.equals(duplicate.getStatus(), QuestionConstants.QUESTION_PENDING)) {
+                closePendingQuestionQueueItem(id, "question hidden as duplicate", "duplicate governance");
+            }
         }
         refreshCanonicalGroup(question.getNormalizedHash());
         return duplicateGroupDto(question.getId(), question.getNormalizedHash());
@@ -887,10 +951,12 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
             }
         }
-        evictQuestionCachesByCompany(canonical);
-        if (old != null) {
-            evictQuestionCachesByCompany(old.getCanonicalCompany());
+        Set<String> affectedCompanies = new LinkedHashSet<>();
+        affectedCompanies.add(canonical);
+        if (old != null && old.getCanonicalCompany() != null) {
+            affectedCompanies.add(old.getCanonicalCompany());
         }
+        scheduleCompanyCacheEvictions(affectedCompanies, "company alias cache:" + po.getId());
         return toCompanyAliasDto(companyAliasMapper.selectById(po.getId()));
     }
 
@@ -903,7 +969,11 @@ public class QuestionFacadeImpl implements QuestionFacade {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         companyAliasMapper.updateStatus(id, normalized);
-        evictQuestionCachesByCompany(old.getCanonicalCompany());
+        Set<String> affectedCompanies = new LinkedHashSet<>();
+        if (old.getCanonicalCompany() != null) {
+            affectedCompanies.add(old.getCanonicalCompany());
+        }
+        scheduleCompanyCacheEvictions(affectedCompanies, "company alias status cache:" + id);
         return Map.of("id", id, "status", normalized);
     }
 
@@ -976,12 +1046,20 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .build();
     }
 
+    @Override
     @Transactional
     public void hidePostQuestions(Long postId) {
         List<InterviewQuestionPO> questions = questionMapper.selectByPostId(postId, true);
         List<Long> ids = questions.stream()
                 .map(InterviewQuestionPO::getId)
                 .toList();
+        questions.stream()
+                .filter(question -> Objects.equals(question.getStatus(), QuestionConstants.QUESTION_PENDING))
+                .forEach(question -> closePendingQuestionQueueItem(
+                        question.getId(),
+                        "question source post deleted",
+                        "source post is no longer visible"
+                ));
         Set<String> changedHashes = questions.stream()
                 .map(InterviewQuestionPO::getNormalizedHash)
                 .filter(hash -> hash != null && !hash.isBlank())
@@ -990,17 +1068,22 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .map(InterviewQuestionPO::getCompany)
                 .filter(company -> company != null && !company.isBlank())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        questionMapper.hideByPostId(postId);
-        ids.forEach(questionSearchIndexer::indexQuestion);
+        questionMapper.hideByPostId(postId, SOURCE_HIDDEN_REVIEW_REASON);
+        scheduleQuestionIndexes(ids, "hidden post question index");
         changedHashes.forEach(this::refreshCanonicalGroup);
-        affectedCompanies.forEach(this::evictQuestionCachesByCompany);
+        scheduleCompanyCacheEvictions(affectedCompanies, "hidden post question company cache:" + postId);
     }
 
     public void evictQuestionCachesByCompany(String company) {
         if (company == null || company.isBlank()) {
             return;
         }
-        companyPrepCache.evict(CacheKeyBuilder.companyPrep(company));
+        String rawCompany = clean(company);
+        companyPrepCache.evict(CacheKeyBuilder.companyPrep(rawCompany));
+        String canonical = canonicalCompany(rawCompany);
+        if (!canonical.equals(rawCompany)) {
+            companyPrepCache.evict(CacheKeyBuilder.companyPrep(canonical));
+        }
     }
 
     public void evictQuestionDetail(Long questionId) {
@@ -1012,7 +1095,10 @@ public class QuestionFacadeImpl implements QuestionFacade {
             return;
         }
         String company = extValue(post.getExtJson(), "company");
-        evictQuestionCachesByCompany(company);
+        if (company == null || company.isBlank()) {
+            return;
+        }
+        scheduleCompanyCacheEvictions(List.of(company), "post question cache eviction:" + post.getId());
     }
 
     private List<ExtractedQuestion> extractQuestions(PostDTO post) {
@@ -1025,21 +1111,30 @@ public class QuestionFacadeImpl implements QuestionFacade {
     }
 
     private List<ExtractedQuestion> normalizeExtractedQuestions(List<ExtractedQuestion> extracted) {
-        return (extracted == null ? List.<ExtractedQuestion>of() : extracted).stream()
-                .filter(item -> clean(item.getQuestionText()).length() >= 4)
-                .collect(Collectors.collectingAndThen(Collectors.toMap(
-                        item -> hash(normalizeQuestion(item.getQuestionText())),
-                        item -> item,
-                        (a, b) -> a,
-                        LinkedHashMap::new
-                ), map -> map.values().stream().limit(20).toList()));
+        Map<String, ExtractedQuestion> byHash = new LinkedHashMap<>();
+        for (ExtractedQuestion item : extracted == null ? List.<ExtractedQuestion>of() : extracted) {
+            String questionText = clean(item.getQuestionText());
+            String normalizedQuestion = normalizeQuestion(questionText);
+            if (questionText.length() < 4 || normalizedQuestion.isBlank()) {
+                continue;
+            }
+            byHash.putIfAbsent(hash(normalizedQuestion), item);
+            if (byHash.size() >= 20) {
+                break;
+            }
+        }
+        return List.copyOf(byHash.values());
     }
 
     private Integer replacePostQuestions(PostDTO post, List<ExtractedQuestion> extracted) {
+        PostPO currentPost = postMapper.selectByIdForUpdate(post.getId());
+        if (currentPost == null || !Objects.equals(currentPost.getUpdateTime(), post.getUpdateTime())) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "来源帖子已更新，请重新执行题目提取");
+        }
         List<InterviewQuestionPO> oldQuestions = questionMapper.selectByPostId(post.getId(), true);
-        List<Long> oldQuestionIds = oldQuestions.stream()
+        Map<Long, Set<Long>> oldTagIdsByQuestion = tagIdsByQuestionIds(oldQuestions.stream()
                 .map(InterviewQuestionPO::getId)
-                .toList();
+                .toList());
         Set<String> changedHashes = oldQuestions.stream()
                 .map(InterviewQuestionPO::getNormalizedHash)
                 .filter(hash -> hash != null && !hash.isBlank())
@@ -1048,19 +1143,33 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 .map(InterviewQuestionPO::getCompany)
                 .filter(company -> company != null && !company.isBlank())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        questionTagMapper.deleteByPostId(post.getId());
-        questionMapper.delete(new LambdaQueryWrapper<InterviewQuestionPO>()
-                .eq(InterviewQuestionPO::getSourcePostId, post.getId()));
-        oldQuestionIds.forEach(questionSearchIndexer::deleteQuestion);
-        int count = 0;
+        Map<Long, InterviewQuestionPO> remainingOldQuestions = oldQuestions.stream()
+                .collect(Collectors.toMap(
+                        InterviewQuestionPO::getId,
+                        question -> question,
+                        (a, b) -> a,
+                        LinkedHashMap::new
+                ));
+        Map<String, InterviewQuestionPO> oldByHash = oldQuestions.stream()
+                .filter(question -> question.getNormalizedHash() != null && !question.getNormalizedHash().isBlank())
+                .collect(Collectors.toMap(
+                        InterviewQuestionPO::getNormalizedHash,
+                        question -> question,
+                        this::selectHashSurvivor,
+                        LinkedHashMap::new
+                ));
+        List<QuestionMergeItem> mergeItems = new ArrayList<>();
         for (ExtractedQuestion item : extracted) {
-            Long questionId = idGen.nextId();
             String normalizedHash = hash(normalizeQuestion(item.getQuestionText()));
+            InterviewQuestionPO existing = oldByHash.remove(normalizedHash);
+            Long questionId = existing == null ? idGen.nextId() : existing.getId();
             InterviewQuestionPO po = new InterviewQuestionPO();
             po.setId(questionId);
             po.setQuestionText(clean(item.getQuestionText()));
             po.setNormalizedHash(normalizedHash);
-            po.setCanonicalId(questionMapper.selectCanonicalIdByHash(normalizedHash));
+            po.setCanonicalId(existing == null
+                    ? questionMapper.selectCanonicalIdByHash(normalizedHash)
+                    : existing.getCanonicalId());
             po.setAnswerHint(cleanToNull(item.getAnswerHint()));
             po.setExamPoint(limit(cleanToNull(item.getExamPoint()), 255));
             po.setReferenceAnswer(limit(cleanToNull(item.getReferenceAnswer()), 4000));
@@ -1073,30 +1182,114 @@ public class QuestionFacadeImpl implements QuestionFacade {
             po.setConfidence(item.getConfidence() == null ? new BigDecimal("0.5000") : item.getConfidence());
             po.setSourcePostId(post.getId());
             po.setSourceAuthorUid(post.getAuthorId());
-            po.setAppearCount(1);
+            po.setAppearCount(existing == null || existing.getAppearCount() == null
+                    ? 1
+                    : Math.max(1, existing.getAppearCount()));
             po.setQualityScore(score(po));
-            AutoReviewDecision decision = autoReviewDecision(po);
-            po.setStatus(decision.status());
-            po.setQualityReason(appendReviewReason(po.getQualityReason(), decision.reason()));
-            questionMapper.insert(po);
-            if (po.getStatus() != null && po.getStatus() == QuestionConstants.QUESTION_PENDING) {
-                publishPendingQuestionQueueItem(po);
+            po.setQualityReason(appendReviewReason(po.getQualityReason(), preflightReviewReason(po)));
+            List<Long> tagIds = safeTagIds(item.getTagIds(), post);
+            boolean resetToPending = existing == null
+                    || requiresNewQuestionReview(
+                    existing,
+                    po,
+                    oldTagIdsByQuestion.getOrDefault(existing.getId(), Set.of()),
+                    new LinkedHashSet<>(tagIds));
+            if (existing == null || resetToPending) {
+                po.setStatus(QuestionConstants.QUESTION_PENDING);
+            } else {
+                po.setStatus(existing.getStatus());
+                po.setQualityReason(existing.getQualityReason());
+            }
+            mergeItems.add(new QuestionMergeItem(
+                    po,
+                    existing != null,
+                    resetToPending,
+                    existing == null ? null : existing.getUpdateTime(),
+                    tagIds
+            ));
+            if (existing != null) {
+                remainingOldQuestions.remove(existing.getId());
             }
             changedHashes.add(normalizedHash);
             if (po.getCompany() != null && !po.getCompany().isBlank()) {
                 affectedCompanies.add(po.getCompany());
             }
-            for (Long tagId : safeTagIds(item.getTagIds(), post)) {
-                questionTagMapper.insertIgnore(idGen.nextId(), questionId, tagId);
-            }
-            count++;
         }
+
+        List<Long> retainedQuestionIds = mergeItems.stream()
+                .filter(QuestionMergeItem::existing)
+                .map(mergeItem -> mergeItem.question().getId())
+                .toList();
+        if (!retainedQuestionIds.isEmpty()) {
+            questionTagMapper.deleteByQuestionIds(retainedQuestionIds);
+        }
+        List<Long> pendingQueueQuestionIds = new ArrayList<>();
+        for (QuestionMergeItem mergeItem : mergeItems) {
+            InterviewQuestionPO po = mergeItem.question();
+            if (mergeItem.existing()) {
+                int updated = questionMapper.updateExtractedByIdAndPostId(
+                        po,
+                        mergeItem.resetToPending(),
+                        mergeItem.expectedUpdateTime()
+                );
+                if (updated != 1) {
+                    throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                            "题目已被其他操作更新，请重新执行题目提取");
+                }
+            } else {
+                questionMapper.insert(po);
+            }
+            if (po.getStatus() != null
+                    && po.getStatus() == QuestionConstants.QUESTION_PENDING) {
+                pendingQueueQuestionIds.add(po.getId());
+            }
+            for (Long tagId : mergeItem.tagIds()) {
+                questionTagMapper.insertIgnore(idGen.nextId(), po.getId(), tagId);
+            }
+        }
+        publishPendingQuestionQueueItems(pendingQueueQuestionIds);
+
+        List<InterviewQuestionPO> removedQuestions = List.copyOf(remainingOldQuestions.values());
+        List<Long> removedQuestionIds = removedQuestions.stream()
+                .map(InterviewQuestionPO::getId)
+                .toList();
+        if (!removedQuestionIds.isEmpty()) {
+            for (InterviewQuestionPO removed : removedQuestions) {
+                if (Objects.equals(removed.getStatus(), QuestionConstants.QUESTION_PENDING)) {
+                    closePendingQuestionQueueItem(
+                            removed.getId(),
+                            "question removed from source post",
+                            "question disappeared after source post re-extraction"
+                    );
+                }
+            }
+            List<Long> activeRemovedQuestionIds = removedQuestions.stream()
+                    .filter(question -> Objects.equals(question.getStatus(), QuestionConstants.QUESTION_PENDING)
+                            || Objects.equals(question.getStatus(), QuestionConstants.QUESTION_APPROVED))
+                    .map(InterviewQuestionPO::getId)
+                    .toList();
+            if (!activeRemovedQuestionIds.isEmpty()) {
+                int hidden = questionMapper.hideRemovedByIdsAndPostId(
+                        post.getId(),
+                        activeRemovedQuestionIds,
+                        SOURCE_REMOVED_REVIEW_REASON
+                );
+                if (hidden != activeRemovedQuestionIds.size()) {
+                    throw new BizException(ErrorCode.DATABASE_ERROR);
+                }
+            }
+            scheduleQuestionIndexes(removedQuestionIds, "removed post question index");
+        }
+        scheduleQuestionIndexes(mergeItems.stream()
+                .map(QuestionMergeItem::question)
+                .map(InterviewQuestionPO::getId)
+                .toList(), "merged post question index");
         changedHashes.forEach(this::refreshCanonicalGroup);
-        affectedCompanies.forEach(this::evictQuestionCachesByCompany);
-        return count;
+        scheduleCompanyCacheEvictions(affectedCompanies, "question merge company cache:" + post.getId());
+        return mergeItems.size();
     }
 
-    private AutoReviewDecision autoReviewDecision(InterviewQuestionPO po) {
+    private String preflightReviewReason(InterviewQuestionPO po) {
         List<String> reasons = new java.util.ArrayList<>();
         String qualityReason = clean(po.getQualityReason());
         if (qualityReason.contains("规则提取")) {
@@ -1115,10 +1308,9 @@ public class QuestionFacadeImpl implements QuestionFacade {
             reasons.add("缺来源片段");
         }
         if (reasons.isEmpty()) {
-            return new AutoReviewDecision(QuestionConstants.QUESTION_APPROVED, "自动审核：高质量结构化题，已通过");
+            return "自动预检通过，待人工确认";
         }
-        return new AutoReviewDecision(QuestionConstants.QUESTION_PENDING,
-                "自动审核：" + String.join("/", reasons) + "，进入待审核");
+        return "自动预检：" + String.join("/", reasons) + "，待人工确认";
     }
 
     private String appendReviewReason(String current, String reason) {
@@ -1127,7 +1319,55 @@ public class QuestionFacadeImpl implements QuestionFacade {
         return limit(merged, 500);
     }
 
-    private record AutoReviewDecision(int status, String reason) {
+    private boolean requiresNewQuestionReview(InterviewQuestionPO existing,
+                                              InterviewQuestionPO extracted,
+                                              Set<Long> existingTagIds,
+                                              Set<Long> extractedTagIds) {
+        return existing.getStatus() == null
+                || sourceStateRequiresReview(existing.getQualityReason())
+                || !Objects.equals(existing.getQuestionText(), extracted.getQuestionText())
+                || !Objects.equals(existing.getAnswerHint(), extracted.getAnswerHint())
+                || !Objects.equals(existing.getExamPoint(), extracted.getExamPoint())
+                || !Objects.equals(existing.getReferenceAnswer(), extracted.getReferenceAnswer())
+                || !Objects.equals(existing.getSourceSnippet(), extracted.getSourceSnippet())
+                || !Objects.equals(existing.getCompany(), extracted.getCompany())
+                || !Objects.equals(existing.getPosition(), extracted.getPosition())
+                || !Objects.equals(existing.getInterviewRound(), extracted.getInterviewRound())
+                || !Objects.equals(existing.getDifficulty(), extracted.getDifficulty())
+                || !sameDecimal(existing.getConfidence(), extracted.getConfidence())
+                || !Objects.equals(existingTagIds, extractedTagIds);
+    }
+
+    private boolean sourceStateRequiresReview(String qualityReason) {
+        String reason = clean(qualityReason);
+        return reason.contains(SOURCE_REMOVED_REVIEW_REASON)
+                || reason.contains(SOURCE_HIDDEN_REVIEW_REASON);
+    }
+
+    private InterviewQuestionPO selectHashSurvivor(InterviewQuestionPO left, InterviewQuestionPO right) {
+        if (left.getId() == null) {
+            return right;
+        }
+        if (right.getId() == null) {
+            return left;
+        }
+        return left.getId() <= right.getId() ? left : right;
+    }
+
+    private boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.compareTo(right) == 0;
+    }
+
+    private record QuestionMergeItem(
+            InterviewQuestionPO question,
+            boolean existing,
+            boolean resetToPending,
+            LocalDateTime expectedUpdateTime,
+            List<Long> tagIds
+    ) {
     }
 
     private void refreshCanonicalGroup(String normalizedHash) {
@@ -1137,11 +1377,45 @@ public class QuestionFacadeImpl implements QuestionFacade {
         }
         Long canonicalId = questionMapper.selectCanonicalIdByHash(hash);
         if (canonicalId == null) {
+            questionMapper.clearCanonicalGroup(hash);
+            scheduleQuestionIndexes(questionMapper.selectAdminByHash(hash, null).stream()
+                    .map(InterviewQuestionPO::getId)
+                    .toList(), "question canonical clear index");
             return;
         }
         int appearCount = Math.max(1, questionMapper.countVisibleSourcesByHash(hash));
         questionMapper.updateCanonicalGroup(hash, canonicalId, appearCount);
-        questionMapper.selectVisibleByHash(hash).forEach(row -> questionSearchIndexer.indexQuestion(row.getId()));
+        scheduleQuestionIndexes(questionMapper.selectVisibleByHash(hash).stream()
+                .map(InterviewQuestionPO::getId)
+                .toList(), "question canonical refresh index");
+    }
+
+    private void scheduleCompanyCacheEvictions(Collection<String> companies, String description) {
+        List<String> normalized = companies == null ? List.of() : companies.stream()
+                .map(this::clean)
+                .filter(company -> !company.isBlank())
+                .distinct()
+                .toList();
+        if (normalized.isEmpty()) {
+            return;
+        }
+        afterCommit.execute(
+                () -> normalized.forEach(this::evictQuestionCachesByCompany),
+                description + ":" + normalized.size()
+        );
+    }
+
+    private void scheduleQuestionIndexes(Collection<Long> questionIds, String description) {
+        List<Long> ids = questionIds == null ? List.of() : questionIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return;
+        }
+        afterCommit.execute(() -> ids.forEach(questionSearchIndexer::indexQuestion),
+                description + ":" + ids.size());
     }
 
     private java.util.Optional<QuestionSearchResult> searchQuestionsByEs(QuestionQuery query, int offset, int limit) {
@@ -1191,8 +1465,8 @@ public class QuestionFacadeImpl implements QuestionFacade {
     }
 
     private void publishPendingQuestionQueueItem(InterviewQuestionPO question) {
-        if (question == null || question.getId() == null) {
-            return;
+        if (question == null || question.getId() == null || question.getUpdateTime() == null) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(), "待审核题目缺少内容版本");
         }
         String title = "待审知识卡：" + limit(clean(question.getQuestionText()), 160);
         String summary = String.join(" / ", List.of(
@@ -1201,17 +1475,53 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 "场景：" + clean(question.getPosition()),
                 "原因：" + clean(question.getQualityReason())
         )).trim();
-        reviewQueuePublisher.upsert(new ReviewQueueItemCommand(
-                "QUESTION_PENDING",
+        ObjectNode ext = objectMapper.createObjectNode();
+        if (question.getSourcePostId() != null) {
+            ext.put("postId", question.getSourcePostId());
+        }
+        ext.put("expectedUpdateTime", question.getUpdateTime().toString());
+        reviewQueuePublisher.reopen(new ReviewQueueItemCommand(
+                PENDING_REVIEW_SOURCE_TYPE,
                 question.getId(),
                 title,
                 summary,
                 "medium",
                 question.getSourceAuthorUid(),
                 50,
-                "{\"postId\":" + question.getSourcePostId() + "}",
+                ext.toString(),
                 "question auto review pending"
         ));
+    }
+
+    private void publishPendingQuestionQueueItems(Collection<Long> questionIds) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return;
+        }
+        List<Long> orderedIds = questionIds.stream().filter(Objects::nonNull).distinct().toList();
+        List<InterviewQuestionPO> persistedRows = questionMapper.selectBatchIds(orderedIds);
+        Map<Long, InterviewQuestionPO> persistedById = persistedRows == null
+                ? Map.of()
+                : persistedRows.stream().collect(Collectors.toMap(
+                InterviewQuestionPO::getId,
+                question -> question,
+                (left, right) -> left,
+                LinkedHashMap::new
+        ));
+        if (persistedById.size() != orderedIds.size()) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(), "待审核题目版本读取失败");
+        }
+        orderedIds.stream().map(persistedById::get).forEach(this::publishPendingQuestionQueueItem);
+    }
+
+    private void closePendingQuestionQueueItem(Long questionId, String result, String note) {
+        reviewQueuePublisher.resolve(
+                PENDING_REVIEW_SOURCE_TYPE,
+                questionId,
+                "closed",
+                result,
+                note,
+                null
+        );
     }
 
     private void publishFailedAiTaskQueueItem(AiExtractTaskPO task) {
@@ -1349,7 +1659,22 @@ public class QuestionFacadeImpl implements QuestionFacade {
                                 .id(tag.getId())
                                 .name(tag.getTagName())
                                 .tagType(tag.getTagType())
-                                .build(), Collectors.toList())));
+                                 .build(), Collectors.toList())));
+    }
+
+    private Map<Long, Set<Long>> tagIdsByQuestionIds(Collection<Long> questionIds) {
+        if (questionIds == null || questionIds.isEmpty()) {
+            return Map.of();
+        }
+        return questionTagMapper.selectTagsByQuestionIds(questionIds).stream()
+                .collect(Collectors.groupingBy(
+                        PostTagView::getPostId,
+                        LinkedHashMap::new,
+                        Collectors.mapping(
+                                PostTagView::getId,
+                                Collectors.toCollection(LinkedHashSet::new)
+                        )
+                ));
     }
 
     private Map<Long, UserQuestionProgressPO> progressByQuestionIds(Long viewerUid, Collection<Long> questionIds) {
@@ -2399,6 +2724,14 @@ public class QuestionFacadeImpl implements QuestionFacade {
         } catch (Exception e) {
             return String.valueOf(value.hashCode());
         }
+    }
+
+    private int safePageOffset(int page, int pageSize, int maxOffsetExclusive) {
+        long offset = ((long) Math.max(1, page) - 1L) * Math.max(1, pageSize);
+        if (offset >= maxOffsetExclusive || offset > Integer.MAX_VALUE) {
+            return -1;
+        }
+        return (int) offset;
     }
 
     private String clean(String value) {

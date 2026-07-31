@@ -4,7 +4,6 @@
 SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS offerlab DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-USE offerlab;
 
 -- ----------------------------
 -- 用户账号
@@ -12,7 +11,7 @@ USE offerlab;
 DROP TABLE IF EXISTS t_user_account;
 CREATE TABLE t_user_account (
     id              BIGINT       NOT NULL PRIMARY KEY COMMENT '用户ID（雪花）',
-    email           VARCHAR(128) NOT NULL COMMENT '邮箱',
+    email           VARCHAR(128) NOT NULL COMMENT '閭',
     password_hash   VARCHAR(128) NOT NULL COMMENT 'bcrypt hash',
     password_salt   VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '盐（bcrypt 自带，可不用）',
     account_status  TINYINT      NOT NULL DEFAULT 1 COMMENT '1正常 2封禁 3未激活',
@@ -35,7 +34,7 @@ CREATE TABLE t_user_profile (
     nickname        VARCHAR(64)  NOT NULL,
     avatar_url      VARCHAR(512) NULL,
     bio             VARCHAR(255) NULL,
-    intent_json     JSON         NULL COMMENT '求职意向',
+    intent_json     JSON         NULL COMMENT '姹傝亴鎰忓悜',
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
@@ -52,10 +51,12 @@ CREATE TABLE t_user_follow (
     from_uid        BIGINT       NOT NULL COMMENT '关注者',
     to_uid          BIGINT       NOT NULL COMMENT '被关注者',
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '0关注中 1已取关',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '0关注中 1已取消',
     UNIQUE KEY uk_from_to (from_uid, to_uid),
     KEY idx_to_uid   (to_uid, create_time),
-    KEY idx_from_uid (from_uid, create_time)
+    KEY idx_from_uid (from_uid, create_time),
+    KEY idx_following_page (from_uid, is_deleted, id),
+    KEY idx_follower_page  (to_uid, is_deleted, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关注关系';
 
 -- ----------------------------
@@ -80,7 +81,7 @@ CREATE TABLE IF NOT EXISTS t_user_task_state (
     uid                  BIGINT       NOT NULL COMMENT '用户ID',
     task_type            VARCHAR(16)  NOT NULL COMMENT '任务类型：ONBOARDING / DAILY',
     task_code            VARCHAR(64)  NOT NULL COMMENT '固定任务编码',
-    task_date            DATE         NOT NULL COMMENT '任务日期桶，onboarding 用锚点日期',
+    task_date            DATE         NOT NULL COMMENT '任务日期桶，onboarding 使用锚点日期',
     completed            TINYINT      NOT NULL DEFAULT 0 COMMENT '0未完成 1已完成',
     complete_source      VARCHAR(64)  NULL COMMENT '完成来源',
     complete_ref_id      BIGINT       NULL COMMENT '完成关联对象ID',

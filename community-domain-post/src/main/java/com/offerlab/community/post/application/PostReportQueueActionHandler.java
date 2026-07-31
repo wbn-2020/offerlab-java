@@ -27,6 +27,10 @@ public class PostReportQueueActionHandler implements ReviewQueueSourceActionHand
         if (!supports(sourceType) || sourceId == null) {
             return;
         }
+        if ("CLOSED".equals(normalize(status))) {
+            reportService.closeReportFromQueue(sourceId, operatorUid, note);
+            return;
+        }
         reportService.reviewReport(sourceId, operatorUid, isApproved(status), note);
     }
 

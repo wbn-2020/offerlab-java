@@ -7,10 +7,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -18,6 +20,9 @@ import java.util.Optional;
 @Slf4j
 @RequiredArgsConstructor
 public class ElasticsearchHttpClient {
+
+    private static final int MIN_RESPONSE_BYTES = 1_024;
+    private static final int MAX_RESPONSE_BYTES = 64 * 1_024 * 1_024;
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -163,8 +168,62 @@ public class ElasticsearchHttpClient {
             builder.header("Content-Type", "application/json")
                     .method(method, HttpRequest.BodyPublishers.ofString(body));
         }
-        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        return new EsResponse(response.statusCode(), response.body());
+        HttpResponse<InputStream> response;
+        try {
+            response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
+        }
+        return new EsResponse(response.statusCode(), readBounded(response));
+    }
+
+    public boolean deleteIndex(String index) {
+        try {
+            EsResponse response = send("DELETE", "/" + index, null);
+            return response.success() || response.statusCode() == 404;
+        } catch (Exception e) {
+            log.warn("elasticsearch delete index failed: index={} error={}", index, e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean refreshIndex(String index) {
+        try {
+            EsResponse response = send("POST", "/" + index + "/_refresh", null);
+            return response.success();
+        } catch (Exception e) {
+            log.warn("elasticsearch refresh index failed: index={} error={}", index, e.getMessage());
+            return false;
+        }
+    }
+
+    private String readBounded(HttpResponse<InputStream> response) throws IOException {
+        int maxResponseBytes = Math.max(MIN_RESPONSE_BYTES,
+                Math.min(properties.getMaxResponseBytes(), MAX_RESPONSE_BYTES));
+        long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+        if (contentLength > maxResponseBytes) {
+            closeQuietly(response.body());
+            throw new IOException("Elasticsearch response exceeds " + maxResponseBytes + " bytes");
+        }
+        try (InputStream input = response.body()) {
+            byte[] bytes = input.readNBytes(maxResponseBytes + 1);
+            if (bytes.length > maxResponseBytes) {
+                throw new IOException("Elasticsearch response exceeds " + maxResponseBytes + " bytes");
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
+    }
+
+    private void closeQuietly(InputStream input) {
+        if (input == null) {
+            return;
+        }
+        try {
+            input.close();
+        } catch (IOException ignored) {
+            // Preserve the response-size failure.
+        }
     }
 
     private String normalizedBaseUrl() {

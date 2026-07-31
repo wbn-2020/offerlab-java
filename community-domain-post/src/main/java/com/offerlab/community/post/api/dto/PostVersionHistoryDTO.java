@@ -18,6 +18,7 @@ public class PostVersionHistoryDTO {
     private Long authorId;
     private Long editorUid;
     private Integer baseVersion;
+    private Integer resultVersion;
     private String title;
     private String content;
     private String contentSummary;
@@ -27,5 +28,7 @@ public class PostVersionHistoryDTO {
     private String extJson;
     private List<TagDTO> tags;
     private String changeSummary;
+    private String publicUpdateSummary;
+    private String impactScope;
     private LocalDateTime createTime;
 }

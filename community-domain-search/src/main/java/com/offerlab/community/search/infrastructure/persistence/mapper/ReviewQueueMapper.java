@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -47,6 +48,21 @@ public interface ReviewQueueMapper extends BaseMapper<ReviewQueueItemPO> {
             """)
     int upsertItem(ReviewQueueItemPO item);
 
+    @Update("""
+            UPDATE t_review_queue
+            SET queue_status = 'pending',
+                assignee_uid = NULL,
+                handled_time = NULL,
+                handle_result = NULL,
+                handle_note = NULL,
+                update_time = NOW(3)
+            WHERE source_type = #{sourceType}
+              AND source_id = #{sourceId}
+              AND is_deleted = 0
+            """)
+    int reopenBySource(@Param("sourceType") String sourceType,
+                       @Param("sourceId") Long sourceId);
+
     @Select("""
             <script>
             SELECT *
@@ -69,6 +85,39 @@ public interface ReviewQueueMapper extends BaseMapper<ReviewQueueItemPO> {
                                  @Param("sourceType") String sourceType,
                                  @Param("riskLevel") String riskLevel,
                                  @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM t_review_queue
+            WHERE is_deleted = 0
+            <if test="status != null and status != ''">
+              AND queue_status = #{status}
+            </if>
+            <if test="sourceType != null and sourceType != ''">
+              AND source_type = #{sourceType}
+            </if>
+            <if test="riskLevel != null and riskLevel != ''">
+              AND risk_level = #{riskLevel}
+            </if>
+            <if test="beforePriority != null and beforeCreateTime != null and beforeId != null">
+              AND (
+                priority &lt; #{beforePriority}
+                OR (priority = #{beforePriority} AND create_time &lt; #{beforeCreateTime})
+                OR (priority = #{beforePriority} AND create_time = #{beforeCreateTime} AND id &lt; #{beforeId})
+              )
+            </if>
+            ORDER BY priority DESC, create_time DESC, id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<ReviewQueueItemPO> listAfter(@Param("status") String status,
+                                      @Param("sourceType") String sourceType,
+                                      @Param("riskLevel") String riskLevel,
+                                      @Param("beforePriority") Integer beforePriority,
+                                      @Param("beforeCreateTime") LocalDateTime beforeCreateTime,
+                                      @Param("beforeId") Long beforeId,
+                                      @Param("limit") int limit);
 
     @Select("""
             SELECT *
@@ -143,6 +192,7 @@ public interface ReviewQueueMapper extends BaseMapper<ReviewQueueItemPO> {
               AND source_id = #{sourceId}
               AND is_deleted = 0
               AND queue_status IN ('pending', 'claimed')
+              AND (assignee_uid IS NULL OR assignee_uid = #{operatorUid})
             """)
     int resolveBySource(@Param("sourceType") String sourceType,
                         @Param("sourceId") Long sourceId,

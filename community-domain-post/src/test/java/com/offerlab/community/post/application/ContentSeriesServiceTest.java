@@ -5,6 +5,7 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.ContentSeriesAddPostCmd;
 import com.offerlab.community.post.api.dto.ContentSeriesCreateCmd;
@@ -122,7 +123,7 @@ class ContentSeriesServiceTest {
     }
 
     @Test
-    void addPostRequiresSeriesOwnerAndPostAuthorAndReturnsProgress() {
+    void addPostRequiresSeriesOwnerAndAllowsCuratingPublicPosts() {
         SeriesMapperState seriesState = new SeriesMapperState(1);
         SeriesPostMapperState relationState = new SeriesPostMapperState();
         Map<Long, PostPO> posts = new LinkedHashMap<>();
@@ -132,18 +133,19 @@ class ContentSeriesServiceTest {
         Long seriesId = created.getId();
 
         posts.put(9001L, post(9001L, 8L, Post.STATUS_PUBLISHED));
-        BizException forbidden = assertThrows(BizException.class,
-                () -> service.addPost(seriesId, addPostCmd(9001L), 7L));
-        assertEquals(ErrorCode.FORBIDDEN.getCode(), forbidden.getCode());
-
-        posts.put(9002L, post(9002L, 7L, Post.STATUS_PUBLISHED));
-        ContentSeriesDTO afterAdd = service.addPost(seriesId, addPostCmd(9002L), 7L);
+        ContentSeriesDTO afterAdd = service.addPost(seriesId, addPostCmd(9001L), 7L);
 
         assertEquals(1L, afterAdd.getProgress().getPublishedPostCount());
         assertEquals(1L, afterAdd.getProgress().getTotalPostCount());
         assertEquals(100, afterAdd.getProgress().getCompletionRate());
         assertEquals(1, relationState.activeLinks(seriesId).size());
+        assertEquals(9001L, relationState.activeLinks(seriesId).get(0).getPostId());
         assertEquals(0, relationState.activeLinks(seriesId).get(0).getSortOrder());
+
+        posts.put(9002L, post(9002L, 8L, Post.STATUS_PUBLISHED));
+        BizException forbidden = assertThrows(BizException.class,
+                () -> service.addPost(seriesId, addPostCmd(9002L), 8L));
+        assertEquals(ErrorCode.FORBIDDEN.getCode(), forbidden.getCode());
     }
 
     @Test
@@ -315,7 +317,8 @@ class ContentSeriesServiceTest {
                 postMapper(posts, relationState),
                 postFacade(posts),
                 new SnowflakeIdGenerator(),
-                migrationCheckService
+                migrationCheckService,
+                new ContentModerationStub()
         );
     }
 
@@ -328,6 +331,8 @@ class ContentSeriesServiceTest {
                 (proxy, method, args) -> switch (method.getName()) {
                     case "tableExists" -> seriesState.tableExists;
                     case "selectMine" -> seriesState.selectMine((Long) args[0]);
+                    case "lockCreator" -> args[0];
+                    case "countActiveByCreator" -> (long) seriesState.selectMine((Long) args[0]).size();
                     case "selectPublicById" -> seriesState.selectPublicById((Long) args[0]);
                     case "selectPublicByCreatorUid" -> seriesState.selectPublicByCreatorUid((Long) args[0], (Long) args[1], (Integer) args[2]);
                     case "selectProgressBySeriesIds" -> progressRows((Collection<Long>) args[0], relationState, posts);
@@ -680,6 +685,21 @@ class ContentSeriesServiceTest {
         @Override
         public boolean contentSeriesReady() {
             return contentSeriesReady;
+        }
+    }
+
+    private static final class ContentModerationStub extends ContentModerationService {
+        private ContentModerationStub() {
+            super(null, null, null);
+        }
+
+        @Override
+        public void requireUserCanPublish(Long uid) {
+        }
+
+        @Override
+        public ModerationDecision checkContent(Long uid, String scope, String sourceType, Long sourceId, String... values) {
+            return new ModerationDecision(false, "ALLOW", null, null);
         }
     }
 }

@@ -7,7 +7,6 @@ import com.offerlab.community.post.domain.model.PostDomain;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -21,7 +20,6 @@ import java.util.stream.Collectors;
 /**
  * MVP 占位
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AnalyticsFacadeImpl implements AnalyticsFacade {
@@ -31,12 +29,12 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
 
     @Override
     public void track(Map<String, Object> event) {
-        log.debug("track: {}", event);
+        throw analyticsUnavailable("analytics event tracking is not available");
     }
 
     @Override
     public List<Map<String, Object>> getHotPosts(int size) {
-        return List.of();
+        throw analyticsUnavailable("hot post analytics is not available");
     }
 
     @Override
@@ -70,7 +68,11 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
 
     @Override
     public Map<String, Object> getPersonalDashboard(Long uid) {
-        return Map.of("uid", uid, "items", List.of());
+        throw analyticsUnavailable("personal analytics dashboard is not available");
+    }
+
+    private static BizException analyticsUnavailable(String message) {
+        return new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(), message);
     }
 
     private static String normalizeRange(String range) {
@@ -146,7 +148,8 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
     }
 
     private static List<Map<String, Object>> labelDomains(List<Map<String, Object>> rows) {
-        return rows.stream()
+        return (rows == null ? List.<Map<String, Object>>of() : rows).stream()
+                .filter(row -> row != null && PostDomain.isValid(asInteger(row.get("name"))))
                 .map(row -> {
                     Map<String, Object> copy = new LinkedHashMap<>(row);
                     copy.put("name", domainName(row.get("name")));
@@ -185,7 +188,7 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
         Map<Integer, Map<String, Object>> result = new LinkedHashMap<>();
         for (Map<String, Object> row : rows == null ? List.<Map<String, Object>>of() : rows) {
             Integer domain = asInteger(row.get("domain"));
-            if (domain != null) {
+            if (PostDomain.isValid(domain)) {
                 result.put(domain, row);
             }
         }
@@ -196,7 +199,7 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
         Map<Integer, List<Map<String, Object>>> result = new LinkedHashMap<>();
         for (Map<String, Object> row : rows == null ? List.<Map<String, Object>>of() : rows) {
             Integer domain = asInteger(row.get("domain"));
-            if (domain == null) {
+            if (!PostDomain.isValid(domain)) {
                 continue;
             }
             Map<String, Object> copy = new LinkedHashMap<>(row);
@@ -228,12 +231,13 @@ public class AnalyticsFacadeImpl implements AnalyticsFacade {
     private static String postTypeName(Object value) {
         int type = value instanceof Number number ? number.intValue() : 0;
         return switch (type) {
-            case 10 -> "技术文章";
-            case 11 -> "项目复盘";
-            case 12 -> "踩坑记录";
-            case 13 -> "问答求助";
-            case 14 -> "资源分享";
-            case 15 -> "经验笔记";
+            case 10 -> "攻略清单";
+            case 11 -> "复盘记录";
+            case 12 -> "图文笔记";
+            case 13 -> "问题求助";
+            case 14 -> "资源推荐";
+            case 15 -> "经验分享";
+            case 16 -> "观点讨论";
             case 1 -> "历史经验";
             case 2 -> "历史博客";
             case 3 -> "历史题解";

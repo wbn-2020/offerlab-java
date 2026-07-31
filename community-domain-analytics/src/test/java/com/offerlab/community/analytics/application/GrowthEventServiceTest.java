@@ -11,6 +11,11 @@ import org.mockito.ArgumentMatcher;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -68,6 +73,28 @@ class GrowthEventServiceTest {
         verify(mapper).insertEvent(argThat(matchesAuthRedirect()));
     }
 
+    @Test
+    void cleansEveryAllowedEventTypeInBoundedRetentionBatches() throws Exception {
+        List<String> operations = new ArrayList<>();
+        GrowthEventMapper cleanupMapper = (GrowthEventMapper) Proxy.newProxyInstance(
+                GrowthEventMapper.class.getClassLoader(),
+                new Class<?>[]{GrowthEventMapper.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "tableExists" -> 1;
+                    case "deleteBefore" -> {
+                        operations.add(args[0] + ":" + args[2]);
+                        yield 0;
+                    }
+                    default -> defaultValue(method.getReturnType());
+                });
+        GrowthEventService service = new GrowthEventService(cleanupMapper, null);
+
+        GrowthEventService.class.getMethod("cleanupExpiredEvents").invoke(service);
+
+        assertEquals(10, operations.size());
+        assertTrue(operations.stream().allMatch(item -> item.endsWith(":5000")));
+    }
+
     private static ArgumentMatcher<com.offerlab.community.analytics.infrastructure.persistence.po.GrowthEventPO> matchesAuthRedirect() {
         return event -> event != null
                 && GrowthEventService.AUTH_REDIRECT_CLICK.equals(event.getEventType())
@@ -75,5 +102,21 @@ class GrowthEventServiceTest {
                 && "300".equals(event.getTargetValue())
                 && "post.detail".equals(event.getSourcePage())
                 && event.getUid() == null;
+    }
+
+    private static Object defaultValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
+        }
+        if (type == boolean.class) {
+            return false;
+        }
+        if (type == int.class) {
+            return 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        return 0;
     }
 }

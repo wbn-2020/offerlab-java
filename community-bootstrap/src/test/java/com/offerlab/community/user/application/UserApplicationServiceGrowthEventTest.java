@@ -2,9 +2,11 @@ package com.offerlab.community.user.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.user.api.event.UserRegisteredEvent;
 import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.Optional;
 
@@ -38,6 +41,8 @@ class UserApplicationServiceGrowthEventTest {
     @Mock
     private JwtService jwtService;
     @Mock
+    private StringRedisTemplate redisTemplate;
+    @Mock
     private EventPublisher eventPublisher;
     @Mock
     private ObjectMapper objectMapper;
@@ -47,6 +52,10 @@ class UserApplicationServiceGrowthEventTest {
     private UserProfileMapper profileMapper;
     @Mock
     private UserCacheService userCacheService;
+    @Mock
+    private ContentModerationService contentModerationService;
+    @Mock
+    private AfterCommitExecutor afterCommit;
 
     private UserApplicationService service;
 
@@ -58,11 +67,14 @@ class UserApplicationServiceGrowthEventTest {
                 idGen,
                 passwordEncoder,
                 jwtService,
+                redisTemplate,
                 eventPublisher,
                 objectMapper,
                 privacySettingMapper,
                 profileMapper,
-                userCacheService);
+                userCacheService,
+                contentModerationService,
+                afterCommit);
     }
 
     @Test

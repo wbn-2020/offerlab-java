@@ -1,6 +1,7 @@
 package com.offerlab.community.analytics.infrastructure.persistence.mapper;
 
 import com.offerlab.community.analytics.infrastructure.persistence.po.GrowthEventPO;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -23,9 +24,9 @@ public interface GrowthEventMapper {
 
     @Insert("""
             INSERT INTO t_growth_event(
-                id, event_type, uid, domain, content_id, target_type, target_value, source_page, ext_json
+                id, event_key, event_type, uid, domain, content_id, target_type, target_value, source_page, ext_json
             ) VALUES (
-                #{id}, #{eventType}, #{uid}, #{domain}, #{contentId}, #{targetType}, #{targetValue}, #{sourcePage}, #{extJson}
+                #{id}, #{eventKey}, #{eventType}, #{uid}, #{domain}, #{contentId}, #{targetType}, #{targetValue}, #{sourcePage}, #{extJson}
             )
             """)
     int insertEvent(GrowthEventPO event);
@@ -91,4 +92,15 @@ public interface GrowthEventMapper {
             """)
     List<Map<String, Object>> countUserEventsByDomain(@Param("uid") Long uid,
                                                       @Param("since") LocalDateTime since);
+
+    @Delete("""
+            DELETE FROM t_growth_event
+            WHERE event_type = #{eventType}
+              AND create_time < #{before}
+            ORDER BY create_time ASC
+            LIMIT #{limit}
+            """)
+    int deleteBefore(@Param("eventType") String eventType,
+                     @Param("before") LocalDateTime before,
+                     @Param("limit") int limit);
 }

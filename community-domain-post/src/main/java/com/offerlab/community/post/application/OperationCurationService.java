@@ -5,6 +5,8 @@ import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.post.api.CreatorCurationFeedbackFacade;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.PublicContentFilter;
@@ -37,11 +39,13 @@ import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicP
 import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicSectionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -68,6 +72,14 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     public static final String ITEM_PAUSED = "PAUSED";
     public static final String TYPE_TOPIC = "TOPIC";
     public static final String TYPE_EVENT = "EVENT";
+    // Operation-topic scope is derived from domain only: a chosen channel means the
+    // topic is single-channel; a null domain is the explicit cross-channel state.
+    public static final String SCOPE_DOMAIN = "DOMAIN";
+    public static final String SCOPE_CROSS_DOMAIN = "CROSS_DOMAIN";
+    public static final String TOPIC_DRAFT_REVISION_KEY = "draftRevision";
+    // Candidate block reasons that keep scoped topics from silently absorbing off-channel posts.
+    public static final String BLOCK_DOMAIN_MISMATCH_FOR_SCOPED_TOPIC = "DOMAIN_MISMATCH_FOR_SCOPED_TOPIC";
+    public static final String BLOCK_POST_DOMAIN_UNKNOWN = "POST_DOMAIN_UNKNOWN";
     public static final String HOME_FEATURED_SLOT_CODE = "HOME_FEATURED";
     public static final String DISCOVERY_FEATURED_TOPICS_SLOT_CODE = "DISCOVERY_FEATURED_TOPICS";
     private static final String OPERATION_SOURCE_REMOTE = "remote";
@@ -105,7 +117,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     private final AdminAuditService adminAuditService;
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
-    private final ApplicationEventPublisher applicationEventPublisher;
+    private final EventPublisher events;
 
     public List<OperationCandidateDTO> listCandidates(String keyword, Integer domain, Integer postType, int limit) {
         Integer activeDomain = requireOptionalDomain(domain);
@@ -268,7 +280,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     public OperationSlotDTO upsertSlot(OperationSlotCmd cmd, Long operatorUid) {
         String code = requireCode(cmd == null ? null : cmd.getSlotCode(), 64);
         requireSupportedOperationSlot(code);
-        OperationSlotPO existing = slotMapper.selectByCode(code);
+        OperationSlotPO existing = slotMapper.selectByCodeForUpdate(code);
         if (existing == null && slotMapper.countActiveRows() >= MAX_OPERATION_SLOTS) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "operation slots are limited to two in P0");
         }
@@ -308,7 +320,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotItemDTO upsertSlotItem(Long slotId, OperationSlotItemCmd cmd, Long operatorUid) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         String sourceType = normalizeSourceType(cmd == null ? null : cmd.getSourceType(), false);
         Long sourceId = requireId(cmd == null ? null : cmd.getSourceId());
@@ -344,8 +356,14 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (existing == null || existing.getIsDeleted() != null && existing.getIsDeleted() == 1) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
-        OperationSlotPO slot = requireSlot(existing.getSlotId());
+        OperationSlotPO slot = requireSlotForUpdate(existing.getSlotId());
         requireSupportedOperationSlot(slot.getSlotCode());
+        existing = slotItemMapper.selectById(itemId);
+        if (existing == null
+                || existing.getIsDeleted() != null && existing.getIsDeleted() == 1
+                || !Objects.equals(existing.getSlotId(), slot.getId())) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
         slotItemMapper.deleteById(itemId);
         adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_ITEM_DELETE",
                 "OPERATION_SLOT_ITEM", itemId, existing, Map.of("deleted", true), limit(clean(note), 500));
@@ -353,24 +371,26 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotDTO publishSlot(Long slotId, Long operatorUid, String note) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         OperationSlotDTO before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
         OperationSlotDTO current = filterSlotSnapshot(copySlotSnapshot(before));
         if (current == null || current.getItems() == null || current.getItems().isEmpty()) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "operation slot publish requires at least one governed public item");
         }
-        slot.setRollbackSnapshotJson(slot.getPublishedSnapshotJson());
-        slot.setSlotStatus(STATUS_PUBLISHED);
-        slot.setCurrentVersion((slot.getCurrentVersion() == null ? 0 : slot.getCurrentVersion()) + 1);
+        int expectedVersion = slot.getCurrentVersion() == null ? 0 : slot.getCurrentVersion();
+        int nextVersion = expectedVersion + 1;
         current.setStatus(STATUS_PUBLISHED);
-        current.setCurrentVersion(slot.getCurrentVersion());
+        current.setCurrentVersion(nextVersion);
         current.setSource(OPERATION_SOURCE_REMOTE);
         current.setDegraded(false);
         current.setFallbackReason(null);
-        slot.setPublishedSnapshotJson(writeJson(current));
-        slot.setUpdatedBy(operatorUid);
-        slotMapper.updateById(slot);
+        String publishedSnapshotJson = writeJson(current);
+        if (slotMapper.publishIfCurrentVersion(slotId, expectedVersion, nextVersion, STATUS_PUBLISHED,
+                slot.getPublishedSnapshotJson(), publishedSnapshotJson, operatorUid) != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                    "operation slot was changed by another operator");
+        }
         OperationSlotDTO dto = getPublicSlot(slot.getSlotCode(), slot.getDefaultLimit() == null ? 0 : slot.getDefaultLimit());
         adminAuditService.recordRequired(operatorUid, "OPERATION_SLOT_PUBLISH",
                 "OPERATION_SLOT", slotId, before, dto, limit(clean(note), 500));
@@ -380,7 +400,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotDTO offlineSlot(Long slotId, Long operatorUid, String note) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         OperationSlotDTO before = toSlotDto(slot, slotItemMapper.listBySlot(slotId, null, MAX_ADMIN_LIST), false);
         slot.setSlotStatus(STATUS_OFFLINE);
@@ -394,7 +414,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     @Transactional
     public OperationSlotDTO rollbackSlot(Long slotId, Long operatorUid, String note) {
-        OperationSlotPO slot = requireSlot(slotId);
+        OperationSlotPO slot = requireSlotForUpdate(slotId);
         requireSupportedOperationSlot(slot.getSlotCode());
         OperationSlotDTO rollback = readSlotSnapshot(slot.getRollbackSnapshotJson());
         if (rollback == null) {
@@ -445,9 +465,10 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         OperationTopicDTO snapshot = readSnapshot(topic.getPublishedSnapshotJson());
-        OperationTopicDTO dto = snapshot == null
+        OperationTopicDTO source = snapshot == null
                 ? toTopicDto(topic, topicSectionMapper.listByTopic(topic.getId(), ITEM_ACTIVE, MAX_ADMIN_LIST), true)
-                : filterTopicSnapshot(snapshot);
+                : snapshot;
+        OperationTopicDTO dto = filterTopicSnapshot(source);
         if (dto == null || dto.getSections() == null || dto.getSections().isEmpty()) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
@@ -461,8 +482,13 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         return toTopicDto(topic, topicSectionMapper.listByTopic(topicId, null, MAX_ADMIN_LIST), false);
     }
 
+    @Transactional(readOnly = true)
     public Map<String, Object> checkTopicPublish(Long topicId) {
         OperationTopicDTO preview = previewTopic(topicId);
+        boolean hasPublishableStatus = List.of(
+                STATUS_DRAFT, STATUS_PREVIEW, STATUS_PUBLISHED, STATUS_OFFLINE)
+                .contains(preview.getStatus());
+        boolean hasConsistentScope = isTopicSnapshotScopeConsistent(preview);
         OperationTopicDTO publicSnapshot = filterTopicSnapshot(copyTopicSnapshot(preview));
         int visibleSections = publicSnapshot == null || publicSnapshot.getSections() == null
                 ? 0
@@ -482,11 +508,17 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
                 publishCheckItem("public_snapshot_only", "发布快照边界", hasOnlyPublicSnapshot,
                         hasOnlyPublicSnapshot ? "快照不包含草稿、预览 token 或降级来源" : "快照仍包含非公开或降级来源信息"),
                 publishCheckItem("reason_text_confirmed", "公开 reasonText", hasReasonText,
-                        hasReasonText ? "所有收录内容都有公开理由" : "存在缺少公开 reasonText 的内容")
+                        hasReasonText ? "所有收录内容都有公开理由" : "存在缺少公开 reasonText 的内容"),
+                publishCheckItem("publish_status_allowed", "专题生命周期状态", hasPublishableStatus,
+                        hasPublishableStatus ? "当前状态允许发布" : "当前状态不允许发布"),
+                publishCheckItem("topic_scope_consistent", "专题频道范围", hasConsistentScope,
+                        hasConsistentScope ? "所有内容符合专题频道范围" : "存在频道不匹配或频道未知的内容")
         );
         return Map.of(
                 "topicId", preview.getId(),
-                "canPublish", hasVisibleSections && hasOnlyPublicSnapshot && hasReasonText,
+                TOPIC_DRAFT_REVISION_KEY, preview.getDraftRevision(),
+                "canPublish", hasVisibleSections && hasOnlyPublicSnapshot && hasReasonText
+                        && hasPublishableStatus && hasConsistentScope,
                 "source", OPERATION_SOURCE_REMOTE,
                 "degraded", false,
                 "checkedAt", LocalDateTime.now(),
@@ -506,8 +538,10 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         po.setCreatedBy(operatorUid);
         po.setPreviewToken(token());
         po.setCurrentVersion(0);
+        po.setDraftRevision(0);
+        validateTopicSectionCommands(po, cmd.getSections());
         topicMapper.insert(po);
-        replaceSections(po.getId(), cmd.getSections(), operatorUid);
+        replaceSections(po, cmd.getSections(), operatorUid);
         OperationTopicDTO dto = previewTopic(po.getId());
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_CREATE",
                 "OPERATION_TOPIC", po.getId(), null, dto, po.getNote());
@@ -517,14 +551,20 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     @Transactional
     public OperationTopicDTO updateTopic(Long topicId, OperationTopicCmd cmd, Long operatorUid) {
         OperationTopicPO po = requireTopic(topicId);
+        requireExpectedDraftRevision(cmd == null ? null : cmd.getExpectedDraftRevision(), po);
         if (STATUS_ARCHIVED.equals(po.getTopicStatus())) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "archived topic is read-only");
         }
         OperationTopicDTO before = previewTopic(topicId);
         applyTopicCmd(po, cmd, operatorUid, false);
-        topicMapper.updateById(po);
-        if (cmd != null && cmd.getSections() != null) {
-            replaceSections(topicId, cmd.getSections(), operatorUid);
+        if (cmd.getSections() == null) {
+            requireStoredTopicSectionsWithinScope(po);
+        } else {
+            validateTopicSectionCommands(po, cmd.getSections());
+        }
+        updateTopicWithDraftRevision(po);
+        if (cmd.getSections() != null) {
+            replaceSections(po, cmd.getSections(), operatorUid);
         }
         OperationTopicDTO dto = previewTopic(topicId);
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_UPDATE",
@@ -533,8 +573,9 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     @Transactional
-    public OperationTopicDTO markPreview(Long topicId, Long operatorUid, String note) {
+    public OperationTopicDTO markPreview(Long topicId, Long operatorUid, Integer expectedDraftRevision, String note) {
         OperationTopicPO po = requireTopic(topicId);
+        requireExpectedDraftRevision(expectedDraftRevision, po);
         OperationTopicDTO before = previewTopic(topicId);
         requireTopicTransition(po.getTopicStatus(), "preview", STATUS_DRAFT, STATUS_PREVIEW);
         po.setTopicStatus(STATUS_PREVIEW);
@@ -543,7 +584,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (!StringUtils.hasText(po.getPreviewToken())) {
             po.setPreviewToken(token());
         }
-        topicMapper.updateById(po);
+        updateTopicWithDraftRevision(po);
         OperationTopicDTO dto = previewTopic(topicId);
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_PREVIEW",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
@@ -551,11 +592,14 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     @Transactional
-    public OperationTopicDTO publishTopic(Long topicId, Long operatorUid, String note) {
+    public OperationTopicDTO publishTopic(Long topicId, Long operatorUid, Integer expectedDraftRevision, String note) {
         OperationTopicPO po = requireTopic(topicId);
+        requireExpectedDraftRevision(expectedDraftRevision, po);
         OperationTopicDTO before = previewTopic(topicId);
         requireTopicTransition(po.getTopicStatus(), "publish",
                 STATUS_DRAFT, STATUS_PREVIEW, STATUS_PUBLISHED, STATUS_OFFLINE);
+        requireTopicSnapshotScopeConsistent(before,
+                "published topic contains posts outside its channel scope");
         OperationTopicDTO current = filterTopicSnapshot(copyTopicSnapshot(before));
         requirePublishableTopicSnapshot(current, "published topic requires visible sections and public reasonText");
         po.setRollbackSnapshotJson(po.getPublishedSnapshotJson());
@@ -566,8 +610,9 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         po.setPublishedSnapshotJson(writeJson(current));
         po.setNote(limit(clean(note), 500));
         po.setUpdatedBy(operatorUid);
-        topicMapper.updateById(po);
+        updateTopicWithDraftRevision(po);
         OperationTopicDTO dto = getPublicTopic(po.getSlug());
+        dto.setDraftRevision(draftRevisionOf(po));
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_PUBLISH",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
         publishCreatorCurationSelectedEvents(dto);
@@ -575,14 +620,15 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     @Transactional
-    public OperationTopicDTO offlineTopic(Long topicId, Long operatorUid, String note) {
+    public OperationTopicDTO offlineTopic(Long topicId, Long operatorUid, Integer expectedDraftRevision, String note) {
         OperationTopicPO po = requireTopic(topicId);
+        requireExpectedDraftRevision(expectedDraftRevision, po);
         OperationTopicDTO before = previewTopic(topicId);
         requireTopicTransition(po.getTopicStatus(), "offline", STATUS_PUBLISHED);
         po.setTopicStatus(STATUS_OFFLINE);
         po.setNote(limit(clean(note), 500));
         po.setUpdatedBy(operatorUid);
-        topicMapper.updateById(po);
+        updateTopicWithDraftRevision(po);
         OperationTopicDTO dto = previewTopic(topicId);
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_OFFLINE",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
@@ -590,8 +636,9 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     @Transactional
-    public OperationTopicDTO rollbackTopic(Long topicId, Long operatorUid, String note) {
+    public OperationTopicDTO rollbackTopic(Long topicId, Long operatorUid, Integer expectedDraftRevision, String note) {
         OperationTopicPO po = requireTopic(topicId);
+        requireExpectedDraftRevision(expectedDraftRevision, po);
         requireTopicTransition(po.getTopicStatus(), "rollback", STATUS_PUBLISHED, STATUS_OFFLINE);
         OperationTopicDTO rollback = readSnapshot(po.getRollbackSnapshotJson());
         if (rollback == null) {
@@ -601,6 +648,8 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (before == null) {
             before = previewTopic(topicId);
         }
+        requireTopicSnapshotScopeConsistent(rollback,
+                "rollback snapshot contains posts outside its channel scope");
         OperationTopicDTO dto = filterTopicSnapshot(copyTopicSnapshot(rollback));
         requirePublishableTopicSnapshot(dto, "rollback snapshot has no visible sections or public reasonText");
         po.setTopicStatus(STATUS_PUBLISHED);
@@ -611,7 +660,8 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         po.setRollbackSnapshotJson(writeJson(before));
         po.setNote(limit(clean(note), 500));
         po.setUpdatedBy(operatorUid);
-        topicMapper.updateById(po);
+        updateTopicWithDraftRevision(po);
+        dto.setDraftRevision(draftRevisionOf(po));
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_ROLLBACK",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
         publishCreatorCurationSelectedEvents(dto);
@@ -619,11 +669,15 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     @Transactional
-    public OperationTopicDTO archiveTopic(Long topicId, Long operatorUid, String note) {
+    public OperationTopicDTO archiveTopic(Long topicId, Long operatorUid, Integer expectedDraftRevision, String note) {
         OperationTopicPO po = requireTopic(topicId);
+        requireExpectedDraftRevision(expectedDraftRevision, po);
         requireTopicTransition(po.getTopicStatus(), "archive", STATUS_PUBLISHED);
         OperationTopicDTO before = getPublicTopic(po.getSlug());
-        OperationTopicDTO archived = filterTopicSnapshot(copyTopicSnapshot(readSnapshot(po.getPublishedSnapshotJson())));
+        OperationTopicDTO publishedSnapshot = readSnapshot(po.getPublishedSnapshotJson());
+        requireTopicSnapshotScopeConsistent(publishedSnapshot,
+                "archived snapshot contains posts outside its channel scope");
+        OperationTopicDTO archived = filterTopicSnapshot(copyTopicSnapshot(publishedSnapshot));
         if (archived == null) {
             archived = filterTopicSnapshot(copyTopicSnapshot(before));
         }
@@ -634,8 +688,9 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         po.setPublishedSnapshotJson(writeJson(archived));
         po.setNote(limit(clean(note), 500));
         po.setUpdatedBy(operatorUid);
-        topicMapper.updateById(po);
+        updateTopicWithDraftRevision(po);
         OperationTopicDTO dto = getPublicTopic(po.getSlug());
+        dto.setDraftRevision(draftRevisionOf(po));
         adminAuditService.recordRequired(operatorUid, "OPERATION_TOPIC_ARCHIVE",
                 "OPERATION_TOPIC", topicId, before, dto, po.getNote());
         return dto;
@@ -649,8 +704,8 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         po.setTopicName(requireCleanText(cmd.getName(), 64, "topic name required"));
         po.setDescription(limit(clean(cmd.getDescription()), 500));
         po.setOperationType(normalizeOperationType(cmd.getOperationType(), false));
-        po.setCoverUrl(limit(clean(cmd.getCoverUrl()), 512));
-        po.setDomain(requireOptionalDomain(cmd.getDomain()));
+        po.setCoverUrl(normalizeCoverUrl(cmd.getCoverUrl()));
+        applyTopicScope(po, cmd, create);
         if (create) {
             po.setTopicStatus(requestedStatus == null ? STATUS_DRAFT : requireInitialTopicStatus(requestedStatus));
         } else if (requestedStatus != null && !requestedStatus.equals(po.getTopicStatus())) {
@@ -664,8 +719,44 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         validateDisplayText(po.getTopicName(), po.getDescription(), po.getNote());
     }
 
-    private void replaceSections(Long topicId, List<OperationTopicSectionCmd> sections, Long operatorUid) {
-        topicSectionMapper.softDeleteByTopic(topicId, operatorUid);
+    /**
+     * Creates require an explicit scope. Updates without scope preserve the
+     * stored value so omitted fields can never widen a topic to cross-domain.
+     */
+    private void applyTopicScope(OperationTopicPO po, OperationTopicCmd cmd, boolean create) {
+        String scope = cmd.getTopicScope() == null ? null : cmd.getTopicScope().trim().toUpperCase(Locale.ROOT);
+        if (scope == null || scope.isEmpty()) {
+            if (create) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "topic scope is required");
+            }
+            if (cmd.getDomain() != null
+                    && !Objects.equals(requireOptionalDomain(cmd.getDomain()), po.getDomain())) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                        "topic scope is required when changing channel");
+            }
+            return;
+        }
+        if (SCOPE_CROSS_DOMAIN.equals(scope)) {
+            if (cmd.getDomain() != null) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                        "cross-domain topic must not carry a channel");
+            }
+            po.setDomain(null);
+            return;
+        }
+        if (SCOPE_DOMAIN.equals(scope)) {
+            if (cmd.getDomain() == null) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                        "scoped topic requires a channel");
+            }
+            po.setDomain(requireOptionalDomain(cmd.getDomain()));
+            return;
+        }
+        throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "unknown topic scope: " + scope);
+    }
+
+    private void replaceSections(OperationTopicPO topic, List<OperationTopicSectionCmd> sections, Long operatorUid) {
+        topicSectionMapper.softDeleteByTopic(topic.getId(), operatorUid);
         if (sections == null) {
             return;
         }
@@ -673,10 +764,10 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         for (OperationTopicSectionCmd cmd : sections) {
             String sourceType = normalizeSourceType(cmd.getSourceType(), false);
             Long sourceId = requireId(cmd.getSourceId());
-            validateSourceOperable(sourceType, sourceId, false);
             OperationTopicSectionPO section = new OperationTopicSectionPO();
             section.setId(idGen.nextId());
-            section.setTopicId(topicId);
+            section.setTopicId(topic.getId());
+            section.setSectionKey(requireSectionKey(cmd));
             section.setSectionTitle(limit(clean(cmd.getTitle()), 64));
             section.setSourceType(sourceType);
             section.setSourceId(sourceId);
@@ -689,6 +780,26 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
             topicSectionMapper.insert(section);
             order += 10;
         }
+    }
+
+    private void validateTopicSectionCommands(OperationTopicPO topic, List<OperationTopicSectionCmd> sections) {
+        if (sections == null) {
+            return;
+        }
+        if (sections.size() > MAX_ADMIN_LIST) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "too many operation topic sections");
+        }
+        Map<String, String> titlesBySectionKey = new LinkedHashMap<>();
+        sections.forEach(section -> {
+            validateTopicSectionCommand(topic, section);
+            String sectionKey = requireSectionKey(section);
+            String title = requireCleanText(section.getTitle(), 64, "topic section title required");
+            String existingTitle = titlesBySectionKey.putIfAbsent(sectionKey, title);
+            if (existingTitle != null && !existingTitle.equals(title)) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                        "topic section key cannot map to multiple titles");
+            }
+        });
     }
 
     private String confirmedSectionReason(OperationTopicSectionCmd cmd) {
@@ -800,6 +911,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
                 .operationType(topic.getOperationType())
                 .coverUrl(topic.getCoverUrl())
                 .domain(topic.getDomain())
+                .topicScope(topicScopeOf(topic.getDomain()))
                 .status(topic.getTopicStatus())
                 .sortOrder(topic.getSortOrder())
                 .source(OPERATION_SOURCE_REMOTE)
@@ -809,6 +921,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
                 .endsAt(topic.getEndsAt())
                 .previewToken(publicOnly ? null : topic.getPreviewToken())
                 .currentVersion(topic.getCurrentVersion())
+                .draftRevision(publicOnly ? null : draftRevisionOf(topic))
                 .note(publicOnly ? null : topic.getNote())
                 .sections(sectionDtos)
                 .createTime(topic.getCreateTime())
@@ -821,6 +934,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (SOURCE_POST.equals(section.getSourceType()) && !PublicContentFilter.isDistributablePost(post)) {
             return publicOnly ? null : OperationTopicSectionDTO.builder()
                     .id(section.getId())
+                    .sectionKey(section.getSectionKey())
                     .title(section.getSectionTitle())
                     .sourceType(section.getSourceType())
                     .sourceId(section.getSourceId())
@@ -834,6 +948,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         }
         return OperationTopicSectionDTO.builder()
                 .id(section.getId())
+                .sectionKey(section.getSectionKey())
                 .title(section.getSectionTitle())
                 .sourceType(section.getSourceType())
                 .sourceId(section.getSourceId())
@@ -879,6 +994,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (post != null && topicContainsSource(topic.getId(), SOURCE_POST, post.getId())) {
             blockReasons.add(ALREADY_IN_TOPIC.toUpperCase(Locale.ROOT));
         }
+        blockReasons.addAll(topicScopeBlockReasons(topic.getDomain(), post));
 
         String eligibility = candidateEligibility(blockReasons);
         OperationCandidateDTO candidate = OperationCandidateDTO.builder()
@@ -942,18 +1058,30 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     private OperationCandidateDTO withTopicCandidateState(OperationCandidateDTO candidate, OperationTopicPO topic) {
+        if (candidate == null) {
+            return null;
+        }
         boolean alreadyInTopic = candidate != null
                 && topicContainsSource(topic.getId(), candidate.getSourceType(), candidate.getSourceId());
-        if (!alreadyInTopic || candidate == null || candidate.getPost() == null) {
-            if (candidate != null) {
-                candidate.setTopicId(topic.getId());
-                candidate.setTopicSlug(topic.getSlug());
-            }
+        candidate.setTopicId(topic.getId());
+        candidate.setTopicSlug(topic.getSlug());
+        List<String> scopeBlockReasons = topicScopeBlockReasons(topic.getDomain(), candidate.getPost());
+        if (!alreadyInTopic && scopeBlockReasons.isEmpty()) {
             return candidate;
         }
-        return toEligibleCandidate(candidate.getCandidateSource(), topic.getId(), topic.getSlug(),
-                candidate.getSectionKey(), candidate.getPost(), candidate.getReasonDraftText(),
-                Boolean.TRUE.equals(candidate.getReasonConfirmed()), true);
+        List<String> blockReasons = new ArrayList<>(candidate.getBlockReasons() == null
+                ? List.of()
+                : candidate.getBlockReasons());
+        if (alreadyInTopic) {
+            blockReasons.add(ALREADY_IN_TOPIC.toUpperCase(Locale.ROOT));
+        }
+        blockReasons.addAll(scopeBlockReasons);
+        List<String> distinctBlockReasons = blockReasons.stream().distinct().toList();
+        candidate.setBlockReasons(distinctBlockReasons);
+        candidate.setReason(distinctBlockReasons.get(0));
+        candidate.setEligibility(scopeBlockReasons.isEmpty() ? ALREADY_IN_TOPIC : FILTERED);
+        candidate.setOperable(false);
+        return candidate;
     }
 
     private void persistCandidateDraft(OperationCandidateDTO candidate, Long operatorUid) {
@@ -1014,7 +1142,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (post == null) {
             return;
         }
-        String sectionKey = StringUtils.hasText(section.getTitle()) ? section.getTitle() : String.valueOf(section.getId());
+        String sectionKey = topicSectionIdentity(section);
         OperationCurationFeedbackDTO dto = OperationCurationFeedbackDTO.builder()
                 .contentId(post.getId())
                 .contentTitle(post.getTitle())
@@ -1044,7 +1172,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
             if (!isAuthorVisibleFeedbackPost(post)) {
                 continue;
             }
-            applicationEventPublisher.publishEvent(OperationCurationSelectedEvent.builder()
+            events.publish(OperationCurationSelectedEvent.builder()
                     .authorUid(post.getAuthorId())
                     .contentId(post.getId())
                     .contentTitle(post.getTitle())
@@ -1075,8 +1203,8 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
             if (!isAuthorVisibleFeedbackPost(post)) {
                 continue;
             }
-            String sectionKey = StringUtils.hasText(section.getTitle()) ? section.getTitle() : String.valueOf(section.getId());
-            applicationEventPublisher.publishEvent(OperationCurationSelectedEvent.builder()
+            String sectionKey = topicSectionIdentity(section);
+            events.publish(OperationCurationSelectedEvent.builder()
                     .authorUid(post.getAuthorId())
                     .contentId(post.getId())
                     .contentTitle(post.getTitle())
@@ -1109,6 +1237,9 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
                     if (!PublicContentFilter.isDistributablePost(post)) {
                         return null;
                     }
+                    if (!topicScopeBlockReasons(snapshot.getDomain(), post).isEmpty()) {
+                        return null;
+                    }
                     section.setPost(post);
                     section.setTitle(publicSnapshotText(section.getTitle(), 64));
                     section.setReasonText(publicCurationReason(null, section.getReasonText(), section.getNote()));
@@ -1128,6 +1259,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         snapshot.setSections(sections);
         snapshot.setNote(null);
         snapshot.setPreviewToken(null);
+        snapshot.setDraftRevision(null);
         snapshot.setSource(OPERATION_SOURCE_REMOTE);
         snapshot.setDegraded(false);
         snapshot.setFallbackReason(null);
@@ -1418,6 +1550,85 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         }
     }
 
+    private void validateTopicSectionCommand(OperationTopicPO topic, OperationTopicSectionCmd cmd) {
+        if (cmd == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        String sourceType = normalizeSourceType(cmd.getSourceType(), false);
+        Long sourceId = requireId(cmd.getSourceId());
+        if (!SOURCE_POST.equals(sourceType)) {
+            validateSourceOperable(sourceType, sourceId, false);
+            return;
+        }
+        PostBriefDTO post = loadPost(sourceId);
+        if (!PublicContentFilter.isDistributablePost(post)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "source post is not public and governed");
+        }
+        requirePostWithinTopicScope(topic.getDomain(), post);
+    }
+
+    private void requireStoredTopicSectionsWithinScope(OperationTopicPO topic) {
+        if (topic.getDomain() == null) {
+            return;
+        }
+        List<OperationTopicSectionPO> sections = topicSectionMapper.listByTopic(
+                topic.getId(), null, MAX_ADMIN_LIST + 1);
+        if (sections.size() > MAX_ADMIN_LIST) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "too many operation topic sections");
+        }
+        for (OperationTopicSectionPO section : sections) {
+            if (section != null && SOURCE_POST.equals(section.getSourceType())) {
+                requirePostWithinTopicScope(topic.getDomain(), safeLoadPublicSlotPost(section.getSourceId()));
+            }
+        }
+    }
+
+    private void requireTopicSnapshotScopeConsistent(OperationTopicDTO snapshot, String message) {
+        if (!isTopicSnapshotScopeConsistent(snapshot)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), message);
+        }
+    }
+
+    private boolean isTopicSnapshotScopeConsistent(OperationTopicDTO snapshot) {
+        if (snapshot == null || snapshot.getDomain() == null) {
+            return true;
+        }
+        return (snapshot.getSections() == null ? List.<OperationTopicSectionDTO>of() : snapshot.getSections()).stream()
+                .filter(Objects::nonNull)
+                .filter(section -> SOURCE_POST.equals(section.getSourceType()))
+                .allMatch(section -> {
+                    PostBriefDTO post = section.getPost() == null
+                            ? safeLoadPublicSlotPost(section.getSourceId())
+                            : section.getPost();
+                    return topicScopeBlockReasons(snapshot.getDomain(), post).isEmpty();
+                });
+    }
+
+    private void requirePostWithinTopicScope(Integer topicDomain, PostBriefDTO post) {
+        List<String> blockReasons = topicScopeBlockReasons(topicDomain, post);
+        if (blockReasons.isEmpty()) {
+            return;
+        }
+        String reason = blockReasons.get(0);
+        String message = BLOCK_POST_DOMAIN_UNKNOWN.equals(reason)
+                ? "scoped topic post domain is unknown"
+                : "scoped topic cannot contain posts from another channel";
+        throw new BizException(ErrorCode.PARAM_ERROR.getCode(), message);
+    }
+
+    private static List<String> topicScopeBlockReasons(Integer topicDomain, PostBriefDTO post) {
+        if (!SCOPE_DOMAIN.equals(topicScopeOf(topicDomain))) {
+            return List.of();
+        }
+        if (post == null || post.getDomain() == null) {
+            return List.of(BLOCK_POST_DOMAIN_UNKNOWN);
+        }
+        if (!Objects.equals(post.getDomain(), topicDomain)) {
+            return List.of(BLOCK_DOMAIN_MISMATCH_FOR_SCOPED_TOPIC);
+        }
+        return List.of();
+    }
+
     private void validateSourceOperable(String sourceType, Long sourceId, boolean topicMustBePublished) {
         if (SOURCE_POST.equals(sourceType)) {
             if (!PublicContentFilter.isDistributablePost(loadPost(sourceId))) {
@@ -1462,12 +1673,86 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         return po;
     }
 
+    private OperationSlotPO requireSlotForUpdate(Long slotId) {
+        OperationSlotPO po = slotMapper.selectByIdForUpdate(requireId(slotId));
+        if (po == null || po.getIsDeleted() != null && po.getIsDeleted() == 1) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return po;
+    }
+
     private OperationTopicPO requireTopic(Long topicId) {
         OperationTopicPO po = topicMapper.selectById(requireId(topicId));
         if (po == null || po.getIsDeleted() != null && po.getIsDeleted() == 1) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         return po;
+    }
+
+    private void requireExpectedDraftRevision(Integer expectedDraftRevision, OperationTopicPO topic) {
+        if (expectedDraftRevision == null || expectedDraftRevision < 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "expectedDraftRevision is required");
+        }
+        if (expectedDraftRevision != draftRevisionOf(topic)) {
+            throw concurrentTopicModification();
+        }
+    }
+
+    private void updateTopicWithDraftRevision(OperationTopicPO topic) {
+        int previousRevision = draftRevisionOf(topic);
+        if (topicMapper.updateById(topic) != 1) {
+            throw concurrentTopicModification();
+        }
+        // The optimistic-lock interceptor must write the next version back to the
+        // entity. Fail closed if configuration drifts instead of silently
+        // accepting a non-CAS update.
+        if (draftRevisionOf(topic) != previousRevision + 1) {
+            throw new BizException(ErrorCode.SYSTEM_ERROR);
+        }
+    }
+
+    private static int draftRevisionOf(OperationTopicPO topic) {
+        return topic == null || topic.getDraftRevision() == null ? 0 : topic.getDraftRevision();
+    }
+
+    private static BizException concurrentTopicModification() {
+        return new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+    }
+
+    private static String requireSectionKey(OperationTopicSectionCmd cmd) {
+        return requireCode(cmd == null ? null : cmd.getSectionKey(), 64);
+    }
+
+    private static String legacyTopicSectionKey(Long topicId, String title) {
+        String value = String.valueOf(topicId) + ":" + Objects.toString(title, "");
+        try {
+            String digest = HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+            return "legacy-" + digest.substring(0, 57);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static String topicSectionIdentity(OperationTopicSectionDTO section) {
+        if (section == null) {
+            return null;
+        }
+        if (StringUtils.hasText(section.getSectionKey())) {
+            return section.getSectionKey();
+        }
+        if (StringUtils.hasText(section.getTitle())) {
+            return section.getTitle();
+        }
+        return String.valueOf(section.getId());
+    }
+
+    /**
+     * Derives the read-only topic scope. A null domain is the explicit
+     * cross-channel state — it must never be mapped onto a concrete channel.
+     */
+    public static String topicScopeOf(Integer domain) {
+        return domain == null ? SCOPE_CROSS_DOMAIN : SCOPE_DOMAIN;
     }
 
     private OperationTopicDTO readSnapshot(String json) {
@@ -1506,6 +1791,16 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         if (snapshot.getSourceVersion() == null) {
             snapshot.setSourceVersion(snapshot.getCurrentVersion());
         }
+        // topicScope is always re-derived from domain so historical snapshots
+        // written before the field existed stay consistent with live reads.
+        snapshot.setTopicScope(topicScopeOf(snapshot.getDomain()));
+        if (snapshot.getSections() != null) {
+            snapshot.getSections().stream()
+                    .filter(Objects::nonNull)
+                    .filter(section -> !StringUtils.hasText(section.getSectionKey()))
+                    .forEach(section -> section.setSectionKey(
+                            legacyTopicSectionKey(snapshot.getId(), section.getTitle())));
+        }
     }
 
     private void normalizeReadSnapshot(OperationSlotDTO snapshot) {
@@ -1539,6 +1834,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
 
     private void applySnapshotVersion(Object value) {
         if (value instanceof OperationTopicDTO topic) {
+            topic.setDraftRevision(null);
             topic.setSchemaVersion("operation-topic-snapshot.v1");
             topic.setSourceVersion(topic.getCurrentVersion());
         }
@@ -1694,6 +1990,13 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         }
         String trimmed = value.trim();
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, max);
+    }
+
+    private static String normalizeCoverUrl(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return ExternalUrlSafety.requireSafeHttpUrl(value, "coverUrl", 512);
     }
 
     private static String token() {

@@ -9,6 +9,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
@@ -36,6 +37,7 @@ public class PostKnowledgeReviewService {
     private final AdminAuditService adminAuditService;
     private final MultiLevelCache<PostDTO> postDetailCache;
     private final DomainModeratorService domainModeratorService;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Map<String, Object> applyReview(Long postId, Long operatorUid, KnowledgeReviewCmd cmd) {
@@ -51,9 +53,10 @@ public class PostKnowledgeReviewService {
         String beforeExtJson = post.getExtJson();
         String afterExtJson = writeKnowledgeExt(beforeExtJson, operatorUid, cmd);
         post.setExtJson(afterExtJson);
-        postRepo.update(post);
-        postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
-        postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        if (!postRepo.update(post)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        evictPostDetailAfterCommit(postId);
         adminAuditService.recordRequired(operatorUid, "POST_KNOWLEDGE_REVIEW_APPLY", "POST", postId,
                 Map.of("extJson", beforeExtJson == null ? "" : beforeExtJson),
                 Map.of("knowledgeReviewed", true, "extJson", afterExtJson),
@@ -63,6 +66,13 @@ public class PostKnowledgeReviewService {
                 "knowledgeReviewed", true,
                 "extJson", afterExtJson
         );
+    }
+
+    private void evictPostDetailAfterCommit(Long postId) {
+        afterCommit.execute(() -> {
+            postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
+            postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        }, "post knowledge review detail eviction:" + postId);
     }
 
     private String writeKnowledgeExt(String extJson, Long operatorUid, KnowledgeReviewCmd cmd) {

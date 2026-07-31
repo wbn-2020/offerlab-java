@@ -6,13 +6,17 @@ import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
@@ -23,11 +27,16 @@ import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
+import org.springframework.kafka.support.serializer.DeserializationException;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.util.backoff.ExponentialBackOff;
+import org.springframework.util.backoff.FixedBackOff;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -45,7 +54,7 @@ public class KafkaConfig {
     private final ObjectMapper objectMapper;
 
     @Value("${offerlab.kafka.listener-concurrency:1}")
-    private int listenerConcurrency;
+    private int listenerConcurrency = 1;
 
     /**
      * 生产者工厂配置
@@ -79,8 +88,31 @@ public class KafkaConfig {
      * KafkaTemplate Bean
      */
     @Bean
+    @Primary
     public KafkaTemplate<String, EventEnvelope<?>> kafkaTemplate() {
         return new KafkaTemplate<>(producerFactory());
+    }
+
+    @Bean
+    public ProducerFactory<Object, Object> deadLetterProducerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaProperties.getBootstrapServers());
+        props.put(ProducerConfig.ACKS_CONFIG, "all");
+        props.put(ProducerConfig.RETRIES_CONFIG, 3);
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120000);
+        props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 30000);
+        return new DefaultKafkaProducerFactory<>(
+                props,
+                deadLetterKeySerializer(objectMapper),
+                deadLetterValueSerializer(objectMapper)
+        );
+    }
+
+    @Bean("deadLetterKafkaTemplate")
+    public KafkaTemplate<Object, Object> deadLetterKafkaTemplate() {
+        return new KafkaTemplate<>(deadLetterProducerFactory());
     }
 
     /**
@@ -93,8 +125,10 @@ public class KafkaConfig {
         // 基础配置
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaProperties.getBootstrapServers());
         props.put(ConsumerConfig.GROUP_ID_CONFIG, kafkaProperties.getConsumer().getGroupId());
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class);
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class);
 
         // 消费配置
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
@@ -117,7 +151,8 @@ public class KafkaConfig {
     }
 
     @Bean
-    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, EventEnvelope<?>> template) {
+    public DefaultErrorHandler kafkaErrorHandler(
+            @Qualifier("deadLetterKafkaTemplate") KafkaTemplate<Object, Object> template) {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
                 template,
                 (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition())
@@ -125,7 +160,10 @@ public class KafkaConfig {
         ExponentialBackOff backOff = new ExponentialBackOff(1000L, 2.0);
         backOff.setMaxInterval(10_000L);
         backOff.setMaxElapsedTime(30_000L);
-        return new DefaultErrorHandler(recoverer, backOff);
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, backOff);
+        errorHandler.addNotRetryableExceptions(DeserializationException.class);
+        errorHandler.setCommitRecovered(true);
+        return errorHandler;
     }
 
     /**
@@ -139,8 +177,42 @@ public class KafkaConfig {
         factory.setConcurrency(listenerConcurrency);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);  // 手动立即提交
         factory.setBatchListener(false);  // 单条消息处理
-        factory.setCommonErrorHandler(kafkaErrorHandler(kafkaTemplate()));
+        factory.setCommonErrorHandler(kafkaErrorHandler(deadLetterKafkaTemplate()));
         return factory;
+    }
+
+    /**
+     * DLT records are already the final durable handoff for a failed search event. If persisting
+     * the recovery task fails, retain the original DLT offset for retry instead of committing it
+     * into an unconsumed ".DLT.DLT" topic.
+     */
+    @Bean("postSearchDeadLetterKafkaListenerContainerFactory")
+    public ConcurrentKafkaListenerContainerFactory<String, EventEnvelope<?>>
+    postSearchDeadLetterKafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, EventEnvelope<?>> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        factory.setConcurrency(listenerConcurrency);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setBatchListener(false);
+        factory.setCommonErrorHandler(new DefaultErrorHandler(
+                new FixedBackOff(1_000L, FixedBackOff.UNLIMITED_ATTEMPTS)));
+        return factory;
+    }
+
+    static Serializer<Object> deadLetterKeySerializer(ObjectMapper objectMapper) {
+        Map<Class<?>, Serializer<?>> delegates = new LinkedHashMap<>();
+        delegates.put(byte[].class, new ByteArraySerializer());
+        delegates.put(String.class, new StringSerializer());
+        delegates.put(Object.class, new JsonSerializer<>(objectMapper));
+        return new DelegatingByTypeSerializer(delegates, true);
+    }
+
+    static Serializer<Object> deadLetterValueSerializer(ObjectMapper objectMapper) {
+        Map<Class<?>, Serializer<?>> delegates = new LinkedHashMap<>();
+        delegates.put(byte[].class, new ByteArraySerializer());
+        delegates.put(Object.class, new JsonSerializer<>(objectMapper));
+        return new DelegatingByTypeSerializer(delegates, true);
     }
 }
 

@@ -111,11 +111,81 @@ public interface CommunityTopicMapper extends BaseMapper<CommunityTopicPO> {
                     )
                     OR p.title LIKE CONCAT('%', #{keyword}, '%')
                     OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.contextTopicId')) = CAST(#{topicId} AS CHAR)
+                    OR JSON_CONTAINS(JSON_EXTRACT(e.ext_json, '$.topicNames'), JSON_QUOTE(#{keyword}))
+                    OR EXISTS (
+                        SELECT 1
+                        FROM JSON_TABLE(
+                            COALESCE(JSON_EXTRACT(e.ext_json, '$.topicNames'), JSON_ARRAY()),
+                            '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                        ) AS topic_item
+                        WHERE LOWER(topic_item.topic_name) = LOWER(#{keyword})
+                    )
                     OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
                     OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
                   )
             """)
     long countPublicPosts(@Param("topicId") Long topicId, @Param("keyword") String keyword);
+
+    @Select("""
+            <script>
+            SELECT t.id AS topicId,
+                   (
+                       SELECT COUNT(DISTINCT p.id)
+                       FROM t_post_main p
+                       LEFT JOIN t_post_extension e ON e.post_id = p.id
+                       WHERE p.is_deleted = 0
+                         AND p.post_status = 1
+                         AND p.visibility = 1
+                         AND (
+                               EXISTS (
+                                   SELECT 1
+                                   FROM t_community_topic_tag tt
+                                   JOIN t_post_tag_ref ptr ON ptr.tag_id = tt.tag_id AND ptr.post_id = p.id
+                                   WHERE tt.topic_id = t.id
+                               )
+                               OR p.title LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
+                               OR p.content LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
+                               OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.contextTopicId')) = CAST(t.id AS CHAR)
+                               OR JSON_CONTAINS(
+                                   JSON_EXTRACT(e.ext_json, '$.topicNames'),
+                                   JSON_QUOTE(COALESCE(t.topic_name, t.slug))
+                               )
+                               OR EXISTS (
+                                   SELECT 1
+                                   FROM JSON_TABLE(
+                                       COALESCE(JSON_EXTRACT(e.ext_json, '$.topicNames'), JSON_ARRAY()),
+                                       '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                                   ) AS topic_item
+                                   WHERE LOWER(topic_item.topic_name) = LOWER(COALESCE(t.topic_name, t.slug))
+                               )
+                               OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
+                               OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', COALESCE(t.topic_name, t.slug), '%')
+                             )
+                   ) AS postCount
+            FROM t_community_topic t
+            WHERE t.is_deleted = 0
+              AND t.id IN
+              <foreach collection="topicIds" item="topicId" open="(" separator="," close=")">
+                #{topicId}
+              </foreach>
+            </script>
+            """)
+    List<java.util.Map<String, Object>> countPublicPostsByTopicIds(@Param("topicIds") Collection<Long> topicIds);
+
+    @Select("""
+            <script>
+            SELECT topic_id AS topicId, COUNT(*) AS followerCount
+            FROM t_community_topic_follow
+            WHERE is_deleted = 0
+              AND topic_id IN
+              <foreach collection="topicIds" item="topicId" open="(" separator="," close=")">
+                #{topicId}
+              </foreach>
+            GROUP BY topic_id
+            </script>
+            """)
+    List<java.util.Map<String, Object>> countFollowersByTopicIds(@Param("topicIds") Collection<Long> topicIds);
 
     @Update("""
             UPDATE t_community_topic

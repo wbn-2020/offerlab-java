@@ -15,7 +15,7 @@ class UserLoggingGuardTest {
     void registrationLogsMustNotWriteRawEmail() throws Exception {
         String source = Files.readString(Path.of("src/main/java/com/offerlab/community/user/application/UserApplicationService.java"), StandardCharsets.UTF_8);
 
-        assertTrue(source.contains("maskEmail(email)"), "registration log must mask user email");
+        assertTrue(source.contains("maskEmail(normalizedEmail)"), "registration log must mask the normalized user email");
         assertTrue(source.contains("private String maskEmail"), "email masking helper must stay local and explicit");
         assertFalse(source.contains("log.info(\"user registered: uid={} email={}\", uid, email)"), "registration log must not include raw email");
     }

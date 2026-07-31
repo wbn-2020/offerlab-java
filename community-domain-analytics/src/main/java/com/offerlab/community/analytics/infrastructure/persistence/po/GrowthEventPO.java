@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 public class GrowthEventPO {
     @TableId(type = IdType.INPUT)
     private Long id;
+    private String eventKey;
     private String eventType;
     private Long uid;
     private Integer domain;

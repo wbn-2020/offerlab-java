@@ -1,16 +1,23 @@
 package com.offerlab.community.search.controller;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
-import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
+import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
 import com.offerlab.community.search.api.dto.SearchAnalyticsTrackCmd;
 import com.offerlab.community.search.api.dto.SearchStatusDTO;
+import com.offerlab.community.search.api.dto.SearchTrustFilter;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import com.offerlab.community.search.application.SearchAnalyticsService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
@@ -25,8 +32,15 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @PublicApi
 @RestController
@@ -35,74 +49,243 @@ import java.util.Map;
 @Validated
 public class SearchController {
 
+    private static final String EVENT_COMMUNITY_RECOMMEND_CLICK = "COMMUNITY_RECOMMEND_CLICK";
+    private static final Set<String> TRACK_EVENT_WHITELIST = Set.of(EVENT_COMMUNITY_RECOMMEND_CLICK);
+    private static final int TRACK_RATE_LIMIT_PER_MINUTE = 20;
+    private static final long TRACK_RATE_WINDOW_MS = 60_000L;
+    private static final long TRACK_DEDUP_WINDOW_MS = 15_000L;
+    private static final int TRACK_GUARD_MAX_ENTRIES = 10_000;
+    private static final Cache<String, RateBucket> TRACK_RATE_BUCKETS = Caffeine.newBuilder()
+            .maximumSize(TRACK_GUARD_MAX_ENTRIES)
+            .expireAfterWrite(Duration.ofMillis(TRACK_RATE_WINDOW_MS))
+            .build();
+    private static final Cache<String, DedupReservation> TRACK_DEDUP_KEYS = Caffeine.newBuilder()
+            .maximumSize(TRACK_GUARD_MAX_ENTRIES)
+            .expireAfterWrite(Duration.ofMillis(TRACK_DEDUP_WINDOW_MS))
+            .build();
+
     private final SearchFacade facade;
     private final SearchAnalyticsService searchAnalyticsService;
     private final PostFacade postFacade;
     private final PostSearchIndexer postSearchIndexer;
 
     @GetMapping("/posts")
+    @RateLimit(key = "'public:search:posts:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<PostBriefDTO>> searchPosts(@RequestParam(name = "q", required = false) @Size(max = 100) String keyword,
                                                        @RequestParam(required = false) @Size(max = 128) String company,
                                                        @RequestParam(required = false) @Size(max = 128) String position,
                                                        @RequestParam(required = false) Integer type,
+                                                       @RequestParam(required = false) @Min(1) @Max(5) Integer domain,
                                                        @RequestParam(required = false) @Size(max = 16) String sort,
-                                                       @RequestParam(required = false) @Size(max = 32) String cursor,
-                                                       @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
-        return Result.ok(facade.searchPosts(keyword, company, position, type, sort, cursor, size, false).publicView());
+                                                       @RequestParam(required = false) Boolean trustProfile,
+                                                       @RequestParam(required = false) @Size(max = 40) String freshnessStatus,
+                                                       @RequestParam(required = false) Boolean resolved,
+                                                       @RequestParam(required = false) Boolean sourceComplete,
+                                                       @RequestParam(required = false) @Size(max = 128) String cursor,
+                                                       @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                       HttpServletRequest request) {
+        domain = requireOptionalDomain(domain);
+        SearchTrustFilter trustFilter;
+        try {
+            trustFilter = SearchTrustFilter.of(trustProfile, freshnessStatus, resolved, sourceComplete);
+        } catch (IllegalArgumentException ex) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), ex.getMessage());
+        }
+        return Result.ok(facade.searchPosts(keyword, company, position, type, domain, sort, cursor, size, false,
+                trustFilter).publicView());
     }
 
     @GetMapping("/suggest")
+    @RateLimit(key = "'public:search:suggest:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<List<String>> suggest(@RequestParam @Size(max = 100) String prefix,
-                                        @RequestParam(defaultValue = "10") @Min(1) @Max(20) int size) {
+                                        @RequestParam(defaultValue = "10") @Min(1) @Max(20) int size,
+                                        HttpServletRequest request) {
         return Result.ok(facade.suggest(prefix, size));
     }
 
     @GetMapping("/hot")
-    public Result<List<String>> hot(@RequestParam(defaultValue = "10") @Min(1) @Max(20) int size) {
+    @RateLimit(key = "'public:search:hot:' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<List<String>> hot(@RequestParam(defaultValue = "10") @Min(1) @Max(20) int size,
+                                    HttpServletRequest request) {
         return Result.ok(facade.getHotKeywords(size));
     }
 
     @GetMapping("/status")
-    public Result<SearchStatusDTO> status() {
+    @RateLimit(key = "'public:search:status:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<SearchStatusDTO> status(HttpServletRequest request) {
         return Result.ok(postSearchIndexer.publicStatus());
     }
 
     @PostMapping("/analytics/track")
-    public Result<Map<String, Object>> track(@RequestBody SearchAnalyticsTrackCmd cmd) {
-        if (cmd != null && "COMMUNITY_RECOMMEND_CLICK".equalsIgnoreCase(cmd.getEventType())) {
-            searchAnalyticsService.recordCommunityRecommendClick(cmd.getKeyword(), firstText(cmd.getTarget(), cmd.getCompany()));
+    @RateLimit(key = "'search:analytics:track:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<Map<String, Object>> track(@Valid @RequestBody(required = false) SearchAnalyticsTrackCmd cmd,
+                                             HttpServletRequest request) {
+        String eventType = normalizeEventType(cmd == null ? null : cmd.getEventType());
+        if (eventType == null || !TRACK_EVENT_WHITELIST.contains(eventType)) {
+            return trackResult(false, null);
         }
-        return Result.ok(Map.of("tracked", true));
+
+        String keyword = cleanTrackText(cmd.getKeyword(), 100, false);
+        String target = cleanTrackText(firstText(cmd.getTarget(), cmd.getCompany()), 128, true);
+        if (target == null || (cmd.getKeyword() != null && keyword == null)) {
+            return trackResult(false, null);
+        }
+
+        String fingerprint = sha256Hex(clientFingerprint(request));
+        if (!allowTrackRate(fingerprint)) {
+            return trackResult(false, null);
+        }
+
+        String dedupKey = sha256Hex(fingerprint + "|" + eventType + "|" + nullToEmpty(keyword) + "|" + target);
+        DedupReservation reservation = reserveDedupKey(dedupKey);
+        if (reservation == null) {
+            return trackResult(false, null);
+        }
+
+        boolean tracked = searchAnalyticsService.recordCommunityRecommendClick(keyword, target);
+        if (!tracked) {
+            TRACK_DEDUP_KEYS.asMap().remove(dedupKey, reservation);
+        }
+        return trackResult(tracked, null);
     }
 
     private static String firstText(String first, String fallback) {
         return first != null && !first.isBlank() ? first : fallback;
     }
 
+    private static Result<Map<String, Object>> trackResult(boolean tracked, String reason) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("tracked", tracked);
+        if (reason != null) {
+            data.put("reason", reason);
+        }
+        return Result.ok(data);
+    }
+
+    private static String normalizeEventType(String eventType) {
+        if (eventType == null) {
+            return null;
+        }
+        String normalized = eventType.trim().toUpperCase();
+        return normalized.isBlank() || normalized.length() > 32 ? null : normalized;
+    }
+
+    private static String cleanTrackText(String value, int maxLength, boolean required) {
+        if (value == null) {
+            return required ? null : null;
+        }
+        String text = value.trim();
+        if (text.isBlank()) {
+            return required ? null : null;
+        }
+        if (text.length() > maxLength || looksLikeStructuredOrSecret(text)) {
+            return null;
+        }
+        return text;
+    }
+
+    private static boolean looksLikeStructuredOrSecret(String text) {
+        String compact = text.replace(" ", "");
+        return text.contains("{")
+                || text.contains("}")
+                || text.contains("[")
+                || text.contains("]")
+                || text.contains("\n")
+                || text.contains("\r")
+                || compact.matches("(?i).*\\b(token|secret|password|authorization|api[_-]?key)\\b.*")
+                || compact.matches("[A-Za-z0-9_-]{24,}")
+                || text.matches("(?i)^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$")
+                || text.matches("(?i)^(?:https?://|www\\.)\\S+$");
+    }
+
+    private static String clientFingerprint(HttpServletRequest request) {
+        if (request == null) {
+            return "unknown";
+        }
+        String ip = request.getRemoteAddr();
+        String userAgent = request.getHeader("User-Agent");
+        return nullToEmpty(ip) + "|" + truncate(nullToEmpty(userAgent), 120);
+    }
+
+    private static boolean allowTrackRate(String fingerprint) {
+        RateBucket bucket = TRACK_RATE_BUCKETS.get(fingerprint, key -> new RateBucket());
+        return bucket.count.incrementAndGet() <= TRACK_RATE_LIMIT_PER_MINUTE;
+    }
+
+    private static DedupReservation reserveDedupKey(String dedupKey) {
+        DedupReservation reservation = new DedupReservation();
+        return TRACK_DEDUP_KEYS.asMap().putIfAbsent(dedupKey, reservation) == null ? reservation : null;
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(nullToEmpty(value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) {
+                hex.append(String.format("%02x", bytes[i]));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            return Integer.toHexString(nullToEmpty(value).hashCode());
+        }
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static String truncate(String value, int maxLength) {
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+
+    private static final class RateBucket {
+        private final AtomicInteger count = new AtomicInteger();
+    }
+
+    private static final class DedupReservation {
+    }
+
     @GetMapping("/posts/{postId}/publish-status")
-    public Result<Map<String, Object>> publishStatus(@PathVariable @Positive Long postId) {
-        UserContext.require();
+    @RateLimit(key = "'public:search:publish-status:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<Map<String, Object>> publishStatus(@PathVariable @Positive Long postId,
+                                                     HttpServletRequest request) {
         PostBriefDTO publicBrief = postFacade.batchGetPosts(List.of(postId)).get(postId);
+        boolean dbVisible = publicBrief != null;
 
-        Map<String, Object> database = new java.util.LinkedHashMap<>();
-        database.put("publiclyVisible", publicBrief != null);
-
-        Map<String, Object> search = new java.util.LinkedHashMap<>();
         PageResult<PostBriefDTO> recall = facade.searchPosts(String.valueOf(postId), null, null, null,
                 "relevance", null, 5, false);
-        search.put("visible", containsPost(recall, postId));
+        Map<String, Object> database = new LinkedHashMap<>();
+        database.put("publiclyVisible", dbVisible);
 
-        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        Map<String, Object> search = new LinkedHashMap<>();
+        search.put("visible", containsPost(recall, postId));
+        search.put("source", recall.getSource());
+        search.put("degraded", recall.getDegraded());
+        search.put("fallbackReason", recall.getFallbackReason());
+        search.put("diagnostics", recall.getDiagnostics());
+
+        Map<String, Object> data = new LinkedHashMap<>();
         data.put("postId", postId);
         data.put("database", database);
         data.put("search", search);
-        data.put("ready", publicBrief != null && Boolean.TRUE.equals(search.get("visible")));
+        data.put("ready", dbVisible && Boolean.TRUE.equals(search.get("visible")));
         return Result.ok(data);
     }
 
     private static boolean containsPost(PageResult<PostBriefDTO> page, Long postId) {
         return page != null && page.getItems() != null && page.getItems().stream()
                 .anyMatch(post -> java.util.Objects.equals(post.getId(), postId));
+    }
+
+    private static Integer requireOptionalDomain(Integer domain) {
+        if (domain == null) {
+            return null;
+        }
+        if (domain < 1 || domain > 5) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "频道不存在或已下线");
+        }
+        return domain;
     }
 
 }

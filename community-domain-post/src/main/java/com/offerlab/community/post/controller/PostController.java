@@ -5,7 +5,9 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.security.AdminPermissionService;
+import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.infra.security.UserContext;
+import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
@@ -17,24 +19,33 @@ import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostReportDTO;
+import com.offerlab.community.post.api.dto.PostReportReceiptDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.dto.PostVersionHistoryDTO;
+import com.offerlab.community.post.api.dto.PublicPostUpdateDTO;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
+import com.offerlab.community.post.application.DomainConfigService;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.application.PostApplicationService;
 import com.offerlab.community.post.application.PostDraftService;
 import com.offerlab.community.post.application.PostFeaturedService;
 import com.offerlab.community.post.application.PostKnowledgeReviewService;
+import com.offerlab.community.post.application.PostPublishQualityValidator;
 import com.offerlab.community.post.application.PostReportService;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -51,6 +62,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/posts")
 @RequiredArgsConstructor
+@Validated
 public class PostController {
 
     private final PostFacade postFacade;
@@ -59,14 +71,16 @@ public class PostController {
     private final PostFeaturedService featuredService;
     private final PostKnowledgeReviewService knowledgeReviewService;
     private final PostDraftService draftService;
+    private final DomainConfigService domainConfigService;
     private final DomainModeratorService domainModeratorService;
     private final AdminPermissionService adminPermissionService;
     private final ContentModerationService contentModerationService;
+    private final SnowflakeIdGenerator idGenerator;
     private final ApplicationEventPublisher applicationEventPublisher;
 
     private static final List<PostContentTypeDTO> CONTENT_TYPES = List.of(
-            new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "技术文章", "文章",
-                    "沉淀架构设计、技术方案、源码阅读和工程实践。", "例如：Spring Cloud Gateway 鉴权链路实践", 40, false),
+            new PostContentTypeDTO(Post.TYPE_TECH_ARTICLE, "TECH_ARTICLE", "攻略清单", "攻略",
+                    "整理步骤、方法、清单、避坑指南和可照着执行的经验。", "例如：新手准备第一次独自旅行的行前清单", 40, false),
             new PostContentTypeDTO(Post.TYPE_NOTE, "NOTE", "经验分享", "经验",
                     "分享亲身经历、过程、踩坑、结果和可复用的做法。", "例如：我如何用两周时间调整作息并稳定完成学习计划", 30, false),
             new PostContentTypeDTO(Post.TYPE_COMMUNITY_QUESTION, "QUESTION", "问题求助", "求助",
@@ -95,11 +109,17 @@ public class PostController {
     @RateLimit(key = "'post:create:' + #uid", rate = 20, per = 86400)
     public Result<Map<String, Object>> publish(@Valid @RequestBody PublishReq req) {
         Long uid = UserContext.require();
-        Integer domain = requireOptionalDomain(req.getDomain());
+        Integer domain = requirePublishDomain(req.getDomain());
+        requireSafeExternalImageUrl(req.getCoverUrl());
         contentModerationService.requireUserCanPublish(uid);
-        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
-                uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
-        Long id = postFacade.publishPost(PostCreateCmd.builder()
+        Long id = idGenerator.nextId();
+        ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkNewSourceContent(
+                uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, id,
+                req.getTitle(), req.getContent());
+        boolean reviewRequired = moderationDecision.reviewRequired()
+                || domainConfigService.reviewRequiredForPublish(domain);
+        postFacade.publishPost(PostCreateCmd.builder()
+                .postId(id)
                 .authorId(uid)
                 .postType(req.getPostType())
                 .domain(domain)
@@ -111,10 +131,11 @@ public class PostController {
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
                 .anonymous(req.getAnonymous())
-                .reviewRequired(moderationDecision.reviewRequired())
+                .reviewRequired(reviewRequired)
+                .keywordReviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
-        return Result.ok(Map.of("postId", id, "reviewRequired", moderationDecision.reviewRequired()));
+        return Result.ok(Map.of("postId", id, "reviewRequired", reviewRequired));
     }
 
     @PutMapping("/{postId}")
@@ -125,11 +146,13 @@ public class PostController {
         }
         Long uid = UserContext.require();
         Integer domain = requireOptionalDomain(req.getDomain());
+        requireSafeExternalImageUrl(req.getCoverUrl());
         contentModerationService.requireUserCanPublish(uid);
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
-                uid, ContentModerationService.SCOPE_POST, req.getTitle(), req.getContent());
+                uid, ContentModerationService.SCOPE_POST, ContentModerationService.SOURCE_POST, postId,
+                req.getTitle(), req.getContent());
         // 更新后只返回成功状态；详情接口会按可见性重新拉取，避免私密帖被匿名视角误判为空。
-        postFacade.updatePost(PostUpdateCmd.builder()
+        boolean reviewRequired = postFacade.updatePost(PostUpdateCmd.builder()
                 .postId(postId)
                 .operatorUid(uid)
                 .title(req.getTitle())
@@ -141,10 +164,14 @@ public class PostController {
                 .tagIds(req.effectiveTagIds())
                 .tagNames(req.getTagNames())
                 .anonymous(req.getAnonymous())
+                .publicUpdateSummary(req.getPublicUpdateSummary())
+                .impactScope(req.getImpactScope())
+                .respondedSuggestionIds(req.getRespondedSuggestionIds())
                 .reviewRequired(moderationDecision.reviewRequired())
+                .keywordReviewRequired(moderationDecision.reviewRequired())
                 .build());
         draftService.deleteIfOwned(uid, req.getDraftId());
-        return Result.ok(Map.of("postId", postId, "reviewRequired", moderationDecision.reviewRequired()));
+        return Result.ok(Map.of("postId", postId, "reviewRequired", reviewRequired));
     }
 
     @DeleteMapping("/{postId}")
@@ -156,7 +183,9 @@ public class PostController {
 
     @PublicApi
     @GetMapping("/{postId}")
-    public Result<PostDTO> get(@PathVariable Long postId) {
+    @RateLimit(key = "'public:posts:detail:' + #postId + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<PostDTO> get(@PathVariable @Positive Long postId,
+                               HttpServletRequest request) {
         Long viewerUid = UserContext.get();
         PostDTO p = postFacade.getPost(postId, viewerUid);
         if (p == null) {
@@ -176,15 +205,17 @@ public class PostController {
 
     @PublicApi
     @GetMapping
-    public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) Long authorId,
-                                                 @RequestParam(required = false) Long tagId,
+    @RateLimit(key = "'public:posts:list:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<PageResult<PostBriefDTO>> list(@RequestParam(required = false) @Positive Long authorId,
+                                                 @RequestParam(required = false) @Positive Long tagId,
 
-                                                 @RequestParam(required = false, name = "tag") Long tag,
+                                                 @RequestParam(required = false, name = "tag") @Positive Long tag,
                                                  @RequestParam(required = false, name = "type") Integer type,
                                                  @RequestParam(required = false) Boolean featured,
                                                  @RequestParam(required = false) Integer domain,
-                                                 @RequestParam(defaultValue = "0") long cursor,
-                                                 @RequestParam(defaultValue = "20") int size) {
+                                                 @RequestParam(defaultValue = "0") @Min(0) long cursor,
+                                                 @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                 HttpServletRequest request) {
         Long effectiveTagId = tagId != null ? tagId : tag;
         return Result.ok(postFacade.listPosts(authorId, effectiveTagId, type, featured,
                 requireOptionalDomain(domain), cursor, size, false).publicView());
@@ -192,8 +223,19 @@ public class PostController {
 
     @PublicApi
     @GetMapping("/content-types")
-    public Result<List<PostContentTypeDTO>> contentTypes() {
+    @RateLimit(key = "'public:posts:content-types:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<List<PostContentTypeDTO>> contentTypes(HttpServletRequest request) {
         return Result.ok(CONTENT_TYPES);
+    }
+
+    @PublicApi
+    @GetMapping("/{postId}/updates")
+    @RateLimit(key = "'public:posts:updates:' + #postId + ':' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
+    public Result<List<PublicPostUpdateDTO>> listPublicUpdates(
+            @PathVariable @Positive Long postId,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(30) int limit,
+            HttpServletRequest request) {
+        return Result.ok(postFacade.listPublicUpdates(postId, limit));
     }
 
     @GetMapping("/{postId}/versions")
@@ -212,16 +254,29 @@ public class PostController {
         return Result.ok(Map.of("reportId", reportId));
     }
 
+    @GetMapping("/reports")
+    @RateLimit(key = "'post-report:list:me:' + #uid", rate = 120, per = 60)
+    public Result<List<PostReportReceiptDTO>> listMyReports(@RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
+        return Result.ok(reportService.listMyReceipts(UserContext.require(), limit));
+    }
+
+    @GetMapping("/reports/{reportId}")
+    public Result<PostReportReceiptDTO> getMyReport(@PathVariable Long reportId) {
+        return Result.ok(reportService.getMyReceipt(reportId, UserContext.require()));
+    }
+
     @GetMapping("/admin/reports")
+    @RateLimit(key = "'post-report:list:admin:' + #uid", rate = 120, per = 60)
     public Result<List<PostReportDTO>> listReports(@RequestParam(required = false) Integer status,
                                                    @RequestParam(required = false) Integer domain,
-                                                   @RequestParam(defaultValue = "20") int limit,
+                                                   @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
                                                    @RequestParam(defaultValue = "false") boolean includeTestData) {
         domainModeratorService.requireModerateDomain(UserContext.require(), domain);
         return Result.ok(reportService.listRecent(status, domain, limit, includeTestData));
     }
 
     @PostMapping("/admin/reports/{reportId}/review")
+    @RateLimit(key = "'post-report:review:' + #uid", rate = 60, per = 60)
     public Result<PostReportDTO> reviewReport(@PathVariable Long reportId, @Valid @RequestBody ReviewReq req) {
         Long uid = UserContext.require();
         // 前端可能传 approved/status/action 任一形式，resolveApproved 统一成审核布尔值。
@@ -233,6 +288,18 @@ public class PostController {
                                                       @Valid @RequestBody FeaturedReq req) {
         Long uid = UserContext.require();
         return Result.ok(featuredService.updateFeatured(postId, Boolean.TRUE.equals(req.getFeatured()), uid, req.getNote()));
+    }
+
+    @GetMapping("/admin/review-preview/{postId}")
+    @RateLimit(key = "'post:review-preview:' + #postId", rate = 120, per = 60, failOpen = false)
+    public Result<PostDTO> getReviewPreview(@PathVariable @Positive Long postId) {
+        Long uid = UserContext.require();
+        PostDTO post = postFacade.getPostMetadata(postId);
+        if (post == null) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        domainModeratorService.requireModerateDomain(uid, post.getDomain());
+        return Result.ok(post);
     }
 
     @PostMapping("/admin/knowledge/{postId}/review")
@@ -277,7 +344,7 @@ public class PostController {
     public static class PublishReq {
         @NotNull
         private Integer postType;
-        /** 领域编码，1-技术 2-职场 3-阅读 4-生活 5-投资理财。为空时服务端默认 TECH */
+        /** 频道编码，1-科技数码 2-职场经验 3-学习成长 4-生活方式 5-投资理财。发布时必须显式选择有效频道。 */
         private Integer domain;
         @NotBlank
         @Size(max = 255)
@@ -325,6 +392,12 @@ public class PostController {
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
         @Size(max = 20)
         private List<@Size(max = 32) String> tagNames;
+        @Size(max = 500)
+        private String publicUpdateSummary;
+        @Size(max = 255)
+        private String impactScope;
+        @Size(max = 100)
+        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> respondedSuggestionIds;
         private Long draftId;
 
         private List<Long> effectiveTagIds() {
@@ -428,6 +501,20 @@ public class PostController {
             return domain;
         }
         throw new BizException(ErrorCode.PARAM_ERROR);
+    }
+
+    private static Integer requirePublishDomain(Integer domain) {
+        if (domain == null) {
+            throw PostPublishQualityValidator.fieldError("domain", "请选择频道");
+        }
+        if (!PostDomain.isValid(domain)) {
+            throw PostPublishQualityValidator.fieldError("domain", "频道不存在或已下线");
+        }
+        return domain;
+    }
+
+    private static void requireSafeExternalImageUrl(String value) {
+        ExternalUrlSafety.requireSafeExternalImageUrl(value, "coverUrl");
     }
 
     private static boolean isPublicPost(PostDTO post) {

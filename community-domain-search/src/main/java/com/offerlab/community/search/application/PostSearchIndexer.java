@@ -17,8 +17,11 @@ import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.search.api.dto.SearchStatusDTO;
-import lombok.RequiredArgsConstructor;
+import com.offerlab.community.search.infrastructure.persistence.mapper.SearchIndexRebuildTaskMapper;
+import com.offerlab.community.search.infrastructure.persistence.po.SearchIndexRebuildTaskPO;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.time.ZoneOffset;
@@ -31,11 +34,11 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class PostSearchIndexer {
 
     private static final int REBUILD_BATCH_SIZE = 500;
     private static final int MYSQL_FALLBACK_MAX_SCAN = 200;
+    private static final long DOMAIN_COVERAGE_RECHECK_MS = 30_000L;
 
     private final ElasticsearchHttpClient elasticsearch;
     private final PostMapper postMapper;
@@ -44,25 +47,74 @@ public class PostSearchIndexer {
     private final TagMapper tagMapper;
     private final ObjectMapper objectMapper;
     private final MigrationCheckService migrationCheckService;
+    private final SearchIndexRebuildTaskMapper rebuildTaskMapper;
 
     private final AtomicBoolean indexReady = new AtomicBoolean(false);
+    private final AtomicBoolean rebuildInProgress = new AtomicBoolean(false);
+    private volatile boolean domainCoverageComplete;
+    private volatile long domainCoverageCheckedAt;
+
+    public PostSearchIndexer(ElasticsearchHttpClient elasticsearch,
+                             PostMapper postMapper,
+                             PostExtensionMapper extensionMapper,
+                             PostCounterMapper counterMapper,
+                             TagMapper tagMapper,
+                             ObjectMapper objectMapper,
+                             MigrationCheckService migrationCheckService) {
+        this(elasticsearch, postMapper, extensionMapper, counterMapper, tagMapper, objectMapper,
+                migrationCheckService, null);
+    }
+
+    @Autowired
+    public PostSearchIndexer(ElasticsearchHttpClient elasticsearch,
+                             PostMapper postMapper,
+                             PostExtensionMapper extensionMapper,
+                             PostCounterMapper counterMapper,
+                             TagMapper tagMapper,
+                             ObjectMapper objectMapper,
+                             MigrationCheckService migrationCheckService,
+                             @Nullable SearchIndexRebuildTaskMapper rebuildTaskMapper) {
+        this.elasticsearch = elasticsearch;
+        this.postMapper = postMapper;
+        this.extensionMapper = extensionMapper;
+        this.counterMapper = counterMapper;
+        this.tagMapper = tagMapper;
+        this.objectMapper = objectMapper;
+        this.migrationCheckService = migrationCheckService;
+        this.rebuildTaskMapper = rebuildTaskMapper;
+    }
 
     public boolean ensurePostIndex() {
+        RebuildGate rebuildGate = rebuildGate();
+        if (rebuildGate.blocksElasticsearch()) {
+            indexReady.set(false);
+            return false;
+        }
         if (!elasticsearch.enabled() || !elasticsearch.available()) {
             indexReady.set(false);
             return false;
         }
-        if (indexReady.get() && elasticsearch.indexExists(elasticsearch.postIndex())) {
-            return true;
+        if (rebuildInProgress.get()) {
+            indexReady.set(false);
+            return false;
         }
-        if (elasticsearch.indexExists(elasticsearch.postIndex())) {
+        boolean exists = elasticsearch.indexExists(elasticsearch.postIndex());
+        if (exists) {
+            if (indexReady.get()) {
+                boolean complete = hasCompleteDomainCoverage();
+                indexReady.set(complete);
+                return complete;
+            }
             boolean mapped = ensureCommunityFieldMapping();
-            indexReady.set(mapped);
-            return mapped;
+            boolean complete = mapped && hasCompleteDomainCoverage();
+            indexReady.set(complete);
+            return complete;
         }
         boolean created = elasticsearch.createIndex(elasticsearch.postIndex(), postIndexMapping());
-        indexReady.set(created);
-        return created;
+        domainCoverageCheckedAt = 0L;
+        boolean complete = created && hasCompleteDomainCoverage();
+        indexReady.set(complete);
+        return complete;
     }
 
     public boolean indexPost(Long postId) {
@@ -109,6 +161,7 @@ public class PostSearchIndexer {
     }
 
     public Map<String, Object> status() {
+        RebuildGate rebuildGate = rebuildGate();
         boolean enabled = elasticsearch.enabled();
         boolean available = elasticsearch.available();
         boolean ensured = enabled && available && ensurePostIndex();
@@ -135,6 +188,9 @@ public class PostSearchIndexer {
         status.put("fallbackMode", fallback.mode());
         status.put("fallbackScanLimit", MYSQL_FALLBACK_MAX_SCAN);
         status.put("fallbackSchemaReady", fallback.schemaReady());
+        status.put("rebuildStatus", rebuildGate.status());
+        status.put("rebuildTaskId", rebuildGate.taskId());
+        status.put("rebuildBlocksElasticsearch", rebuildGate.blocksElasticsearch());
         status.put("message", searchStatusMessage(indexUsable, fallback));
         status.put("diagnosticMessage", searchStatusDiagnostic(indexUsable, fallback));
         if (!indexUsable) {
@@ -144,13 +200,15 @@ public class PostSearchIndexer {
     }
 
     public SearchStatusDTO publicStatus() {
+        RebuildGate rebuildGate = rebuildGate();
         boolean enabled = elasticsearch.enabled();
         boolean available = elasticsearch.available();
         boolean exists = available && elasticsearch.indexExists(elasticsearch.postIndex());
-        if (!exists) {
+        if (!exists || rebuildGate.blocksElasticsearch()) {
             indexReady.set(false);
         }
-        boolean indexUsable = enabled && available && indexReady.get() && exists;
+        boolean indexUsable = enabled && available && indexReady.get() && exists
+                && !rebuildGate.blocksElasticsearch();
         DbFallbackStatus fallback = dbFallbackStatus();
         boolean publicSearchAvailable = indexUsable || fallback.available();
         boolean publicSearchDegraded = publicSearchAvailable && !indexUsable;
@@ -238,65 +296,184 @@ public class PostSearchIndexer {
     private record DbFallbackStatus(boolean available, boolean schemaReady, String mode) {
     }
 
+    private RebuildGate rebuildGate() {
+        if (rebuildTaskMapper == null) {
+            return new RebuildGate("NOT_CONFIGURED", null, false);
+        }
+        try {
+            if (rebuildTaskMapper.tableExists() <= 0) {
+                return new RebuildGate("TABLE_UNAVAILABLE", null, true);
+            }
+            SearchIndexRebuildTaskPO latest = rebuildTaskMapper.findLatest();
+            if (latest == null) {
+                return new RebuildGate("NONE", null, false);
+            }
+            String status = latest.getTaskStatus();
+            boolean blocked = "PENDING".equals(status)
+                    || "RUNNING".equals(status)
+                    || "FAILED".equals(status);
+            return new RebuildGate(status, latest.getTaskId(), blocked);
+        } catch (RuntimeException e) {
+            log.warn("search rebuild readiness gate failed closed: {}", e.getMessage());
+            return new RebuildGate("CHECK_FAILED", null, true);
+        }
+    }
+
+    private record RebuildGate(String status, String taskId, boolean blocksElasticsearch) {
+    }
+
     public Map<String, Object> rebuildAll() {
-        if (!ensurePostIndex()) {
+        return rebuildAll(progress -> true);
+    }
+
+    public Map<String, Object> rebuildAll(RebuildProgressListener progressListener) {
+        RebuildProgressListener listener = progressListener == null ? progress -> true : progressListener;
+        if (!elasticsearch.enabled() || !elasticsearch.available()) {
             return Map.of(
                     "accepted", false,
                     "indexed", 0,
                     "failed", 0,
+                    "total", 0,
+                    "checkpointId", 0L,
                     "message", "Elasticsearch is unavailable or index creation failed"
             );
         }
+        if (!rebuildInProgress.compareAndSet(false, true)) {
+            return Map.of(
+                    "accepted", false,
+                    "indexed", 0,
+                    "failed", 0,
+                    "total", 0,
+                    "checkpointId", 0L,
+                    "message", "Elasticsearch index rebuild is already in progress"
+            );
+        }
+        boolean rebuildComplete = false;
         int indexed = 0;
         int failed = 0;
         int total = 0;
         long lastId = 0L;
-        while (true) {
-            List<PostPO> posts = postMapper.selectPublicPostsForIndexAfterId(lastId, REBUILD_BATCH_SIZE);
-            if (posts == null || posts.isEmpty()) {
-                break;
+        try {
+            indexReady.set(false);
+            domainCoverageComplete = false;
+            domainCoverageCheckedAt = 0L;
+            if (elasticsearch.indexExists(elasticsearch.postIndex())
+                    && !elasticsearch.deleteIndex(elasticsearch.postIndex())) {
+                return Map.of(
+                        "accepted", false,
+                        "indexed", 0,
+                        "failed", 0,
+                        "total", 0,
+                        "checkpointId", 0L,
+                        "message", "Elasticsearch index could not be reset"
+                );
             }
-            List<Long> postIds = posts.stream()
-                    .map(PostPO::getId)
-                    .filter(id -> id != null && id > 0)
-                    .toList();
-            Map<Long, PostExtensionPO> extensions = extensionMapper.selectBatchIds(postIds).stream()
-                    .collect(Collectors.toMap(PostExtensionPO::getPostId, extension -> extension, (left, right) -> left));
-            Map<Long, PostCounterPO> counters = counterMapper.selectBatchIds(postIds).stream()
-                    .collect(Collectors.toMap(PostCounterPO::getPostId, counter -> counter, (left, right) -> left));
-            Map<Long, List<TagDTO>> tags = selectTagsByPostIds(postIds).stream()
-                    .collect(Collectors.groupingBy(PostTagView::getPostId,
-                            Collectors.mapping(this::toTagDto, Collectors.toList())));
-            total += posts.size();
-            for (PostPO post : posts) {
-                if (post.getId() != null && post.getId() > lastId) {
-                    lastId = post.getId();
+            if (!elasticsearch.createIndex(elasticsearch.postIndex(), postIndexMapping())) {
+                return Map.of(
+                        "accepted", false,
+                        "indexed", 0,
+                        "failed", 0,
+                        "total", 0,
+                        "checkpointId", 0L,
+                        "message", "Elasticsearch index could not be created"
+                );
+            }
+            if (!listener.onProgress(new RebuildProgress(lastId, indexed, failed, total))) {
+                return rebuildFailure(indexed, failed, total, lastId, "Search rebuild worker lease was lost");
+            }
+            while (true) {
+                List<PostPO> posts = postMapper.selectPublicPostsForIndexAfterId(lastId, REBUILD_BATCH_SIZE);
+                if (posts == null || posts.isEmpty()) {
+                    break;
                 }
-                PostExtensionPO extension = extensions.get(post.getId());
-                List<TagDTO> postTags = tags.getOrDefault(post.getId(), List.of());
-                if (!isDistributableForIndex(post, extension, postTags)) {
-                    continue;
+                List<Long> postIds = posts.stream()
+                        .map(PostPO::getId)
+                        .filter(id -> id != null && id > 0)
+                        .toList();
+                Map<Long, PostExtensionPO> extensions = extensionMapper.selectBatchIds(postIds).stream()
+                        .collect(Collectors.toMap(PostExtensionPO::getPostId, extension -> extension, (left, right) -> left));
+                Map<Long, PostCounterPO> counters = counterMapper.selectBatchIds(postIds).stream()
+                        .collect(Collectors.toMap(PostCounterPO::getPostId, counter -> counter, (left, right) -> left));
+                Map<Long, List<TagDTO>> tags = selectTagsByPostIds(postIds).stream()
+                        .collect(Collectors.groupingBy(PostTagView::getPostId,
+                                Collectors.mapping(this::toTagDto, Collectors.toList())));
+                int progressInterval = 0;
+                for (PostPO post : posts) {
+                    if (post.getId() != null && post.getId() > lastId) {
+                        lastId = post.getId();
+                    }
+                    total++;
+                    PostExtensionPO extension = extensions.get(post.getId());
+                    List<TagDTO> postTags = tags.getOrDefault(post.getId(), List.of());
+                    boolean distributable = isDistributableForIndex(post, extension, postTags);
+                    if (distributable) {
+                        if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()),
+                                toDocument(post, extension, counters.get(post.getId()), postTags))) {
+                            indexed++;
+                        } else {
+                            failed++;
+                        }
+                    }
+                    progressInterval++;
+                    if (progressInterval >= 50) {
+                        if (!listener.onProgress(new RebuildProgress(lastId, indexed, failed, total))) {
+                            return rebuildFailure(indexed, failed, total, lastId,
+                                    "Search rebuild worker lease was lost");
+                        }
+                        progressInterval = 0;
+                    }
                 }
-                if (elasticsearch.indexDocument(elasticsearch.postIndex(), String.valueOf(post.getId()),
-                        toDocument(post, extension, counters.get(post.getId()), postTags))) {
-                    indexed++;
-                } else {
-                    failed++;
+                if (!listener.onProgress(new RebuildProgress(lastId, indexed, failed, total))) {
+                    return rebuildFailure(indexed, failed, total, lastId, "Search rebuild worker lease was lost");
+                }
+                if (posts.size() < REBUILD_BATCH_SIZE) {
+                    break;
                 }
             }
-            if (posts.size() < REBUILD_BATCH_SIZE) {
-                break;
+            boolean refreshed = elasticsearch.refreshIndex(elasticsearch.postIndex());
+            domainCoverageCheckedAt = 0L;
+            boolean completeDomainCoverage = refreshed && hasCompleteDomainCoverage();
+            rebuildComplete = failed == 0 && completeDomainCoverage;
+            indexReady.set(rebuildComplete);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("accepted", rebuildComplete);
+            result.put("indexed", indexed);
+            result.put("failed", failed);
+            result.put("total", total);
+            result.put("checkpointId", lastId);
+            result.put("indexName", elasticsearch.postIndex());
+            result.put("domainCoverageComplete", completeDomainCoverage);
+            if (!refreshed) {
+                result.put("message", "Elasticsearch index refresh failed; MySQL fallback remains active");
+            } else if (failed > 0) {
+                result.put("message", failed + " post documents failed to index");
+            } else if (!completeDomainCoverage) {
+                result.put("message", "Index is empty or contains unclassified legacy posts; MySQL fallback remains active");
             }
+            return result;
+        } catch (Exception ex) {
+            log.error("elasticsearch post index rebuild failed", ex);
+            return rebuildFailure(indexed, Math.max(1, failed), total, lastId,
+                    "Elasticsearch index rebuild failed; MySQL fallback remains active");
+        } finally {
+            if (!rebuildComplete) {
+                indexReady.set(false);
+                domainCoverageComplete = false;
+                domainCoverageCheckedAt = 0L;
+            }
+            rebuildInProgress.set(false);
         }
+    }
+
+    private Map<String, Object> rebuildFailure(int indexed, int failed, int total, long checkpointId, String message) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("accepted", failed == 0);
+        result.put("accepted", false);
         result.put("indexed", indexed);
         result.put("failed", failed);
         result.put("total", total);
+        result.put("checkpointId", checkpointId);
         result.put("indexName", elasticsearch.postIndex());
-        if (failed > 0) {
-            result.put("message", failed + " post documents failed to index");
-        }
+        result.put("message", message);
         return result;
     }
 
@@ -331,6 +508,7 @@ public class PostSearchIndexer {
         doc.put("postId", post.getId());
         doc.put("authorId", String.valueOf(post.getAuthorId()));
         doc.put("type", post.getPostType());
+        doc.put("domain", validDomain(ext.path("domain")));
         doc.put("title", nullToEmpty(post.getTitle()));
         doc.put("content", nullToEmpty(post.getContent()));
         doc.put("summary", summary(post.getContent()));
@@ -387,6 +565,7 @@ public class PostSearchIndexer {
         props.put("postId", Map.of("type", "long"));
         props.put("authorId", keyword);
         props.put("type", Map.of("type", "integer"));
+        props.put("domain", Map.of("type", "integer"));
         props.put("title", text);
         props.put("content", Map.of("type", "text"));
         props.put("summary", Map.of("type", "text"));
@@ -440,6 +619,7 @@ public class PostSearchIndexer {
         Map<String, Object> keyword = Map.of("type", "keyword");
         Map<String, Object> text = Map.of("type", "text", "fields", Map.of("keyword", keyword));
         Map<String, Object> props = new LinkedHashMap<>();
+        props.put("domain", Map.of("type", "integer"));
         props.put("difficulty", keyword);
         props.put("scenario", text);
         props.put("contentType", keyword);
@@ -448,6 +628,67 @@ public class PostSearchIndexer {
         props.put("tagSearchTerms", text);
         props.put("tags", Map.of("type", "nested", "properties", Map.of("synonyms", text)));
         return props;
+    }
+
+    private Integer validDomain(JsonNode value) {
+        if (value == null || !value.canConvertToInt()) {
+            return null;
+        }
+        int domain = value.asInt();
+        return domain >= Post.DOMAIN_TECH && domain <= Post.DOMAIN_INVESTMENT ? domain : null;
+    }
+
+    private boolean hasCompleteDomainCoverage() {
+        long now = System.currentTimeMillis();
+        if (now - domainCoverageCheckedAt < DOMAIN_COVERAGE_RECHECK_MS) {
+            return domainCoverageComplete;
+        }
+        domainCoverageComplete = elasticsearch.search(elasticsearch.postIndex(), Map.of(
+                        "size", 0,
+                        "track_total_hits", true,
+                        "query", Map.of("bool", Map.of(
+                                "filter", List.of(
+                                        Map.of("term", Map.of("status", "published")),
+                                        Map.of("term", Map.of("visibility", Post.VIS_PUBLIC))
+                                ),
+                                "must_not", List.of(Map.of("exists", Map.of("field", "domain")))
+                        ))
+                ))
+                .map(result -> {
+                    long missingDomainCount = result.path("hits").path("total").path("value").asLong(1L);
+                    if (missingDomainCount > 0L) {
+                        return false;
+                    }
+                    return hasAnyIndexedPublicDocument() || !hasIndexableDatabasePost();
+                })
+                .orElse(false);
+        domainCoverageCheckedAt = now;
+        return domainCoverageComplete;
+    }
+
+    private boolean hasAnyIndexedPublicDocument() {
+        return elasticsearch.search(elasticsearch.postIndex(), Map.of(
+                        "size", 0,
+                        "track_total_hits", true,
+                        "query", Map.of("bool", Map.of(
+                                "filter", List.of(
+                                        Map.of("term", Map.of("status", "published")),
+                                        Map.of("term", Map.of("visibility", Post.VIS_PUBLIC))
+                                )
+                        ))
+                ))
+                .map(result -> result.path("hits").path("total").path("value").asLong(0L) > 0L)
+                .orElse(false);
+    }
+
+    private boolean hasIndexableDatabasePost() {
+        try {
+            List<PostPO> candidates = postMapper.selectPublicPostsForIndexAfterId(0L, 1);
+            return candidates != null && !candidates.isEmpty();
+        } catch (Exception ex) {
+            log.warn("database index candidate check failed: {}", ex.getMessage());
+            return true;
+        }
     }
 
     private TagDTO toTagDto(PostTagView tag) {
@@ -544,5 +785,13 @@ public class PostSearchIndexer {
             case 3 -> "position";
             default -> "custom";
         };
+    }
+
+    @FunctionalInterface
+    public interface RebuildProgressListener {
+        boolean onProgress(RebuildProgress progress);
+    }
+
+    public record RebuildProgress(long checkpointId, int indexed, int failed, int total) {
     }
 }

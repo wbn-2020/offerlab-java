@@ -8,10 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +17,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MockInterviewAiReviewService {
     private final ObjectMapper objectMapper;
+    private final DeepseekHttpClient deepseekHttpClient;
 
     @Value("${offerlab.ai.deepseek.enabled:false}")
     private boolean enabled;
@@ -36,6 +33,10 @@ public class MockInterviewAiReviewService {
     private String allowedHosts;
     @Value("${offerlab.ai.deepseek.review-max-answer-chars:" + DeepseekSafety.DEFAULT_MAX_ANSWER_CHARS + "}")
     private int maxAnswerChars;
+    @Value("${offerlab.ai.deepseek.max-response-bytes:1048576}")
+    private int maxResponseBytes;
+    @Value("${offerlab.ai.deepseek.max-completion-tokens:2048}")
+    private int maxCompletionTokens;
     @Value("${offerlab.ai.deepseek.prompt-cost-micros-per-1k:0}")
     private long promptCostMicrosPer1k;
     @Value("${offerlab.ai.deepseek.completion-cost-micros-per-1k:0}")
@@ -61,6 +62,7 @@ public class MockInterviewAiReviewService {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("temperature", 0.2);
+        body.put("max_tokens", Math.max(128, Math.min(maxCompletionTokens, 4096)));
         body.put("response_format", Map.of("type", "json_object"));
         body.put("messages", List.of(
                 Map.of("role", "system", "content", """
@@ -73,14 +75,12 @@ public class MockInterviewAiReviewService {
                         """),
                 Map.of("role", "user", "content", prompt(answer))
         ));
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(DeepseekSafety.chatCompletionsUri(baseUrl, allowedHosts))
-                .timeout(Duration.ofMillis(timeoutMillis))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + apiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
-                .build();
-        HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+        DeepseekHttpClient.Response response = deepseekHttpClient.postJson(
+                DeepseekSafety.chatCompletionsUri(baseUrl, allowedHosts),
+                timeoutMillis,
+                apiKey,
+                objectMapper.writeValueAsString(body),
+                maxResponseBytes);
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IllegalStateException("Deepseek HTTP " + response.statusCode());
         }

@@ -43,7 +43,7 @@ class PostReportQueueActionHandlerTest {
         private String note;
 
         private CapturingPostReportService() {
-            super(null, null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null, null, null);
         }
 
         @Override

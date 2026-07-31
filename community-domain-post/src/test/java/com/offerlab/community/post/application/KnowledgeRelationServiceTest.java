@@ -17,6 +17,8 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.CommunityTopicPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
 import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
+import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelationMapper;
+import com.offerlab.community.post.knowledge.infrastructure.PostKnowledgeRelationRow;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
@@ -36,7 +38,8 @@ class KnowledgeRelationServiceTest {
                 postFacade(),
                 postMapper(),
                 topicMapper(),
-                topicTagMapper()
+                topicTagMapper(),
+                confirmedRelationMapper()
         );
 
         KnowledgeRelationGraphDTO graph = service.explore(null, null, null, 1, 8);
@@ -49,6 +52,8 @@ class KnowledgeRelationServiceTest {
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("domain_post"));
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("post_tag"));
         assertTrue(graph.getEdges().stream().map(KnowledgeRelationEdgeDTO::getRelation).toList().contains("topic_tag"));
+        assertTrue(graph.getEdges().stream().noneMatch(edge ->
+                "domain_post".equals(edge.getRelation()) && "post:102".equals(edge.getTarget())));
         assertTrue(graph.getNodes().stream().noneMatch(node -> "series".equals(node.getType())));
         assertTrue(graph.getEdges().stream().noneMatch(edge -> "series_post".equals(edge.getRelation())));
     }
@@ -59,7 +64,8 @@ class KnowledgeRelationServiceTest {
                 postFacade(),
                 postMapper(),
                 topicMapper(),
-                topicTagMapper()
+                topicTagMapper(),
+                confirmedRelationMapper()
         );
         KnowledgeRelationGraphDTO graph = service.explore(null, null, null, 1, 8);
 
@@ -86,6 +92,12 @@ class KnowledgeRelationServiceTest {
         assertTrue(overview.getAssets().stream().noneMatch(asset -> "demo".equals(asset.getPreviewSource())));
         assertTrue(overview.getAssets().stream().allMatch(asset -> List.of("active", "archived").contains(asset.getAssetStatus())));
         assertTrue(overview.getRelations().stream().map(PublicKnowledgeRelationDTO::getRelationType).toList().contains("belongs_to"));
+        assertTrue(overview.getRelations().stream().anyMatch(relation ->
+                "confirmed-post-relation:9001".equals(relation.getRelationId())
+                        && "post:101".equals(relation.getSourceAssetId())
+                        && "post:102".equals(relation.getTargetAssetId())
+                        && "APPROVED".equals(relation.getReviewStatus())
+                        && "VISIBLE".equals(relation.getVisibilityStatus())));
         assertTrue(overview.getRelations().stream().allMatch(relation -> relation.getReasonText() != null && !relation.getReasonText().isBlank()));
         assertTrue(overview.getPaths().stream().allMatch(path -> List.of("active", "archived").contains(path.getPathStatus())));
         assertTrue(overview.getPaths().stream().noneMatch(path -> "degraded".equals(path.getPathStatus())));
@@ -136,6 +148,31 @@ class KnowledgeRelationServiceTest {
                     case "toString" -> "CommunityTopicTagMapperStub";
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
+    }
+
+    private static PostKnowledgeRelationMapper confirmedRelationMapper() {
+        return (PostKnowledgeRelationMapper) Proxy.newProxyInstance(
+                PostKnowledgeRelationMapper.class.getClassLoader(),
+                new Class<?>[]{PostKnowledgeRelationMapper.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "listPublicByPostId" -> List.of(confirmedRelation());
+                    case "toString" -> "PostKnowledgeRelationMapperStub";
+                    default -> throw new UnsupportedOperationException(method.toString());
+                });
+    }
+
+    private static PostKnowledgeRelationRow confirmedRelation() {
+        PostKnowledgeRelationRow row = new PostKnowledgeRelationRow();
+        row.setId(9001L);
+        row.setSourcePostId(101L);
+        row.setTargetPostId(102L);
+        row.setRelationType("SUPPLEMENTS");
+        row.setReasonText("Adds deployment details");
+        row.setReviewStatus("APPROVED");
+        row.setVisibilityStatus("VISIBLE");
+        row.setRiskLevel("LOW");
+        row.setCreateTime(LocalDateTime.now());
+        return row;
     }
 
     private static PostPO post(Long id) {
@@ -189,7 +226,7 @@ class KnowledgeRelationServiceTest {
         return PostBriefDTO.builder()
                 .id(102L)
                 .title("Spring Cloud guide")
-                .domain(1)
+                .domain(null)
                 .tags(List.of(TagDTO.builder().id(202L).name("Spring Cloud").build()))
                 .createTime(LocalDateTime.now())
                 .build();

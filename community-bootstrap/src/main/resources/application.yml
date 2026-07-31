@@ -2,22 +2,36 @@ spring:
   application:
     name: offerlab-community
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:dev}
+    active: ${SPRING_PROFILES_ACTIVE:}
 
   datasource:
-    url: jdbc:mysql://localhost:3306/offerlab?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
-    username: offerlab
-    password: offerlab123
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
       minimum-idle: 2
 
+  flyway:
+    enabled: ${OFFERLAB_FLYWAY_ENABLED:true}
+    locations: ${OFFERLAB_FLYWAY_LOCATIONS:classpath:db/flyway/core}
+    table: ${OFFERLAB_FLYWAY_TABLE:flyway_schema_history}
+    baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}
+    baseline-version: "0"
+    baseline-description: legacy schema baseline
+    validate-on-migrate: true
+    validate-migration-naming: true
+    out-of-order: false
+    clean-disabled: true
+    connect-retries: ${OFFERLAB_FLYWAY_CONNECT_RETRIES:10}
+
   data:
     redis:
-      host: localhost
-      port: 6379
-      database: 0
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+      database: ${REDIS_DATABASE}
       timeout: 2000ms
       lettuce:
         pool:
@@ -26,7 +40,7 @@ spring:
           min-idle: 0
 
   kafka:
-    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BROKERS}
     producer:
       acks: all
       retries: 3
@@ -68,22 +82,26 @@ springdoc:
     enabled: false
 
 offerlab:
+  id:
+    snowflake:
+      worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID}
+      datacenter-id: ${OFFERLAB_SNOWFLAKE_DATACENTER_ID}
   redis:
     pubsub-enabled: ${OFFERLAB_REDIS_PUBSUB_ENABLED:true}
   jwt:
-    secret: ${JWT_SECRET:offerlab-dev-secret-key-please-change-in-prod-1234567890abcdef}
+    secret: ${JWT_SECRET}
     ttl-hours: 168
   feed:
     bigv-threshold: 1000
     inbox-capacity: 1000
     inbox-ttl-seconds: 604800
   kafka:
-    enabled: ${OFFERLAB_KAFKA_ENABLED:true}
+    enabled: ${OFFERLAB_KAFKA_ENABLED}
     listener-concurrency: ${OFFERLAB_KAFKA_LISTENER_CONCURRENCY:1}
     # Keep local single-broker development at 1; production can raise this with topic partitions.
   elasticsearch:
-    enabled: ${ELASTICSEARCH_ENABLED:true}
-    url: ${ELASTICSEARCH_URL:http://127.0.0.1:9200}
+    enabled: ${ELASTICSEARCH_ENABLED}
+    url: ${ELASTICSEARCH_URL}
     post-index: post_idx
     connect-timeout-millis: 800
     request-timeout-millis: 1500
@@ -96,3 +114,11 @@ logging:
     com.offerlab.community: ${OFFERLAB_LOG_LEVEL:INFO}
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}] %logger{36} - %msg%n"
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  flyway:
+    enabled: ${OFFERLAB_FLYWAY_ENABLED:false}

@@ -42,6 +42,7 @@ class FollowConsistencyGuardTest {
         String controller = read("src/main/java/com/offerlab/community/user/controller/UserController.java");
         String service = read("src/main/java/com/offerlab/community/user/application/UserApplicationService.java");
         String cacheService = read("src/main/java/com/offerlab/community/user/application/UserCacheService.java");
+        String contactSettingsService = read("src/main/java/com/offerlab/community/user/application/ContactRequestSettingsService.java");
 
         assertTrue(repositoryApi.contains("List<FollowCursorDTO> followingPage"), "repository must expose relation cursor rows for following page");
         assertTrue(repositoryApi.contains("List<FollowCursorDTO> followerPage"), "repository must expose relation cursor rows for follower page");
@@ -49,8 +50,9 @@ class FollowConsistencyGuardTest {
         assertTrue(facadeApi.contains("getFollowingPage"), "facade must expose following page rows including relation id");
         assertTrue(repository.contains("relationId(po.getId())"), "follow page DTO must carry relation table id");
         assertTrue(repository.contains("pageLimit(size)"), "follow repository must clamp LIMIT values before SQL suffixes");
-        assertTrue(controller.contains("toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, UserContext.get())"), "followers API must over-fetch and use relation cursor rows");
-        assertTrue(controller.contains("toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, UserContext.get())"), "following API must over-fetch and use relation cursor rows");
+        assertTrue(controller.contains("Long viewer = UserContext.get()"), "follow pages must resolve the viewer once before visibility and sanitization checks");
+        assertTrue(controller.contains("toFollowPage(userFacade.getFollowerPage(uid, cursor, limit + 1), limit, viewer)"), "followers API must over-fetch and use relation cursor rows");
+        assertTrue(controller.contains("toFollowPage(userFacade.getFollowingPage(uid, cursor, limit + 1), limit, viewer)"), "following API must over-fetch and use relation cursor rows");
         assertTrue(controller.contains("getRelationId()"), "nextCursor must come from follow relation id, not user id");
         assertTrue(controller.contains("sanitizeFollowBrief"), "follow pages must sanitize user briefs before returning them");
         assertTrue(controller.contains("userFacade.isProfileVisible(viewer, targetUid)"), "follow pages must respect profile visibility");
@@ -59,6 +61,27 @@ class FollowConsistencyGuardTest {
         assertTrue(cacheService.contains("CacheKeyBuilder.userProfile(uid)"), "user cache service must centralize user profile key eviction");
         assertTrue(service.contains("userCacheService.evictBrief(fromUid, toUid)"), "follow/unfollow must evict both users' brief caches");
         assertTrue(service.contains("userCacheService.evictBrief(uid)"), "profile and intent updates must evict the current user's brief cache");
+        assertTrue(service.contains("private final AfterCommitExecutor afterCommit;"),
+                "user mutations must reuse the shared after-commit executor");
+        assertTrue(service.contains(
+                        "afterCommit.execute(() -> userCacheService.evictBrief(uid), \"user profile cache eviction:\" + uid);"),
+                "profile cache eviction must be deferred until the profile transaction commits");
+        assertTrue(service.contains(
+                        "afterCommit.execute(() -> userCacheService.evictBrief(uid), \"user intent cache eviction:\" + uid);"),
+                "intent cache eviction must be deferred until the intent transaction commits");
+        assertTrue(service.matches(
+                        "(?s).*afterCommit\\.execute\\(\\(\\) -> userCacheService\\.evictBrief\\(fromUid, toUid\\),\\s*"
+                                + "\"follow cache eviction:\" \\+ fromUid \\+ \":\" \\+ toUid\\);.*"),
+                "follow cache eviction must be deferred until the follow transaction commits");
+        assertTrue(service.matches(
+                        "(?s).*afterCommit\\.execute\\(\\(\\) -> userCacheService\\.evictBrief\\(fromUid, toUid\\),\\s*"
+                                + "\"unfollow cache eviction:\" \\+ fromUid \\+ \":\" \\+ toUid\\);.*"),
+                "unfollow cache eviction must be deferred until the unfollow transaction commits");
+        assertTrue(contactSettingsService.contains("private final AfterCommitExecutor afterCommit;"),
+                "contact-request settings must use the shared after-commit executor");
+        assertTrue(contactSettingsService.contains(
+                        "afterCommit.execute(() -> userCacheService.evictBrief(uid),"),
+                "contact-request settings cache eviction must be deferred until commit");
     }
 
     private static String read(String path) throws Exception {

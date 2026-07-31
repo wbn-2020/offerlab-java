@@ -103,6 +103,49 @@ class ExpertCertificationServiceTest {
     }
 
     @Test
+    void reviewFailsClosedWhenAnotherReviewerAlreadyChangedTheApplication() {
+        ExpertCertificationMapperState mapperState = new ExpertCertificationMapperState(1);
+        DomainModeratorStub moderatorStub = new DomainModeratorStub();
+        moderatorStub.allowedDomains.put(domainKey(88L, Post.DOMAIN_CAREER), true);
+        AdminAuditStub auditStub = new AdminAuditStub();
+        ExpertCertificationService service = newService(
+                mapperState,
+                eligibleCareerPosts(13L),
+                moderatorStub,
+                auditStub,
+                new MigrationCheckStub(true));
+        ExpertCertificationApplicantApplicationDTO created = service.submit(careerApplyCmd(), 13L);
+        mapperState.nextReviewIfStatusResult = 0;
+
+        ExpertCertificationReviewCmd reviewCmd = new ExpertCertificationReviewCmd();
+        reviewCmd.setApproved(true);
+        reviewCmd.setNote("stale reviewer");
+
+        BizException ex = assertThrows(BizException.class,
+                () -> service.review(created.getId(), reviewCmd, 88L));
+
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), ex.getCode());
+        assertEquals(ExpertCertificationService.STATUS_SUBMITTED,
+                mapperState.applicationsById.get(created.getId()).getStatus());
+        assertTrue(auditStub.records.isEmpty(), "a rejected CAS write must not create a contradictory audit record");
+    }
+
+    @Test
+    void revokeFailsClosedWhenAnotherOperatorAlreadyChangedTheApplication() {
+        ExpertCertificationMapperState mapperState = new ExpertCertificationMapperState(1);
+        ExpertCertificationService service = newService(mapperState, eligibleCareerPosts(14L));
+        ExpertCertificationApplicantApplicationDTO created = service.submit(careerApplyCmd(), 14L);
+        mapperState.nextRevokeIfStatusResult = 0;
+
+        BizException ex = assertThrows(BizException.class,
+                () -> service.revoke(created.getId(), "stale revoke", 14L));
+
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), ex.getCode());
+        assertEquals(ExpertCertificationService.STATUS_SUBMITTED,
+                mapperState.applicationsById.get(created.getId()).getStatus());
+    }
+
+    @Test
     void submitFailsWhenNamedLockCannotBeAcquired() {
         ExpertCertificationMapperState mapperState = new ExpertCertificationMapperState(1);
         mapperState.nextLockResult = 0;
@@ -137,7 +180,7 @@ class ExpertCertificationServiceTest {
         po.setDomain(Post.DOMAIN_CAREER);
         po.setStatus(ExpertCertificationService.STATUS_REVOKED);
         po.setEvidenceSummary("career pilot");
-        po.setEvidenceLinksJson("[\"https://example.test/post/3001\"]");
+        po.setEvidenceLinksJson("[\"https://example.com/post/3001\"]");
         po.setEligibilityPassed(1);
         po.setEligibilitySummary("eligible");
         po.setRiskAcknowledged(0);
@@ -176,7 +219,7 @@ class ExpertCertificationServiceTest {
         po.setDomain(Post.DOMAIN_CAREER);
         po.setStatus(ExpertCertificationService.STATUS_REJECTED);
         po.setEvidenceSummary("career pilot");
-        po.setEvidenceLinksJson("[\"https://example.test/post/3002\"]");
+        po.setEvidenceLinksJson("[\"https://example.com/post/3002\"]");
         po.setEligibilityPassed(1);
         po.setEligibilitySummary("eligible");
         po.setRiskAcknowledged(0);
@@ -260,6 +303,24 @@ class ExpertCertificationServiceTest {
                         state.applicationsById.put(po.getId(), clone(po));
                         yield 1;
                     }
+                    case "reviewIfStatus" -> state.reviewIfStatus(
+                            (Long) args[0],
+                            (Integer) args[1],
+                            (Integer) args[2],
+                            (Long) args[3],
+                            (String) args[4],
+                            (LocalDateTime) args[5],
+                            (LocalDateTime) args[6]
+                    );
+                    case "revokeIfStatus" -> state.revokeIfStatus(
+                            (Long) args[0],
+                            (Integer) args[1],
+                            (Integer) args[2],
+                            (Long) args[3],
+                            (String) args[4],
+                            (LocalDateTime) args[5],
+                            (LocalDateTime) args[6]
+                    );
                     case "toString" -> "ExpertCertificationMapperStub";
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
@@ -284,7 +345,7 @@ class ExpertCertificationServiceTest {
         ExpertCertificationApplyCmd cmd = new ExpertCertificationApplyCmd();
         cmd.setDomain(Post.DOMAIN_INVESTMENT);
         cmd.setEvidenceSummary("three public investment education posts");
-        cmd.setEvidenceLinks(List.of("https://example.test/post/1", "https://example.test/post/2"));
+        cmd.setEvidenceLinks(List.of("https://example.com/post/1", "https://example.com/post/2"));
         cmd.setRiskAcknowledged(riskAcknowledged);
         return cmd;
     }
@@ -293,7 +354,7 @@ class ExpertCertificationServiceTest {
         ExpertCertificationApplyCmd cmd = new ExpertCertificationApplyCmd();
         cmd.setDomain(Post.DOMAIN_CAREER);
         cmd.setEvidenceSummary("career coaching pilot");
-        cmd.setEvidenceLinks(List.of("https://example.test/post/9"));
+        cmd.setEvidenceLinks(List.of("https://example.com/post/9"));
         cmd.setRiskAcknowledged(false);
         return cmd;
     }
@@ -367,6 +428,8 @@ class ExpertCertificationServiceTest {
         private final List<String> releasedLocks = new ArrayList<>();
         private Integer nextLockResult = 1;
         private Integer nextReleaseResult = 1;
+        private Integer nextReviewIfStatusResult;
+        private Integer nextRevokeIfStatusResult;
 
         private ExpertCertificationMapperState(int tableExists) {
             this.tableExists = tableExists;
@@ -400,6 +463,42 @@ class ExpertCertificationServiceTest {
                     .limit(limit == null ? 20 : limit)
                     .map(ExpertCertificationServiceTest::clone)
                     .toList();
+        }
+
+        private int reviewIfStatus(Long applicationId, Integer expectedStatus, Integer nextStatus,
+                                   Long reviewerUid, String reviewNote, LocalDateTime reviewTime,
+                                   LocalDateTime updateTime) {
+            if (nextReviewIfStatusResult != null) {
+                return nextReviewIfStatusResult;
+            }
+            ExpertCertificationApplicationPO po = applicationsById.get(applicationId);
+            if (po == null || !Objects.equals(po.getStatus(), expectedStatus)) {
+                return 0;
+            }
+            po.setStatus(nextStatus);
+            po.setReviewerUid(reviewerUid);
+            po.setReviewNote(reviewNote);
+            po.setReviewTime(reviewTime);
+            po.setUpdateTime(updateTime);
+            return 1;
+        }
+
+        private int revokeIfStatus(Long applicationId, Integer expectedStatus, Integer nextStatus,
+                                   Long revokedBy, String revokeNote, LocalDateTime revokedTime,
+                                   LocalDateTime updateTime) {
+            if (nextRevokeIfStatusResult != null) {
+                return nextRevokeIfStatusResult;
+            }
+            ExpertCertificationApplicationPO po = applicationsById.get(applicationId);
+            if (po == null || !Objects.equals(po.getStatus(), expectedStatus)) {
+                return 0;
+            }
+            po.setStatus(nextStatus);
+            po.setRevokedBy(revokedBy);
+            po.setRevokeNote(revokeNote);
+            po.setRevokedTime(revokedTime);
+            po.setUpdateTime(updateTime);
+            return 1;
         }
     }
 

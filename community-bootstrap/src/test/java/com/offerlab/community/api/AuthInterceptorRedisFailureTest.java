@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AuthInterceptorRedisFailureTest {
 
     @Test
-    void validJwtStillPassesProtectedApiWhenRedisRevocationCheckFails() throws Exception {
+    void protectedApiFailsClosedWhenRedisRevocationCheckFails() throws Exception {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.hasKey(anyString())).thenThrow(new RedisConnectionFailureException("redis down"));
 
@@ -39,9 +39,8 @@ class AuthInterceptorRedisFailureTest {
 
         mvc.perform(get("/api/v1/protected/probe")
                         .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(0))
-                .andExpect(jsonPath("$.data.uid").value(77));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorCode.UNAUTHORIZED.getCode()));
     }
 
     @Test

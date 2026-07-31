@@ -6,6 +6,7 @@ import com.offerlab.community.interaction.api.event.PostLikedEvent;
 import com.offerlab.community.post.api.event.OperationCurationSelectedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.api.event.PublicPostViewedEvent;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.user.api.event.UserRegisteredEvent;
 import lombok.RequiredArgsConstructor;
@@ -100,7 +101,8 @@ public class GrowthEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPostPublished(PostPublishedEvent event) {
-        if (event == null || event.getAuthorId() == null || event.getPostId() == null) {
+        if (event == null || event.getAuthorId() == null || event.getPostId() == null
+                || !isPublicPublished(event)) {
             return;
         }
         Map<String, Object> contribution = postMapper.aggregatePublicContributionByAuthor(event.getAuthorId());
@@ -115,6 +117,11 @@ public class GrowthEventListener {
                 "POST",
                 String.valueOf(event.getPostId()),
                 "post.publish");
+    }
+
+    private boolean isPublicPublished(PostPublishedEvent event) {
+        return Integer.valueOf(Post.VIS_PUBLIC).equals(event.getVisibility())
+                && Integer.valueOf(Post.STATUS_PUBLISHED).equals(event.getPostStatus());
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

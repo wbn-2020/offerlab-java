@@ -5,9 +5,17 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.moderation.ContentModerationSourceAuthorizationHandler;
+import com.offerlab.community.infra.moderation.ContentModerationService;
+import com.offerlab.community.infra.moderation.ModerationKeywordHit;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
+import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
+import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.review.ReviewQueueItemCommand;
+import com.offerlab.community.infra.review.ReviewQueueReopenRequestedEvent;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
+import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.event.PostDeletedEvent;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
@@ -22,6 +30,7 @@ import com.offerlab.community.post.infrastructure.persistence.po.TagPO;
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,7 +50,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class PostApplicationService {
+public class PostApplicationService implements ContentModerationSourceAuthorizationHandler {
+
+    static final String PENDING_REVIEW_SOURCE_TYPE = "POST_PENDING_REVIEW";
+
+    private static final int MAX_PUBLIC_UPDATE_SUMMARY_LEN = 500;
+    private static final int MAX_IMPACT_SCOPE_LEN = 255;
+    private static final int MAX_RESPONDED_SUGGESTION_IDS = 100;
 
     private final PostRepository postRepo;
     private final PostCounterMapper counterMapper;
@@ -53,23 +68,28 @@ public class PostApplicationService {
     private final PostVersionHistoryService versionHistoryService;
     private final PostPublishQualityValidator qualityValidator;
     private final AfterCommitExecutor afterCommit;
-    private final CommunityTopicService communityTopicService;
+    private final CommunityTopicNotificationTargetService communityTopicNotificationTargetService;
     private final MigrationCheckService migrationCheckService;
     private final DomainConfigService domainConfigService;
+    private final ContentModerationService contentModerationService;
+    private final MultiLevelCache<PostDTO> postDetailCache;
+    private final DomainModeratorService domainModeratorService;
+    private final ApplicationEventPublisher springEvents;
 
     @Transactional
     public Long publish(PostCreateCmd cmd) {
-        Integer domain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), Post.DOMAIN_TECH);
+        Integer domain = requirePublishDomain(cmd.getDomain());
         domainConfigService.requireDomainEnabled(domain);
         PostPublishQualityValidator.ValidatedPostInput input = qualityValidator.validate(
                 cmd.getPostType(), cmd.getTitle(), cmd.getContent(), cmd.getExtJson(), cmd.getTagIds(), cmd.getTagNames());
-        long id = idGen.nextId();
+        long id = cmd.getPostId() == null || cmd.getPostId() <= 0 ? idGen.nextId() : cmd.getPostId();
         List<Long> resolvedTagIds = resolveTagIds(input.tagIds(), input.tagNames());
         requireResolvedTagCount(input.postType(), resolvedTagIds);
         String enrichedExtJson = mergeAnonymousToExtJson(
                 mergeDomainToExtJson(input.extJson(), domain), domain, cmd.getAnonymous());
-        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired())
-                || domainConfigService.reviewRequiredForPublish(domain);
+        boolean policyReviewRequired = domainConfigService.reviewRequiredForPublish(domain);
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired()) || policyReviewRequired;
+        boolean keywordReviewRequired = Boolean.TRUE.equals(cmd.getKeywordReviewRequired());
         Post post = Post.builder()
                 .id(id)
                 .authorId(cmd.getAuthorId())
@@ -87,31 +107,69 @@ public class PostApplicationService {
         counterMapper.initIfAbsent(id);
         syncTags(id, post.getTagIds());
 
-        if (!reviewRequired) {
-            events.publish(PostPublishedEvent.builder()
-                    .postId(id)
-                    .authorId(cmd.getAuthorId())
-                    .title(input.title())
-                    .content(input.content())
-                    .visibility(post.getVisibility())
-                    .postStatus(post.getPostStatus())
-                    .domain(post.getDomain())
-                    .timestamp(Instant.now().toEpochMilli())
-                    .tagIds(resolvedTagIds)
-                    .topicNotificationTargets(communityTopicService.notificationTargetsForPost(resolvedTagIds, cmd.getAuthorId()))
-                    .build());
+        if (reviewRequired) {
+            if (!keywordReviewRequired) {
+                enqueuePendingPostReview(post, pendingReviewReason(post, policyReviewRequired));
+            }
+        } else {
+            publishPostPublishedEvent(post, resolvedTagIds);
         }
         return id;
     }
 
     @Transactional
-    public void update(PostUpdateCmd cmd) {
+    public void resolveModerationHit(Long hitId, Long reviewerUid, boolean approved, String note) {
+        ModerationKeywordHit hit = contentModerationService.findKeywordHit(hitId);
+        if (hit == null || !ContentModerationService.SCOPE_POST.equalsIgnoreCase(hit.getScope())
+                || !ContentModerationService.SOURCE_POST.equalsIgnoreCase(hit.getSourceType())
+                || hit.getSourceId() == null || hit.getSourceId() <= 0) {
+            return;
+        }
+        Post post = postRepo.findById(hit.getSourceId())
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        requireIndependentReviewer(post, reviewerUid);
+        if (!Objects.equals(post.getPostStatus(), Post.STATUS_REVIEWING)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        Integer nextStatus = approved ? Post.STATUS_PUBLISHED : Post.STATUS_TAKEN_DOWN;
+        boolean updated = postRepo.updateStatusIfCurrent(
+                post.getId(), Post.STATUS_REVIEWING, nextStatus, post.getVersion());
+        if (!updated) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        post.setPostStatus(nextStatus);
+        if (approved) {
+            publishPostPublishedEvent(post, currentTagIds(post.getId()));
+        }
+        evictPostDetailAfterCommit(post.getId());
+        contentModerationService.reviewKeywordHit(hitId, approved ? "APPROVED" : "REJECTED", reviewerUid, note);
+    }
+
+    @Transactional
+    public boolean update(PostUpdateCmd cmd) {
         Post post = postRepo.findById(cmd.getPostId())
                 .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
         if (!post.getAuthorId().equals(cmd.getOperatorUid())) {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
-        Integer nextDomain = resolveRequestedDomain(cmd.getDomain(), cmd.getExtJson(), post.getDomain());
+        requireEditableStatus(post);
+        String publicUpdateSummary = normalizeOptionalUpdateText(
+                cmd.getPublicUpdateSummary(), MAX_PUBLIC_UPDATE_SUMMARY_LEN,
+                "publicUpdateSummary", "公开更新摘要不能超过 500 个字符");
+        String impactScope = normalizeOptionalUpdateText(
+                cmd.getImpactScope(), MAX_IMPACT_SCOPE_LEN,
+                "impactScope", "影响范围不能超过 255 个字符");
+        List<Long> respondedSuggestionIds = normalizeRespondedSuggestionIds(cmd.getRespondedSuggestionIds());
+        if (!respondedSuggestionIds.isEmpty() && publicUpdateSummary == null) {
+            throw PostPublishQualityValidator.fieldError(
+                    "publicUpdateSummary", "处理内容建议时必须提供公开更新摘要");
+        }
+        if (impactScope != null && publicUpdateSummary == null) {
+            throw PostPublishQualityValidator.fieldError(
+                    "publicUpdateSummary", "填写影响范围时必须提供公开更新摘要");
+        }
+        Integer nextDomain = cmd.getDomain() == null ? requireDomain(post.getDomain()) : requireDomain(cmd.getDomain());
         domainConfigService.requireDomainEnabled(nextDomain);
         boolean tagsProvided = cmd.getTagIds() != null || cmd.getTagNames() != null;
         List<Long> existingTagIds = currentTagIds(post.getId());
@@ -132,8 +190,12 @@ public class PostApplicationService {
                 mergeDomainToExtJson(input.extJson(), nextDomain), nextDomain, cmd.getAnonymous());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
+        boolean forceVersionSnapshot = !respondedSuggestionIds.isEmpty()
+                || publicUpdateSummary != null
+                || impactScope != null;
         versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
-                input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided);
+                input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided,
+                publicUpdateSummary, impactScope, forceVersionSnapshot);
 
         post.setVisibility(nextVisibility);
         post.setExtJson(enrichedExtJson);
@@ -141,23 +203,85 @@ public class PostApplicationService {
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
-        if (Boolean.TRUE.equals(cmd.getReviewRequired())
-                || domainConfigService.reviewRequiredForPublish(nextDomain)) {
+        boolean policyReviewRequired = domainConfigService.reviewRequiredForPublish(nextDomain);
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired()) || policyReviewRequired;
+        boolean keywordReviewRequired = Boolean.TRUE.equals(cmd.getKeywordReviewRequired());
+        if (reviewRequired) {
             post.setPostStatus(Post.STATUS_REVIEWING);
         }
-        postRepo.update(post);
+        if (!postRepo.update(post)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
         if (tagsProvided) {
             syncTags(post.getId(), resolvedTagIds);
         }
+        if (reviewRequired && !keywordReviewRequired) {
+            enqueuePendingPostReview(post, pendingReviewReason(post, policyReviewRequired));
+        }
+        boolean includeEventContent = post.getPostStatus() != null
+                && post.getPostStatus() == Post.STATUS_PUBLISHED
+                && (post.getVisibility() == null || post.getVisibility() == Post.VIS_PUBLIC);
         events.publish(PostUpdatedEvent.builder()
                 .postId(post.getId())
                 .authorId(post.getAuthorId())
-                .title(post.getTitle())
-                .content(post.getContent())
+                .title(includeEventContent ? post.getTitle() : null)
+                .content(includeEventContent ? post.getContent() : null)
                 .visibility(post.getVisibility())
                 .postStatus(post.getPostStatus())
+                .resultVersion(post.getVersion())
+                .respondedSuggestionIds(respondedSuggestionIds)
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
+        return Objects.equals(post.getPostStatus(), Post.STATUS_REVIEWING);
+    }
+
+    @Override
+    public boolean supports(String scope, String sourceType) {
+        return ContentModerationService.SCOPE_POST.equalsIgnoreCase(scope)
+                && ContentModerationService.SOURCE_POST.equalsIgnoreCase(sourceType);
+    }
+
+    @Override
+    public void requireAuthorized(Long uid, Long sourceId) {
+        if (sourceId == null || sourceId <= 0) {
+            return;
+        }
+        Post post = postRepo.findById(sourceId)
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        if (!Objects.equals(post.getAuthorId(), uid)) {
+            throw new BizException(ErrorCode.FORBIDDEN);
+        }
+    }
+
+    @Transactional
+    public void resolvePendingPostReview(Long postId, Long reviewerUid, boolean approved, String note) {
+        resolvePendingPostReview(postId, reviewerUid, approved, note, null);
+    }
+
+    @Transactional
+    public void resolvePendingPostReview(Long postId, Long reviewerUid, boolean approved, String note,
+                                         Integer expectedVersion) {
+        Post post = postRepo.findById(postId)
+                .orElseThrow(() -> new BizException(ErrorCode.POST_NOT_FOUND));
+        domainModeratorService.requireModerateDomain(reviewerUid, post.getDomain());
+        requireIndependentReviewer(post, reviewerUid);
+        if (expectedVersion != null && !Objects.equals(post.getVersion(), expectedVersion)) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "帖子内容已更新，请重新预览后审核");
+        }
+        if (!Objects.equals(post.getPostStatus(), Post.STATUS_REVIEWING)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        Integer nextStatus = approved ? Post.STATUS_PUBLISHED : Post.STATUS_TAKEN_DOWN;
+        boolean updated = postRepo.updateStatusIfCurrent(
+                post.getId(), Post.STATUS_REVIEWING, nextStatus, post.getVersion());
+        if (!updated) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        post.setPostStatus(nextStatus);
+        if (approved) {
+            publishPostPublishedEvent(post, currentTagIds(post.getId()));
+        }
+        evictPostDetailAfterCommit(post.getId());
     }
 
     @Transactional
@@ -173,6 +297,7 @@ public class PostApplicationService {
                 .authorId(post.getAuthorId())
                 .timestamp(Instant.now().toEpochMilli())
                 .build());
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post counter eviction:" + postId);
     }
 
     public Post getOrThrow(Long postId) {
@@ -181,7 +306,7 @@ public class PostApplicationService {
 
     public void incrView(Long postId) {
         counterMapper.incrView(postId, 1);
-        afterCommit.execute(() -> postCounterRedis.incrView(postId, 1), "post view counter:" + postId);
+        afterCommit.execute(() -> postCounterRedis.evict(postId), "post view counter invalidation:" + postId);
     }
 
     private String mergeDomainToExtJson(String extJson, Integer domain) {
@@ -241,29 +366,9 @@ public class PostApplicationService {
         return null;
     }
 
-    private Integer resolveRequestedDomain(Integer explicitDomain, String extJson, Integer fallbackDomain) {
-        if (explicitDomain != null) {
-            return requireDomain(explicitDomain);
-        }
-        Integer extDomain = readDomainFromExtJson(extJson);
-        if (PostDomain.isValid(extDomain)) {
-            return extDomain;
-        }
-        return defaultDomain(fallbackDomain);
-    }
-
-    private Integer readDomainFromExtJson(String extJson) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            return readDomain(readObjectExtJson(mapper, extJson));
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private Integer defaultDomain(Integer domain) {
+    private Integer requirePublishDomain(Integer domain) {
         if (domain == null) {
-            return Post.DOMAIN_TECH;
+            throw PostPublishQualityValidator.fieldError("domain", "请选择频道");
         }
         return requireDomain(domain);
     }
@@ -273,6 +378,34 @@ public class PostApplicationService {
             return domain;
         }
         throw PostPublishQualityValidator.fieldError("domain", "领域不存在或已下线");
+    }
+
+    private String normalizeOptionalUpdateText(String value, int maxLength, String field, String message) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.length() > maxLength) {
+            throw PostPublishQualityValidator.fieldError(field, message);
+        }
+        return normalized;
+    }
+
+    private List<Long> normalizeRespondedSuggestionIds(List<Long> suggestionIds) {
+        if (suggestionIds == null || suggestionIds.isEmpty()) {
+            return List.of();
+        }
+        if (suggestionIds.size() > MAX_RESPONDED_SUGGESTION_IDS) {
+            throw PostPublishQualityValidator.fieldError(
+                    "respondedSuggestionIds", "一次最多关联 100 条建议");
+        }
+        for (Long suggestionId : suggestionIds) {
+            if (suggestionId == null || suggestionId <= 0) {
+                throw PostPublishQualityValidator.fieldError(
+                        "respondedSuggestionIds", "建议 ID 必须为正整数");
+            }
+        }
+        return suggestionIds.stream().distinct().toList();
     }
 
     private List<Long> resolveTagIds(List<Long> tagIds, List<String> tagNames) {
@@ -340,6 +473,85 @@ public class PostApplicationService {
                 .toList();
     }
 
+    private void enqueuePendingPostReview(Post post, String reason) {
+        String riskLevel = domainConfigService.riskLevelForDomain(post.getDomain());
+        if (Objects.equals(post.getDomain(), Post.DOMAIN_INVESTMENT)) {
+            riskLevel = "high";
+        }
+        String domainName = domainDisplayName(post.getDomain());
+        String title = post.getTitle() == null || post.getTitle().isBlank()
+                ? "帖子待审核 " + post.getId()
+                : "帖子待审核：" + post.getTitle();
+        String summary = "频道：" + domainName
+                + " / 触发原因：" + reason
+                + " / 内容：" + reviewContentSummary(post.getContent());
+        springEvents.publishEvent(new ReviewQueueReopenRequestedEvent(new ReviewQueueItemCommand(
+                PENDING_REVIEW_SOURCE_TYPE,
+                post.getId(),
+                title,
+                summary,
+                riskLevel,
+                post.getAuthorId(),
+                reviewPriority(riskLevel),
+                "{\"postId\":" + post.getId()
+                        + ",\"domain\":" + post.getDomain()
+                        + ",\"version\":" + (post.getVersion() == null ? 0 : post.getVersion()) + "}",
+                "post pending review"
+        )));
+    }
+
+    private String pendingReviewReason(Post post, boolean policyReviewRequired) {
+        if (policyReviewRequired) {
+            return domainDisplayName(post.getDomain()) + "频道发布策略要求人工审核";
+        }
+        return "调用方要求人工审核";
+    }
+
+    private String domainDisplayName(Integer domain) {
+        return PostDomain.isValid(domain) ? PostDomain.fromCode(domain).getDisplayName() : "未标注频道";
+    }
+
+    private int reviewPriority(String riskLevel) {
+        return switch (riskLevel == null ? "" : riskLevel.toLowerCase()) {
+            case "high" -> 80;
+            case "medium" -> 60;
+            default -> 50;
+        };
+    }
+
+    private String reviewContentSummary(String content) {
+        String normalized = content == null ? "" : content.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 600 ? normalized : normalized.substring(0, 600);
+    }
+
+    private void requireIndependentReviewer(Post post, Long reviewerUid) {
+        if (post != null && Objects.equals(post.getAuthorId(), reviewerUid)) {
+            throw new BizException(ErrorCode.FORBIDDEN.getCode(), "帖子作者不能审核自己的内容");
+        }
+    }
+
+    private void publishPostPublishedEvent(Post post, List<Long> tagIds) {
+        events.publish(PostPublishedEvent.builder()
+                .postId(post.getId())
+                .authorId(post.getAuthorId())
+                .title(post.getTitle())
+                .content(post.getContent())
+                .visibility(post.getVisibility())
+                .postStatus(post.getPostStatus())
+                .domain(post.getDomain())
+                .timestamp(Instant.now().toEpochMilli())
+                .tagIds(tagIds)
+                .topicNotificationTargets(topicNotificationTargets(post, tagIds))
+                .build());
+    }
+
+    private void evictPostDetailAfterCommit(Long postId) {
+        afterCommit.execute(() -> {
+            postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
+            postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        }, "post review detail eviction:" + postId);
+    }
+
     private List<com.offerlab.community.post.api.dto.TagDTO> tagsByIds(List<Long> tagIds) {
         if (tagIds == null || tagIds.isEmpty()) {
             return List.of();
@@ -381,7 +593,7 @@ public class PostApplicationService {
             return List.of();
         }
         return migrationCheckService.tagGovernanceReady()
-                ? tagMapper.selectByIds(tagIds)
+                ? tagMapper.selectActiveByIds(tagIds)
                 : tagMapper.selectByIdsCompat(tagIds);
     }
 
@@ -409,5 +621,20 @@ public class PostApplicationService {
         } else {
             tagMapper.insertIgnoreNameCompat(id, name, tagType);
         }
+    }
+
+    private static void requireEditableStatus(Post post) {
+        Integer status = post == null ? null : post.getPostStatus();
+        if (!Objects.equals(status, Post.STATUS_PUBLISHED) && !Objects.equals(status, Post.STATUS_DRAFT)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+    }
+
+    private List<PostPublishedEvent.TopicNotificationTarget> topicNotificationTargets(Post post, List<Long> tagIds) {
+        if (post == null || !Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)
+                || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)) {
+            return List.of();
+        }
+        return communityTopicNotificationTargetService.targetsForPost(tagIds, post.getExtJson(), post.getAuthorId());
     }
 }

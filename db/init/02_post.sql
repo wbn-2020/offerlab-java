@@ -1,7 +1,6 @@
 -- 02_post.sql
 -- 内容域：帖子、扩展信息、标签
 SET NAMES utf8mb4;
-USE offerlab;
 
 DROP TABLE IF EXISTS t_post_main;
 CREATE TABLE t_post_main (
@@ -32,14 +31,14 @@ CREATE TABLE t_post_extension (
     position        VARCHAR(64)  GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(ext_json, '$.position'))) VIRTUAL,
     years_of_exp    INT          GENERATED ALWAYS AS (JSON_EXTRACT(ext_json, '$.yearsOfExp')) VIRTUAL,
     interview_result TINYINT     GENERATED ALWAYS AS (JSON_EXTRACT(ext_json, '$.interviewResult')) VIRTUAL,
-    domain          TINYINT      GENERATED ALWAYS AS (CASE JSON_UNQUOTE(JSON_EXTRACT(ext_json, '$.domain')) WHEN '2' THEN 2 WHEN '3' THEN 3 WHEN '4' THEN 4 WHEN '5' THEN 5 ELSE 1 END) VIRTUAL,
+    domain          TINYINT      GENERATED ALWAYS AS (CASE JSON_UNQUOTE(JSON_EXTRACT(ext_json, '$.domain')) WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN '3' THEN 3 WHEN '4' THEN 4 WHEN '5' THEN 5 ELSE NULL END) VIRTUAL,
     ext_json        JSON         NOT NULL,
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     KEY idx_company (company),
     KEY idx_position (position),
     KEY idx_company_result (company, interview_result),
     KEY idx_post_extension_domain_post (domain, post_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子扩展';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙鎵╁睍';
 
 DROP TABLE IF EXISTS t_tag;
 CREATE TABLE t_tag (
@@ -48,7 +47,7 @@ CREATE TABLE t_tag (
     tag_type        TINYINT      NOT NULL COMMENT '1技术栈 2公司 3岗位 4自定义',
     use_count       BIGINT       NOT NULL DEFAULT 0,
     is_official     TINYINT      NOT NULL DEFAULT 0,
-    tag_status      TINYINT      NOT NULL DEFAULT 1 COMMENT '1启用 0禁用/合并',
+    tag_status      TINYINT      NOT NULL DEFAULT 1 COMMENT '1鍚敤 0绂佺敤/鍚堝苟',
     recommended     TINYINT      NOT NULL DEFAULT 0 COMMENT '1推荐标签',
     synonyms        VARCHAR(512) NULL COMMENT '同义词，逗号分隔',
     merge_target_id BIGINT       NULL COMMENT '合并目标标签',
@@ -155,6 +154,7 @@ CREATE TABLE t_post_version_history (
     author_id         BIGINT       NOT NULL,
     editor_uid        BIGINT       NOT NULL,
     base_version      INT          NOT NULL DEFAULT 0,
+    result_version    INT          NULL,
     post_type         TINYINT      NOT NULL,
     title             VARCHAR(255) NOT NULL,
     content           LONGTEXT     NOT NULL,
@@ -164,8 +164,12 @@ CREATE TABLE t_post_version_history (
     ext_json          JSON         NULL,
     tag_snapshot_json JSON         NULL,
     change_summary    VARCHAR(255) NULL,
+    public_update_summary VARCHAR(500) NULL,
+    impact_scope      VARCHAR(255) NULL,
     create_time       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uk_post_result_version (post_id, result_version),
     KEY idx_post_time (post_id, create_time),
+    KEY idx_post_public_update (post_id, result_version, create_time, id),
     KEY idx_author_time (author_id, create_time),
     KEY idx_editor_time (editor_uid, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Post version history';
@@ -186,6 +190,8 @@ CREATE TABLE t_search_index_retry_task (
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     UNIQUE KEY uk_search_index_retry_dedup (dedup_key),
     KEY idx_search_index_retry_due (task_status, next_retry_time),
+    KEY idx_search_index_retry_claim (task_status, next_retry_time, create_time, id),
+    KEY idx_search_index_retry_expired_claim (task_status, lock_until, create_time, id),
     KEY idx_search_index_retry_lock (lock_owner, lock_until),
     KEY idx_search_index_retry_post (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='search index retry tasks';

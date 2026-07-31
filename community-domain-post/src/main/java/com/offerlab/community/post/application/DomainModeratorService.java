@@ -22,6 +22,13 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DomainModeratorService {
     private static final int MAX_LIMIT = 200;
+    private static final List<Integer> ALL_DOMAINS = List.of(
+            Post.DOMAIN_TECH,
+            Post.DOMAIN_CAREER,
+            Post.DOMAIN_READING,
+            Post.DOMAIN_LIFESTYLE,
+            Post.DOMAIN_INVESTMENT
+    );
 
     private final DomainModeratorMapper mapper;
     private final AdminPermissionService adminPermissionService;
@@ -33,9 +40,7 @@ public class DomainModeratorService {
         if (uid == null) {
             return false;
         }
-        if (adminPermissionService.isAdmin(uid)
-                || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR)
-                || adminPermissionService.isLocalOpenMode()) {
+        if (hasGlobalModerationAccess(uid)) {
             return true;
         }
         Integer normalizedDomain = requireKnownDomain(domain);
@@ -63,10 +68,7 @@ public class DomainModeratorService {
     }
 
     public List<Integer> listModeratedDomains(Long uid) {
-        if (uid == null || adminPermissionService.isAdmin(uid)
-                || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR)
-                || adminPermissionService.isLocalOpenMode()
-                || !tableReady()) {
+        if (uid == null || hasGlobalModerationAccess(uid) || !tableReady()) {
             return List.of();
         }
         try {
@@ -78,6 +80,16 @@ public class DomainModeratorService {
         } catch (RuntimeException e) {
             return List.of();
         }
+    }
+
+    public List<Integer> listModeratableDomains(Long uid) {
+        if (uid == null) {
+            return List.of();
+        }
+        if (hasGlobalModerationAccess(uid)) {
+            return ALL_DOMAINS;
+        }
+        return listModeratedDomains(uid);
     }
 
     public List<DomainModeratorDTO> listModerators(Integer domain, Boolean enabled, int limit) {
@@ -160,6 +172,12 @@ public class DomainModeratorService {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    private boolean hasGlobalModerationAccess(Long uid) {
+        return adminPermissionService.isAdmin(uid)
+                || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_CONTENT_MODERATOR)
+                || adminPermissionService.isLocalOpenMode();
     }
 
     private int safeLimit(int limit) {

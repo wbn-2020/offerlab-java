@@ -8,6 +8,7 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
@@ -30,6 +31,7 @@ public class PostFeaturedService {
     private final AdminAuditService adminAuditService;
     private final MultiLevelCache<PostDTO> postDetailCache;
     private final DomainModeratorService domainModeratorService;
+    private final AfterCommitExecutor afterCommit;
 
     @Transactional
     public Map<String, Object> updateFeatured(Long postId, boolean featured, Long operatorUid, String note) {
@@ -42,9 +44,10 @@ public class PostFeaturedService {
         String beforeExtJson = post.getExtJson();
         String afterExtJson = writeFeaturedExt(beforeExtJson, featured, operatorUid, note);
         post.setExtJson(afterExtJson);
-        postRepo.update(post);
-        postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
-        postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        if (!postRepo.update(post)) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        evictPostDetailAfterCommit(postId);
         String action = featured ? "POST_FEATURE_SET" : "POST_FEATURE_UNSET";
         adminAuditService.recordRequired(operatorUid, action, "POST", postId,
                 Map.of("extJson", beforeExtJson == null ? "" : beforeExtJson),
@@ -55,6 +58,13 @@ public class PostFeaturedService {
                 "featured", featured,
                 "extJson", afterExtJson
         );
+    }
+
+    private void evictPostDetailAfterCommit(Long postId) {
+        afterCommit.execute(() -> {
+            postDetailCache.evict(CacheKeyBuilder.postDetail(postId));
+            postDetailCache.evict(CacheKeyBuilder.postDetailRaw(postId));
+        }, "post featured detail eviction:" + postId);
     }
 
     private String writeFeaturedExt(String extJson, boolean featured, Long operatorUid, String note) {

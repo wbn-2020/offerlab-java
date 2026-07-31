@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.redis.cache.CacheKeyBuilder;
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
+import com.offerlab.community.user.api.dto.ContactRequestSettingsDTO;
 import com.offerlab.community.user.api.dto.FollowCursorDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
@@ -22,11 +24,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -44,6 +48,7 @@ public class UserFacadeImpl implements UserFacade {
     private final UserPrivacySettingMapper privacySettingMapper;
     private final ObjectMapper objectMapper;
     private final MultiLevelCache<UserBriefDTO> multiLevelCache;
+    private final ContactRequestSettingsService contactRequestSettingsService;
 
     @Value("${offerlab.feed.bigv-threshold:1000}")
     private long bigvThreshold;
@@ -61,10 +66,23 @@ public class UserFacadeImpl implements UserFacade {
     public Map<Long, UserBriefDTO> batchGetUserBriefs(Collection<Long> uids) {
         List<Long> normalizedUids = normalizeBatchUids(uids, MAX_BATCH_BRIEF_UIDS);
         if (normalizedUids.isEmpty()) return Map.of();
-        Map<Long, UserBriefDTO> result = new HashMap<>(normalizedUids.size());
+        Map<Long, User> users = userRepo.batchFindByIds(normalizedUids);
+        if (users.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, UserCounterPO> counters = counterMapper.selectBatchIds(users.keySet()).stream()
+                .collect(Collectors.toMap(UserCounterPO::getUserId, counter -> counter, (left, right) -> left));
+        Map<Long, UserPrivacySettingPO> settings = privacySettingMapper.selectBatchIds(users.keySet()).stream()
+                .collect(Collectors.toMap(UserPrivacySettingPO::getUserId, setting -> setting, (left, right) -> left));
+        Map<Long, UserBriefDTO> result = new HashMap<>(users.size());
         for (Long uid : normalizedUids) {
-            UserBriefDTO dto = getUserBrief(uid);
-            if (dto != null) result.put(uid, dto);
+            User user = users.get(uid);
+            if (user == null) {
+                continue;
+            }
+            UserBriefDTO dto = toBrief(user, counters.get(uid), settings.get(uid));
+            result.put(uid, dto);
+            multiLevelCache.put(CacheKeyBuilder.userProfile(uid), dto, Duration.ofMinutes(30));
         }
         return result;
     }
@@ -95,8 +113,9 @@ public class UserFacadeImpl implements UserFacade {
     public Map<Long, Boolean> batchIsFollowing(Long fromUid, Collection<Long> toUids) {
         List<Long> normalizedToUids = normalizeBatchUids(toUids, MAX_BATCH_FOLLOW_CHECK_UIDS);
         if (normalizedToUids.isEmpty()) return Map.of();
+        Set<Long> following = followRepo.followingTargets(fromUid, normalizedToUids);
         return normalizedToUids.stream()
-                .collect(Collectors.toMap(t -> t, t -> followRepo.isFollowing(fromUid, t)));
+                .collect(Collectors.toMap(t -> t, following::contains));
     }
 
     @Override
@@ -202,6 +221,16 @@ public class UserFacadeImpl implements UserFacade {
     }
 
     @Override
+    public ContactRequestSettingsDTO getContactRequestSettings(Long uid) {
+        return contactRequestSettingsService.getSettings(uid);
+    }
+
+    @Override
+    public ContactRequestPolicyCheckDTO checkContactRequestPolicy(Long requesterUid, Long receiverUid) {
+        return contactRequestSettingsService.checkPolicy(requesterUid, receiverUid);
+    }
+
+    @Override
     public boolean allowsSystemNotification(Long uid) {
         return enabled(setting(uid).getSystemNotification());
     }
@@ -217,6 +246,10 @@ public class UserFacadeImpl implements UserFacade {
 
     private UserBriefDTO toBrief(User u) {
         UserCounterPO c = counterMapper.selectById(u.getId());
+        return toBrief(u, c, setting(u.getId()));
+    }
+
+    private UserBriefDTO toBrief(User u, UserCounterPO c, UserPrivacySettingPO setting) {
         UserBriefDTO.UserBriefDTOBuilder b = UserBriefDTO.builder()
                 .uid(u.getId())
                 .nickname(u.getNickname())
@@ -229,7 +262,31 @@ public class UserFacadeImpl implements UserFacade {
         } else {
             b.followerCount(0L).followingCount(0L).postCount(0L);
         }
+        ContactRequestSettingsDTO contactSettings = contactSettings(setting);
+        b.acceptContactRequest(contactSettings.getAcceptContactRequest())
+         .contactRequestPolicy(contactSettings.getContactRequestPolicy());
         return b.build();
+    }
+
+    private ContactRequestSettingsDTO contactSettings(UserPrivacySettingPO setting) {
+        UserPrivacySettingPO effective = withContactDefaults(setting);
+        String policy = effective.getContactRequestPolicy();
+        boolean accept = enabled(effective.getAcceptContactRequest())
+                && !ContactRequestSettingsService.POLICY_OFF.equals(policy);
+        return ContactRequestSettingsDTO.builder()
+                .acceptContactRequest(accept)
+                .contactRequestPolicy(accept ? policy : ContactRequestSettingsService.POLICY_OFF)
+                .contactRequestDailyLimit(effective.getContactRequestDailyLimit())
+                .build();
+    }
+
+    private static UserPrivacySettingPO withContactDefaults(UserPrivacySettingPO setting) {
+        UserPrivacySettingPO po = setting == null ? new UserPrivacySettingPO() : setting;
+        if (po.getAcceptContactRequest() == null) po.setAcceptContactRequest(1);
+        if (po.getContactRequestPolicy() == null || po.getContactRequestPolicy().isBlank()) {
+            po.setContactRequestPolicy(ContactRequestSettingsService.DEFAULT_POLICY);
+        }
+        return po;
     }
 
     private UserPrivacySettingPO setting(Long uid) {
@@ -248,6 +305,8 @@ public class UserFacadeImpl implements UserFacade {
         defaults.setFollowNotification(1);
         defaults.setFavoriteNotification(1);
         defaults.setMentionNotification(1);
+        defaults.setAcceptContactRequest(1);
+        defaults.setContactRequestPolicy(ContactRequestSettingsService.DEFAULT_POLICY);
         return defaults;
     }
 

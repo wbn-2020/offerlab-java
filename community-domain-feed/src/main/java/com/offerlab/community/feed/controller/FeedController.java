@@ -6,14 +6,18 @@ import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.feed.api.FeedFacade;
 import com.offerlab.community.feed.api.dto.FeedFeedbackCmd;
+import com.offerlab.community.feed.api.dto.FeedFeedbackPreferenceVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.domain.model.Post;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -37,36 +41,63 @@ public class FeedController {
 
     @PublicApi
     @GetMapping("/recommend")
+    @RateLimit(key = "'public:feed:recommend:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<FeedItemVO>> recommend(@RequestParam(required = false) String cursor,
                                                     @RequestParam(defaultValue = "20") int size,
-                                                    @RequestParam(required = false) Integer domain) {
+                                                    @RequestParam(required = false) Integer domain,
+                                                    HttpServletRequest request) {
         return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
     @GetMapping("/latest")
+    @RateLimit(key = "'public:feed:latest:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<FeedItemVO>> latest(@RequestParam(required = false) String cursor,
                                                  @RequestParam(defaultValue = "20") int size,
-                                                 @RequestParam(required = false) Integer domain) {
+                                                 @RequestParam(required = false) Integer domain,
+                                                 HttpServletRequest request) {
         return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PublicApi
     @GetMapping("/hot")
+    @RateLimit(key = "'public:feed:hot:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<FeedItemVO>> hot(@RequestParam(required = false) String cursor,
                                               @RequestParam(defaultValue = "20") int size,
-                                              @RequestParam(required = false) Integer domain) {
+                                              @RequestParam(required = false) Integer domain,
+                                              HttpServletRequest request) {
         return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
     @PostMapping("/feedback")
-    @RateLimit(key = "'feed:feedback:' + #uid", rate = 60, per = 60)
+    @RateLimit(key = "'feed:feedback:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<Void> feedback(@Valid @RequestBody FeedFeedbackCmd cmd) {
         Long uid = UserContext.require();
-        feedFacade.recordFeedback(uid,
-                cmd == null ? null : cmd.getPostId(),
-                cmd == null ? null : cmd.getAction(),
-                cmd == null ? null : cmd.getReason());
+        feedFacade.recordFeedback(uid, cmd.getPostId(), cmd.getAction(), cmd.getReason());
+        return Result.ok();
+    }
+
+    @GetMapping("/feedback/preferences")
+    @RateLimit(key = "'feed:feedback:preferences:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<FeedFeedbackPreferenceVO>> feedbackPreferences(
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size) {
+        Long uid = UserContext.require();
+        return Result.ok(feedFacade.listFeedbackPreferences(uid, cursor, clamp(size)));
+    }
+
+    @GetMapping("/feedback/preferences/{postId}")
+    @RateLimit(key = "'feed:feedback:preference:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<FeedFeedbackPreferenceVO> feedbackPreference(@PathVariable Long postId) {
+        Long uid = UserContext.require();
+        return Result.ok(feedFacade.getFeedbackPreference(uid, postId));
+    }
+
+    @DeleteMapping("/feedback/preferences/{postId}")
+    @RateLimit(key = "'feed:feedback:restore:' + #uid", rate = 60, per = 60, failOpen = false)
+    public Result<Void> restoreFeedbackPreference(@PathVariable Long postId) {
+        Long uid = UserContext.require();
+        feedFacade.recordFeedback(uid, postId, "RESTORE", null);
         return Result.ok();
     }
 

@@ -2,6 +2,7 @@ package com.offerlab.community.feed.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.mq.EventEnvelope;
+import com.offerlab.community.infra.mq.idempotent.IdempotentEventConsumer;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,8 +17,11 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class PostPublishedFeedConsumer {
 
+    private static final String CONSUMER_NAME = "feed-fanout";
+
     private final FeedFanoutService fanoutService;
     private final ObjectMapper objectMapper;
+    private final IdempotentEventConsumer idempotentConsumer;
 
     @KafkaListener(
             topics = "post.published",
@@ -34,7 +38,11 @@ public class PostPublishedFeedConsumer {
 
         try {
             PostPublishedEvent event = objectMapper.convertValue(envelope.getPayload(), PostPublishedEvent.class);
-            boolean processed = fanoutService.fanoutPostPublished(event, "kafka:" + envelope.getMessageId());
+            boolean processed = idempotentConsumer.consume(
+                    FeedFanoutService.idempotencyKey(event),
+                    envelope.getEventType(),
+                    CONSUMER_NAME,
+                    () -> fanoutService.fanoutPostPublished(event, "kafka:" + envelope.getMessageId()));
             ack.acknowledge();
             log.info("post.published feed message acked: messageId={} eventType={} processed={}",
                     envelope.getMessageId(), envelope.getEventType(), processed);

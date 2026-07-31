@@ -2,6 +2,7 @@ package com.offerlab.community.notification.infrastructure.persistence.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationRetryTaskPO;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -75,6 +76,7 @@ public interface NotificationRetryTaskMapper extends BaseMapper<NotificationRetr
     @Update("""
             UPDATE t_notif_retry_task
             SET task_status = 1,
+                next_retry_time = NULL,
                 lock_owner = NULL,
                 lock_until = NULL,
                 last_error = NULL,
@@ -194,4 +196,16 @@ public interface NotificationRetryTaskMapper extends BaseMapper<NotificationRetr
             </script>
             """)
     int markFailedForRetryBatch(@Param("ids") List<Long> ids);
+
+    @Delete("""
+            DELETE FROM t_notif_retry_task
+            WHERE task_status = #{status}
+              AND next_retry_time IS NULL
+              AND update_time < #{before}
+            ORDER BY update_time ASC
+            LIMIT #{limit}
+            """)
+    int deleteTerminalBefore(@Param("status") Integer status,
+                             @Param("before") LocalDateTime before,
+                             @Param("limit") int limit);
 }

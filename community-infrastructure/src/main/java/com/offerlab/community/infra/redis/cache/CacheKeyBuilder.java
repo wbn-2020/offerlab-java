@@ -91,6 +91,14 @@ public final class CacheKeyBuilder {
         return "lock:cache:" + key;
     }
 
+    /**
+     * Cache generation used to prevent an in-flight loader from restoring a value
+     * after another node evicted or explicitly replaced the key.
+     */
+    public static String cacheEpoch(String key) {
+        return "cache:epoch:" + key;
+    }
+
     // ==================== Pub/Sub Channel ====================
 
     /**

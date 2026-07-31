@@ -6,10 +6,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @Data
 @ConfigurationProperties(prefix = "offerlab.elasticsearch")
 public class ElasticsearchProperties {
+    private static final int DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
     private boolean enabled = true;
     private String url = "http://127.0.0.1:9200";
     private String postIndex = "post_idx";
     private String questionIndex = "question_idx";
     private int connectTimeoutMillis = 800;
     private int requestTimeoutMillis = 1500;
+    private int maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;
 }

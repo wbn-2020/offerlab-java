@@ -55,6 +55,10 @@
             <groupId>com.offerlab</groupId>
             <artifactId>community-domain-analytics</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.offerlab</groupId>
+            <artifactId>community-domain-incentive</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>com.tngtech.archunit</groupId>

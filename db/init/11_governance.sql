@@ -1,7 +1,6 @@
 -- 11_governance.sql
 -- Audit log and lightweight content governance tables.
 SET NAMES utf8mb4;
-USE offerlab;
 
 CREATE TABLE IF NOT EXISTS t_admin_audit_log (
     id              BIGINT        NOT NULL PRIMARY KEY,
@@ -23,7 +22,7 @@ CREATE TABLE IF NOT EXISTS t_moderation_keyword (
     keyword         VARCHAR(128) NOT NULL,
     match_type      VARCHAR(16)  NOT NULL DEFAULT 'CONTAINS' COMMENT 'CONTAINS / EXACT',
     action          VARCHAR(16)  NOT NULL DEFAULT 'BLOCK' COMMENT 'BLOCK / REVIEW',
-    scope           VARCHAR(32)  NOT NULL DEFAULT 'ALL' COMMENT 'ALL / POST / COMMENT / REPORT',
+    scope           VARCHAR(32)  NOT NULL DEFAULT 'ALL' COMMENT 'ALL / POST / COMMENT / REPORT / CONTACT_REQUEST / CONTENT_SERIES / PROFILE',
     enabled         TINYINT      NOT NULL DEFAULT 1,
     remark          VARCHAR(200) NOT NULL DEFAULT '',
     operator_uid    BIGINT       NULL,
@@ -41,11 +40,19 @@ CREATE TABLE IF NOT EXISTS t_moderation_keyword_hit (
     keyword         VARCHAR(128)  NOT NULL,
     action          VARCHAR(16)   NOT NULL DEFAULT 'BLOCK' COMMENT 'BLOCK / REVIEW',
     content_summary VARCHAR(200)  NOT NULL DEFAULT '',
+    source_type     VARCHAR(32)   NULL COMMENT 'POST / COMMENT / CONTACT_REQUEST',
+    source_id       BIGINT        NULL,
+    review_status   VARCHAR(16)   NULL COMMENT 'APPROVED / REJECTED / CLOSED',
+    reviewer_uid    BIGINT        NULL,
+    review_note     VARCHAR(1000) NULL,
+    review_time     DATETIME(3)   NULL,
     create_time     DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     KEY idx_scope_time (scope, create_time),
     KEY idx_uid_time (uid, create_time),
     KEY idx_keyword_time (keyword, create_time),
-    KEY idx_action_time (action, create_time)
+    KEY idx_action_time (action, create_time),
+    KEY idx_source (source_type, source_id),
+    KEY idx_review_status_time (review_status, review_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Moderation keyword hit log';
 
 CREATE TABLE IF NOT EXISTS t_user_moderation_state (

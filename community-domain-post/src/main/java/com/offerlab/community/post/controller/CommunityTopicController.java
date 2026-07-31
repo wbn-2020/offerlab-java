@@ -10,10 +10,14 @@ import com.offerlab.community.post.api.dto.CommunityTopicCmd;
 import com.offerlab.community.post.api.dto.CommunityTopicDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.application.CommunityTopicService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,6 +33,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/topics")
 @RequiredArgsConstructor
+@Validated
 public class CommunityTopicController {
 
     private final CommunityTopicService topicService;
@@ -36,20 +41,25 @@ public class CommunityTopicController {
 
     @PublicApi
     @GetMapping
+    @RateLimit(key = "'public:topics:list:' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<List<CommunityTopicDTO>> list(@RequestParam(required = false) Boolean featured,
-                                                @RequestParam(defaultValue = "20") int limit) {
-        return Result.ok(topicService.listPublic(featured, limit, UserContext.get()));
+                                                @RequestParam(required = false) @Size(max = 80) String keyword,
+                                                @RequestParam(defaultValue = "20") @Min(1) @Max(50) int limit,
+                                                HttpServletRequest request) {
+        return Result.ok(topicService.listPublic(featured, keyword, limit, UserContext.get()));
     }
 
     @GetMapping("/me/following")
     public Result<PageResult<CommunityTopicDTO>> followingTopics(@RequestParam(defaultValue = "0") long cursor,
-                                                                 @RequestParam(defaultValue = "20") int size) {
+                                                                 @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(topicService.listFollowingTopics(UserContext.require(), cursor, size));
     }
 
     @PublicApi
     @GetMapping("/{slug}")
-    public Result<CommunityTopicDTO> detail(@PathVariable String slug) {
+    @RateLimit(key = "'public:topics:detail:' + #slug + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<CommunityTopicDTO> detail(@PathVariable String slug,
+                                             HttpServletRequest request) {
         return Result.ok(topicService.getPublic(slug, UserContext.get()));
     }
 
@@ -59,31 +69,35 @@ public class CommunityTopicController {
     }
 
     @PostMapping("/{slug}/follow")
-    @RateLimit(key = "'topic:follow:' + #slug", rate = 60, per = 60)
+    @RateLimit(key = "'topic:follow:' + #uid + ':' + #slug", rate = 60, per = 60)
     public Result<CommunityTopicDTO> follow(@PathVariable String slug) {
-        return Result.ok(topicService.follow(slug, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(topicService.follow(slug, uid));
     }
 
     @DeleteMapping("/{slug}/follow")
-    @RateLimit(key = "'topic:unfollow:' + #slug", rate = 60, per = 60)
+    @RateLimit(key = "'topic:unfollow:' + #uid + ':' + #slug", rate = 60, per = 60)
     public Result<CommunityTopicDTO> unfollow(@PathVariable String slug) {
-        return Result.ok(topicService.unfollow(slug, UserContext.require()));
+        Long uid = UserContext.require();
+        return Result.ok(topicService.unfollow(slug, uid));
     }
 
     @PublicApi
     @GetMapping("/{slug}/posts")
+    @RateLimit(key = "'public:topics:posts:' + #slug + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<PageResult<PostBriefDTO>> posts(@PathVariable String slug,
-                                                  @RequestParam(required = false, name = "type") Integer type,
-                                                  @RequestParam(required = false) Boolean featured,
-                                                  @RequestParam(defaultValue = "0") long cursor,
-                                                  @RequestParam(defaultValue = "20") int size) {
+                                                   @RequestParam(required = false, name = "type") Integer type,
+                                                   @RequestParam(required = false) Boolean featured,
+                                                   @RequestParam(defaultValue = "0") long cursor,
+                                                   @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,
+                                                   HttpServletRequest request) {
         return Result.ok(topicService.listPosts(slug, type, featured, cursor, size, UserContext.get()));
     }
 
     @GetMapping("/admin")
     public Result<List<CommunityTopicDTO>> adminList(@RequestParam(required = false) Integer status,
-                                                    @RequestParam(required = false) String keyword,
-                                                    @RequestParam(defaultValue = "50") int limit) {
+                                                    @RequestParam(required = false) @Size(max = 80) String keyword,
+                                                    @RequestParam(defaultValue = "50") @Min(1) @Max(100) int limit) {
         adminPermissionService.requireScope(UserContext.require(), AdminPermissionService.ROLE_CONTENT_MODERATOR);
         return Result.ok(topicService.listAdmin(status, keyword, limit));
     }
