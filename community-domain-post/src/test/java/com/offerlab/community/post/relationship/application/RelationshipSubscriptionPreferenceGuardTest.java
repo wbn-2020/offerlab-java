@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RelationshipSubscriptionPreferenceGuardTest {
@@ -30,12 +31,17 @@ class RelationshipSubscriptionPreferenceGuardTest {
         assertTrue(mapper.contains("mode == 'MUTED'"));
         assertTrue(mapper.contains("COALESCE(pref.delivery_mode, 'IMMEDIATE')"));
         assertTrue(mapper.contains("GROUP BY relationshipCounts.sourceType"));
+        assertTrue(mapper.contains("relationshipRows.sourceType IN ('TOPIC', 'DISCUSSION', 'NEED')"));
+        assertTrue(mapper.contains("relationshipCounts.sourceType IN ('TOPIC', 'DISCUSSION', 'NEED')"));
 
-        assertTrue(userMapper.contains("pref.source_type = 'USER'"));
-        assertTrue(userMapper.contains("mode == 'ACTIVE'"));
+        assertFalse(userMapper.contains("t_user_subscription_preference"));
+        assertTrue(userMapper.contains("'IMMEDIATE' AS deliveryMode"));
         assertTrue(userMapper.contains("mode == 'MUTED'"));
-        assertTrue(service.contains("countFollowingByDeliveryMode"));
+        assertTrue(userMapper.contains("AND 1 = 0"));
+        assertFalse(service.contains("countFollowingByDeliveryMode"));
         assertTrue(service.contains(".expiresAt(row.getExpiresAt())"));
+        assertTrue(service.contains("DeliveryPreferenceCapability.isSupported"));
+        assertTrue(service.contains(".deliveryPreferenceSupported"));
         assertTrue(service.contains(".active(Math.max(0L, total - muted))"));
     }
 

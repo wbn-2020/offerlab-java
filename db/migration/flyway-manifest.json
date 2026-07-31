@@ -8,7 +8,7 @@
     "core": {
       "location": "classpath:db/flyway/core",
       "autoMigrate": true,
-      "expectedMigrations": 71
+      "expectedMigrations": 72
     },
     "demo": {
       "location": "classpath:db/flyway/demo",
@@ -692,6 +692,15 @@
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260730.02__disable_unfulfillable_benefits.sql",
       "sha256": "1ed72887cbfa7dacd3928a491ba3661cadc1a9b2a1a12802804c3a20409f36c1",
       "flywayChecksum": -1807396240
+    },
+    {
+      "version": "20260731.01",
+      "description": "subscription_update_digest",
+      "stream": "core",
+      "source": "db/migration/20260731_subscription_update_digest.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260731.01__subscription_update_digest.sql",
+      "sha256": "7a6f0212627fedb1a3bf330b576a8a07684292b16415320e29110a7550a6c767",
+      "flywayChecksum": -1720044031
     }
   ]
 }

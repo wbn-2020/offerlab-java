@@ -10,11 +10,14 @@ import com.offerlab.community.notification.infrastructure.persistence.mapper.Not
 import com.offerlab.community.notification.infrastructure.persistence.po.NotificationRetryTaskPO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +36,8 @@ public class NotificationRetryService {
     private static final int MAX_RETENTION_BATCHES = 20;
     private static final int DONE_RETENTION_DAYS = 30;
     private static final int FAILED_RETENTION_DAYS = 180;
+    private static final String SUBSCRIPTION_UPDATE_DELIVERY_SCENE = "subscription_update_delivery";
+    private static final int SUBSCRIPTION_UPDATE_RETRY_VERSION = 1;
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final NotificationRetryTaskMapper taskMapper;
@@ -40,6 +45,8 @@ public class NotificationRetryService {
     private final ObjectMapper objectMapper;
     private final NotificationFacadeImpl notificationFacade;
     private final String owner = buildOwner();
+    @Autowired(required = false)
+    private ObjectProvider<SubscriptionUpdateDeliveryService> subscriptionUpdateDeliveryServiceProvider;
 
     public boolean enqueue(String scene, Long receiverUid, Long senderUid, Integer notifType,
                            Integer targetType, Long targetId, Map<String, Object> content, Throwable cause) {
@@ -67,6 +74,44 @@ public class NotificationRetryService {
         log.warn("notification retry task enqueued: scene={} dedupKey={} receiverUid={} targetId={}",
                 scene, LogMask.key(task.getDedupKey()), LogMask.id(receiverUid), LogMask.id(targetId), cause);
         return true;
+    }
+
+    boolean enqueueSubscriptionUpdateDelivery(SubscriptionUpdateDeliveryCommand command,
+                                              SubscriptionUpdateDeliveryMode deliveryMode,
+                                              Throwable cause) {
+        if (command == null
+                || deliveryMode == null
+                || deliveryMode == SubscriptionUpdateDeliveryMode.MUTED
+                || command.notificationKind() == null
+                || command.retrySenderUid() == null) {
+            return false;
+        }
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("dedupKey", subscriptionDeliveryRetryDedupKey(command, deliveryMode));
+        content.put("retryVersion", SUBSCRIPTION_UPDATE_RETRY_VERSION);
+        content.put("deliveryMode", deliveryMode.name());
+        content.put("receiverUid", command.receiverUid());
+        content.put("sourceType", command.sourceType());
+        content.put("sourceId", command.sourceId());
+        content.put("resourceType", command.resourceType());
+        content.put("resourceId", command.resourceId());
+        content.put("eventType", command.eventType());
+        content.put("eventKey", command.eventKey());
+        content.put("actorUid", command.actorUid());
+        content.put("notificationKind", command.notificationKind().name());
+        content.put("notificationTargetType", command.notificationTargetType());
+        content.put("notificationTargetId", command.notificationTargetId());
+        content.put("safePayload", command.payloadOrEmpty());
+        content.put("occurredAt", command.occurredAt() == null ? null : command.occurredAt().toEpochMilli());
+        return enqueue(
+                SUBSCRIPTION_UPDATE_DELIVERY_SCENE,
+                command.receiverUid(),
+                command.retrySenderUid(),
+                command.notificationType(),
+                command.notificationTargetType(),
+                command.notificationTargetId(),
+                content,
+                cause);
     }
 
     @Scheduled(fixedDelay = 5000)
@@ -186,18 +231,45 @@ public class NotificationRetryService {
 
     void retryOne(NotificationRetryTaskPO task) {
         try {
-            notificationFacade.createFromRetryTask(
-                    task.getReceiverUid(),
-                    task.getSenderUid(),
-                    task.getNotifType(),
-                    task.getTargetType(),
-                    task.getTargetId(),
-                    parseContent(task.getContentJson()));
+            if (SUBSCRIPTION_UPDATE_DELIVERY_SCENE.equals(task.getScene())) {
+                retrySubscriptionUpdateDelivery(task);
+            } else {
+                notificationFacade.createFromRetryTask(
+                        task.getReceiverUid(),
+                        task.getSenderUid(),
+                        task.getNotifType(),
+                        task.getTargetType(),
+                        task.getTargetId(),
+                        parseContent(task.getContentJson()));
+            }
             taskMapper.markDone(task.getId(), owner);
             log.debug("notification retry task completed: id={} dedupKey={}",
                     LogMask.id(task.getId()), LogMask.key(task.getDedupKey()));
         } catch (Exception e) {
             handleRetryFailure(task, e);
+        }
+    }
+
+    private void retrySubscriptionUpdateDelivery(NotificationRetryTaskPO task) {
+        if (subscriptionUpdateDeliveryServiceProvider == null) {
+            throw new IllegalStateException("subscription update delivery service is unavailable");
+        }
+        SubscriptionUpdateDeliveryService deliveryService =
+                subscriptionUpdateDeliveryServiceProvider.getIfAvailable();
+        if (deliveryService == null) {
+            throw new IllegalStateException("subscription update delivery service is unavailable");
+        }
+        SubscriptionUpdateRetryPayload payload =
+                parseSubscriptionUpdateRetryPayload(parseContent(task.getContentJson()));
+        SubscriptionUpdateDeliveryResult result = deliveryService.deliverResolved(
+                payload.command(), payload.deliveryMode());
+        if (result.failed()) {
+            throw result.failure() == null
+                    ? new IllegalStateException("subscription update delivery replay failed")
+                    : result.failure();
+        }
+        if (result.status() == SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE) {
+            throw new IllegalStateException("subscription update delivery policy is unavailable");
         }
     }
 
@@ -238,6 +310,112 @@ public class NotificationRetryService {
             return objectMapper.readValue(json, MAP_TYPE);
         } catch (Exception e) {
             return Map.of();
+        }
+    }
+
+    private static SubscriptionUpdateRetryPayload parseSubscriptionUpdateRetryPayload(
+            Map<String, Object> content) {
+        if (number(content.get("retryVersion")) != SUBSCRIPTION_UPDATE_RETRY_VERSION) {
+            throw new IllegalArgumentException("subscription update retry version is invalid");
+        }
+        SubscriptionUpdateDeliveryMode deliveryMode = parseEnum(
+                content.get("deliveryMode"), SubscriptionUpdateDeliveryMode.class, "deliveryMode");
+        if (deliveryMode == SubscriptionUpdateDeliveryMode.MUTED) {
+            throw new IllegalArgumentException("muted subscription update must not be retried");
+        }
+        SubscriptionUpdateNotificationKind notificationKind = parseEnum(
+                content.get("notificationKind"), SubscriptionUpdateNotificationKind.class, "notificationKind");
+        SubscriptionUpdateDeliveryCommand command = new SubscriptionUpdateDeliveryCommand(
+                positiveLong(content.get("receiverUid"), "receiverUid"),
+                text(content.get("sourceType"), "sourceType", 24),
+                positiveLong(content.get("sourceId"), "sourceId"),
+                text(content.get("resourceType"), "resourceType", 24),
+                positiveLong(content.get("resourceId"), "resourceId"),
+                text(content.get("eventType"), "eventType", 64),
+                text(content.get("eventKey"), "eventKey", 160),
+                positiveLong(content.get("actorUid"), "actorUid"),
+                notificationKind,
+                optionalPositiveInt(content.get("notificationTargetType"), "notificationTargetType"),
+                positiveLong(content.get("notificationTargetId"), "notificationTargetId"),
+                nestedMap(content.get("safePayload"), "safePayload"),
+                Instant.ofEpochMilli(positiveLong(content.get("occurredAt"), "occurredAt")));
+        return new SubscriptionUpdateRetryPayload(command, deliveryMode);
+    }
+
+    private static String subscriptionDeliveryRetryDedupKey(
+            SubscriptionUpdateDeliveryCommand command,
+            SubscriptionUpdateDeliveryMode deliveryMode) {
+        return SUBSCRIPTION_UPDATE_DELIVERY_SCENE
+                + ":" + command.sourceType()
+                + ":" + command.sourceId()
+                + ":" + command.eventKey()
+                + ":" + deliveryMode;
+    }
+
+    private static Map<String, Object> nestedMap(Object value, String field) {
+        if (!(value instanceof Map<?, ?> raw)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : raw.entrySet()) {
+            if (entry.getKey() instanceof String key) {
+                result.put(key, entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    private static long number(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Long.parseLong(text.trim());
+            } catch (NumberFormatException ignored) {
+                return Long.MIN_VALUE;
+            }
+        }
+        return Long.MIN_VALUE;
+    }
+
+    private static Long positiveLong(Object value, String field) {
+        long parsed = number(value);
+        if (parsed <= 0) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return parsed;
+    }
+
+    private static Integer optionalPositiveInt(Object value, String field) {
+        if (value == null) {
+            return null;
+        }
+        long parsed = number(value);
+        if (parsed <= 0 || parsed > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return (int) parsed;
+    }
+
+    private static String text(Object value, String field, int maxLength) {
+        if (!(value instanceof String text)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        String normalized = text.trim();
+        if (normalized.isBlank() || normalized.length() > maxLength) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return normalized;
+    }
+
+    private static <T extends Enum<T>> T parseEnum(
+            Object value, Class<T> type, String field) {
+        String name = text(value, field, 80);
+        try {
+            return Enum.valueOf(type, name);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(field + " is invalid", e);
         }
     }
 
@@ -362,5 +540,10 @@ public class NotificationRetryService {
             // best-effort identifier only
         }
         return host + ":" + ManagementFactory.getRuntimeMXBean().getName() + ":" + UUID.randomUUID();
+    }
+
+    private record SubscriptionUpdateRetryPayload(
+            SubscriptionUpdateDeliveryCommand command,
+            SubscriptionUpdateDeliveryMode deliveryMode) {
     }
 }

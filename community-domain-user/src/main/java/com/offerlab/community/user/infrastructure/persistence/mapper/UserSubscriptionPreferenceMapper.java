@@ -83,6 +83,35 @@ public interface UserSubscriptionPreferenceMapper extends BaseMapper<UserSubscri
             @Param("sourceKeys") Collection<UserSubscriptionPreferenceKeyDTO> sourceKeys,
             @Param("now") LocalDateTime now);
 
+    @Select("""
+            <script>
+            SELECT id,
+                   uid,
+                   source_type AS sourceType,
+                   source_id AS sourceId,
+                   delivery_mode AS deliveryMode,
+                   expires_at AS expiresAt,
+                   create_time AS createTime,
+                   update_time AS updateTime,
+                   is_deleted AS isDeleted
+              FROM t_user_subscription_preference
+             WHERE uid IN
+             <foreach collection="receiverUids" item="receiverUid" open="(" separator="," close=")">
+                #{receiverUid}
+             </foreach>
+               AND source_type = #{sourceType}
+               AND source_id = #{sourceId}
+               AND is_deleted = 0
+               AND (expires_at IS NULL OR expires_at > #{now})
+             ORDER BY uid ASC
+            </script>
+            """)
+    List<UserSubscriptionPreferencePO> findEffectiveForRecipients(
+            @Param("receiverUids") Collection<Long> receiverUids,
+            @Param("sourceType") String sourceType,
+            @Param("sourceId") Long sourceId,
+            @Param("now") LocalDateTime now);
+
     @Update("""
             UPDATE t_user_subscription_preference
                SET is_deleted = 1,

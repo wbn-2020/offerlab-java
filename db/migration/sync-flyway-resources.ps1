@@ -196,6 +196,10 @@ $initMirrorMappings = @(
   [pscustomobject]@{
     Source = Join-Path $sourceDir "20260730_disable_unfulfillable_benefits.sql"
     Destination = Join-Path $repoRoot "db\init\32_disable_unfulfillable_benefits.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260731_subscription_update_digest.sql"
+    Destination = Join-Path $repoRoot "db\init\33_subscription_update_digest.sql"
   }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"

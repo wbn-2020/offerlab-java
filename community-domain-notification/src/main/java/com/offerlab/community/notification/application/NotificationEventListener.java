@@ -31,6 +31,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -100,6 +101,7 @@ public class NotificationEventListener {
     private final DiscussionFollowFacade discussionFollowFacade;
     private final CollaborationNeedFollowFacade collaborationNeedFollowFacade;
     private final NotificationRetryService retryService;
+    private final SubscriptionUpdateDeliveryService subscriptionUpdateDeliveryService;
 
     @Value("${offerlab.kafka.enabled:true}")
     private boolean kafkaEnabled;
@@ -676,12 +678,15 @@ public class NotificationEventListener {
         while (true) {
             PageResult<Long> page = collaborationNeedFollowFacade.listActiveFollowerUids(
                     event.getNeedId(), cursor, COLLABORATION_NEED_FOLLOWER_BATCH_SIZE);
+            List<SubscriptionUpdateDeliveryCommand> commands = new ArrayList<>();
             for (Long receiverUid : safeItems(page)) {
                 if (!isPositive(receiverUid) || !seenReceivers.add(receiverUid)) {
                     continue;
                 }
-                notifyCollaborationNeedStateReceiver(receiverUid, event, eventType, publicContent);
+                commands.add(collaborationNeedFollowerCommand(
+                        receiverUid, event, eventType, publicContent));
             }
+            deliverFollowerUpdates(commands);
             if (page == null || !Boolean.TRUE.equals(page.getHasMore())) {
                 return;
             }
@@ -820,19 +825,30 @@ public class NotificationEventListener {
                 log.warn("load discussion followers failed: {}", e.getMessage());
                 return;
             }
+            List<SubscriptionUpdateDeliveryCommand> commands = new ArrayList<>();
             for (Long receiverUid : safeItems(page)) {
                 if (receiverUid == null || receiverUid <= 0 || excluded.contains(receiverUid)) {
                     continue;
                 }
                 Map<String, Object> content = discussionFollowContent(action, event.getPostId(), event.getCommentId());
-                boolean created = runQuietly(
-                        () -> notifyDiscussionFollower(receiverUid, event.getUid(), event.getPostId(), event.getCommentId(), action),
-                        action, receiverUid, event.getUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
-                if (created) {
+                commands.add(discussionFollowerCommand(
+                        receiverUid,
+                        event.getUid(),
+                        event.getPostId(),
+                        event.getCommentId(),
+                        action,
+                        "DISCUSSION_COMMENT_CREATED",
+                        "discussion_comment_created:" + event.getCommentId(),
+                        content,
+                        event.getTimestamp()));
+            }
+            for (SubscriptionUpdateDeliveryResult result : deliverFollowerUpdates(commands)) {
+                if (result.delivered()) {
+                    Long receiverUid = result.command().receiverUid();
                     markDiscussionFollowerNotified(event, receiverUid);
                 }
-                fanoutCount++;
             }
+            fanoutCount += commands.size();
             cursor = page == null ? null : page.getNextCursor();
         } while (cursor != null);
     }
@@ -852,34 +868,36 @@ public class NotificationEventListener {
                 log.warn("load discussion followers for quality signal failed: {}", e.getMessage());
                 return;
             }
+            List<SubscriptionUpdateDeliveryCommand> commands = new ArrayList<>();
             for (Long receiverUid : safeItems(page)) {
                 if (receiverUid == null || receiverUid <= 0 || excluded.contains(receiverUid)) {
                     continue;
                 }
                 Map<String, Object> content = discussionFollowContent(action, event.getPostId(), event.getCommentId());
-                boolean created = runQuietly(
-                        () -> notificationFacade.notifyDiscussionFollowQualityComment(
-                                receiverUid, event.getOperatorUid(), event.getPostId(), event.getCommentId(), action),
-                        action, receiverUid, event.getOperatorUid(), TYPE_COMMENT, TARGET_COMMENT, event.getCommentId(), content);
-                if (created) {
-                    markDiscussionFollowerNotified(event.getPostId(), receiverUid, event.getCommentId());
-                }
-                fanoutCount++;
+                commands.add(discussionFollowerCommand(
+                        receiverUid,
+                        event.getOperatorUid(),
+                        event.getPostId(),
+                        event.getCommentId(),
+                        action,
+                        "DISCUSSION_QUALITY_" + action.toUpperCase(Locale.ROOT),
+                        "discussion_quality:" + action + ":" + event.getCommentId(),
+                        content,
+                        event.getTimestamp()));
             }
+            for (SubscriptionUpdateDeliveryResult result : deliverFollowerUpdates(commands)) {
+                if (result.delivered()) {
+                    markDiscussionFollowerNotified(
+                            event.getPostId(), result.command().receiverUid(), event.getCommentId());
+                }
+            }
+            fanoutCount += commands.size();
             cursor = page == null ? null : page.getNextCursor();
         } while (cursor != null);
     }
 
     private List<Long> safeItems(PageResult<Long> page) {
         return page == null || page.getItems() == null ? List.of() : page.getItems();
-    }
-
-    private void notifyDiscussionFollower(Long receiverUid, Long senderUid, Long postId, Long commentId, String action) {
-        if (ACTION_DISCUSSION_FOLLOW_COMMENT.equals(action)) {
-            notificationFacade.notifyDiscussionFollowComment(receiverUid, senderUid, postId, commentId);
-            return;
-        }
-        notificationFacade.notifyDiscussionFollowQualityComment(receiverUid, senderUid, postId, commentId, action);
     }
 
     private void markDiscussionFollowerNotified(CommentCreatedEvent event, Long receiverUid) {
@@ -949,6 +967,125 @@ public class NotificationEventListener {
         }
     }
 
+    private List<SubscriptionUpdateDeliveryResult> deliverFollowerUpdates(
+            List<SubscriptionUpdateDeliveryCommand> commands) {
+        if (commands == null || commands.isEmpty()) {
+            return List.of();
+        }
+        if (subscriptionUpdateDeliveryService == null) {
+            throw new IllegalStateException("subscription update delivery service is unavailable");
+        }
+        List<SubscriptionUpdateDeliveryResult> results =
+                subscriptionUpdateDeliveryService.deliverForSource(commands);
+        for (SubscriptionUpdateDeliveryResult result : results) {
+            if (result.failed()) {
+                SubscriptionUpdateDeliveryCommand command = result.command();
+                if (retryService == null || !retryService.enqueueSubscriptionUpdateDelivery(
+                        command, result.deliveryMode(), result.failure())) {
+                    throw new IllegalStateException(
+                            "subscription update delivery failed and retry task was not persisted",
+                            result.failure());
+                }
+                continue;
+            }
+            if (result.status() == SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE) {
+                SubscriptionUpdateDeliveryCommand command = result.command();
+                log.warn("subscription follower update skipped because policy could not be resolved: receiverUid={} sourceType={} sourceId={}",
+                        LogMask.id(command.receiverUid()), command.sourceType(), LogMask.id(command.sourceId()));
+            }
+        }
+        return results;
+    }
+
+    private SubscriptionUpdateDeliveryCommand collaborationNeedFollowerCommand(
+            Long receiverUid,
+            CollaborationNeedStateChangedEvent event,
+            String eventType,
+            Map<String, Object> content) {
+        Long resourceId = "MERGED".equals(eventType) ? event.getTargetNeedId() : event.getNeedId();
+        Map<String, Object> payload = new LinkedHashMap<>(content);
+        payload.put("summary", "你关注的共建需求有公开进展。");
+        return new SubscriptionUpdateDeliveryCommand(
+                receiverUid,
+                "NEED",
+                event.getNeedId(),
+                "NEED",
+                resourceId,
+                "NEED_" + eventType,
+                COLLABORATION_NEED_DEDUP_PREFIX + event.getEventId(),
+                event.getActorUid(),
+                SubscriptionUpdateNotificationKind.SYSTEM,
+                null,
+                event.getNeedId(),
+                payload,
+                eventOccurredAt(event.getOccurredAt()));
+    }
+
+    private SubscriptionUpdateDeliveryCommand discussionFollowerCommand(
+            Long receiverUid,
+            Long actorUid,
+            Long postId,
+            Long commentId,
+            String action,
+            String eventType,
+            String eventKey,
+            Map<String, Object> content,
+            Long timestamp) {
+        Map<String, Object> payload = new LinkedHashMap<>(content);
+        payload.put("summary", discussionFollowMessage(action) == null
+                ? "你关注的讨论有新的公开回应。"
+                : discussionFollowMessage(action));
+        SubscriptionUpdateNotificationKind kind =
+                ACTION_DISCUSSION_FOLLOW_COMMENT.equals(action)
+                        ? SubscriptionUpdateNotificationKind.DISCUSSION_FOLLOW_COMMENT
+                        : SubscriptionUpdateNotificationKind.DISCUSSION_FOLLOW_QUALITY_COMMENT;
+        return new SubscriptionUpdateDeliveryCommand(
+                receiverUid,
+                "DISCUSSION",
+                postId,
+                "POST",
+                postId,
+                eventType,
+                eventKey,
+                actorUid,
+                kind,
+                TARGET_COMMENT,
+                commentId,
+                payload,
+                eventOccurredAt(timestamp));
+    }
+
+    private SubscriptionUpdateDeliveryCommand topicFollowerCommand(
+            Long receiverUid,
+            PostPublishedEvent event,
+            PostPublishedEvent.TopicNotificationTarget topic,
+            Map<String, Object> content) {
+        Map<String, Object> payload = new LinkedHashMap<>(content);
+        payload.put("topicId", topic.getTopicId());
+        payload.put("topicSlug", topic.getTopicSlug());
+        payload.put("topicName", topic.getTopicName());
+        payload.put("targetPath", "/post/" + event.getPostId());
+        payload.put("summary", "你关注的话题有新的公开内容。");
+        return new SubscriptionUpdateDeliveryCommand(
+                receiverUid,
+                "TOPIC",
+                topic.getTopicId(),
+                "POST",
+                event.getPostId(),
+                "TOPIC_POST_PUBLISHED",
+                "topic_post_published:" + event.getPostId(),
+                event.getAuthorId(),
+                SubscriptionUpdateNotificationKind.SYSTEM,
+                TARGET_POST,
+                event.getPostId(),
+                payload,
+                eventOccurredAt(event.getTimestamp()));
+    }
+
+    private Instant eventOccurredAt(Long timestamp) {
+        return isPositive(timestamp) ? Instant.ofEpochMilli(timestamp) : Instant.now();
+    }
+
     private void notifyTopicFollowers(PostPublishedEvent event) {
         if (event == null || event.getPostId() == null || event.getTopicNotificationTargets() == null
                 || event.getTopicNotificationTargets().isEmpty()) {
@@ -959,23 +1096,24 @@ public class NotificationEventListener {
                     event.getPostId(), event.getVisibility(), event.getPostStatus());
             return;
         }
-        Map<Long, List<PostPublishedEvent.TopicNotificationTarget>> byReceiver = new LinkedHashMap<>();
         for (PostPublishedEvent.TopicNotificationTarget topic : event.getTopicNotificationTargets()) {
-            if (topic == null || topic.getFollowerUids() == null || topic.getFollowerUids().isEmpty()) {
+            if (topic == null || !isPositive(topic.getTopicId())
+                    || topic.getFollowerUids() == null || topic.getFollowerUids().isEmpty()) {
                 continue;
             }
+            Set<Long> receivers = new LinkedHashSet<>();
             for (Long receiverUid : topic.getFollowerUids()) {
                 if (receiverUid == null || receiverUid <= 0 || receiverUid.equals(event.getAuthorId())) {
                     continue;
                 }
-                byReceiver.computeIfAbsent(receiverUid, ignored -> new ArrayList<>()).add(topic);
+                receivers.add(receiverUid);
             }
+            Map<String, Object> content = topicNotificationContent(event, List.of(topic));
+            List<SubscriptionUpdateDeliveryCommand> commands = receivers.stream()
+                    .map(receiverUid -> topicFollowerCommand(receiverUid, event, topic, content))
+                    .toList();
+            deliverFollowerUpdates(commands);
         }
-        byReceiver.forEach((receiverUid, topics) -> {
-            Map<String, Object> content = topicNotificationContent(event, topics);
-            runQuietly(() -> notificationFacade.notifySystem(receiverUid, (long) TARGET_POST, event.getPostId(), content),
-                    "topic post published", receiverUid, 0L, TYPE_SYSTEM, TARGET_POST, event.getPostId(), content);
-        });
     }
 
     private Map<String, Object> topicNotificationContent(PostPublishedEvent event,

@@ -92,7 +92,7 @@ class NotificationPayloadGuardTest {
         assertFalse(consumer.contains("runQuietly"), "Kafka failures must propagate to retry and DLT handling");
 
         TrustedContentNotificationConsumer runtimeConsumer = new TrustedContentNotificationConsumer(
-                new NotificationEventListener(null, null, null, null, null),
+                new NotificationEventListener(null, null, null, null, null, null),
                 new ObjectMapper());
         EventEnvelope<?>[] incompleteMessages = {
                 EventEnvelope.<Map<String, Object>>builder()

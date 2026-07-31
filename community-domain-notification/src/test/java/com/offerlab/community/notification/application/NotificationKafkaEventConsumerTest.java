@@ -90,7 +90,7 @@ class NotificationKafkaEventConsumerTest {
         private final AtomicInteger postLikedCount = new AtomicInteger();
 
         private RecordingListener() {
-            super(null, null, null, null, null);
+            super(null, null, null, null, null, null);
         }
 
         @Override

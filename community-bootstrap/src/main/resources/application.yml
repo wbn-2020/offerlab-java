@@ -107,6 +107,11 @@ offerlab:
     request-timeout-millis: 1500
   realtime:
     websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}
+  subscription-delivery:
+    enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_ENABLED:true}
+    topic-enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_TOPIC_ENABLED:true}
+    discussion-enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_DISCUSSION_ENABLED:true}
+    need-enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_NEED_ENABLED:true}
 
 logging:
   level:

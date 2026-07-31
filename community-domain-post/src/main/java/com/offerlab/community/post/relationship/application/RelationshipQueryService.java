@@ -8,6 +8,7 @@ import com.offerlab.community.post.relationship.api.RelationshipSummaryDTO;
 import com.offerlab.community.post.relationship.infrastructure.persistence.RelationshipMapper;
 import com.offerlab.community.post.relationship.infrastructure.persistence.RelationshipRows.RelationshipCountRow;
 import com.offerlab.community.post.relationship.infrastructure.persistence.RelationshipRows.RelationshipRow;
+import com.offerlab.community.user.api.DeliveryPreferenceCapability;
 import com.offerlab.community.user.api.UserRelationshipReadFacade;
 import com.offerlab.community.user.api.dto.UserRelationshipItemDTO;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,8 @@ public class RelationshipQueryService {
                     uid, pageCursor.relationTime(), pageCursor.relationId(),
                     pageCursor.sourceType(), normalizedMode, FETCH_LIMIT);
             for (UserRelationshipItemDTO user : users == null ? List.<UserRelationshipItemDTO>of() : users) {
+                DeliveryPreferenceCapability capability =
+                        DeliveryPreferenceCapability.forSourceType("USER");
                 candidates.add(RelationshipItemDTO.builder()
                         .sourceType("USER")
                         .sourceId(user.getUid())
@@ -65,6 +68,9 @@ public class RelationshipQueryService {
                         .deliveryMode(user.getDeliveryMode() == null
                                 ? DEFAULT_DELIVERY_MODE : user.getDeliveryMode())
                         .expiresAt(user.getExpiresAt())
+                        .deliveryPreferenceSupported(capability.deliveryPreferenceSupported())
+                        .deliveryPreferenceUnsupportedReason(
+                                capability.deliveryPreferenceUnsupportedReason())
                         .build());
             }
         }
@@ -104,13 +110,12 @@ public class RelationshipQueryService {
         deliveryCounts.put("IMMEDIATE", 0L);
         deliveryCounts.put("DIGEST", 0L);
         deliveryCounts.put("MUTED", 0L);
-        userRelationshipReadFacade.countFollowingByDeliveryMode(uid)
-                .forEach((mode, count) -> deliveryCounts.put(mode, Math.max(0L, count == null ? 0L : count)));
         List<RelationshipCountRow> rows = relationshipMapper.countPostRelationships(uid);
         for (RelationshipCountRow row : rows == null ? List.<RelationshipCountRow>of() : rows) {
             if (row.getSourceType() != null && isPostSourceType(row.getSourceType())) {
                 counts.merge(row.getSourceType(), Math.max(0L, row.getCount() == null ? 0L : row.getCount()), Long::sum);
-                if (row.getDeliveryMode() != null) {
+                if (DeliveryPreferenceCapability.isSupported(row.getSourceType())
+                        && deliveryCounts.containsKey(row.getDeliveryMode())) {
                     deliveryCounts.merge(row.getDeliveryMode(),
                             Math.max(0L, row.getCount() == null ? 0L : row.getCount()), Long::sum);
                 }
@@ -133,6 +138,8 @@ public class RelationshipQueryService {
     }
 
     private RelationshipItemDTO toDto(RelationshipRow row) {
+        DeliveryPreferenceCapability capability =
+                DeliveryPreferenceCapability.forSourceType(row.getSourceType());
         return RelationshipItemDTO.builder()
                 .sourceType(row.getSourceType())
                 .sourceId(row.getSourceId())
@@ -147,6 +154,9 @@ public class RelationshipQueryService {
                 .deliveryMode(row.getDeliveryMode() == null
                         ? DEFAULT_DELIVERY_MODE : row.getDeliveryMode())
                 .expiresAt(row.getExpiresAt())
+                .deliveryPreferenceSupported(capability.deliveryPreferenceSupported())
+                .deliveryPreferenceUnsupportedReason(
+                        capability.deliveryPreferenceUnsupportedReason())
                 .build();
     }
 

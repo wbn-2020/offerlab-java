@@ -29,10 +29,17 @@ public class UpdateDigestController {
     public Result<PageResult<UpdateDigestItemDTO>> list(
             @RequestParam(required = false) @Size(max = 24) String sourceType,
             @RequestParam(required = false) @Size(max = 80) String sourceId,
+            @RequestParam(required = false) @Size(max = 24) String resourceType,
+            @RequestParam(required = false) @Size(max = 80) String resourceId,
+            @RequestParam(required = false) @Size(max = 24) String subscriptionSourceType,
+            @RequestParam(required = false) @Size(max = 80) String subscriptionSourceId,
             @RequestParam(defaultValue = "false") boolean unreadOnly,
             @RequestParam(defaultValue = "0") @Size(max = 64) String cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(queryService.list(
-                UserContext.require(), sourceType, sourceId, unreadOnly, cursor, size));
+                UserContext.require(),
+                resourceType == null ? sourceType : resourceType,
+                resourceId == null ? sourceId : resourceId,
+                subscriptionSourceType, subscriptionSourceId, unreadOnly, cursor, size));
     }
 }

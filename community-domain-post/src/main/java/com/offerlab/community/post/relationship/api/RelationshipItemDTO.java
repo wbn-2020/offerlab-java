@@ -21,4 +21,6 @@ public class RelationshipItemDTO {
     private LocalDateTime relationTime;
     private String deliveryMode;
     private LocalDateTime expiresAt;
+    private boolean deliveryPreferenceSupported;
+    private String deliveryPreferenceUnsupportedReason;
 }

@@ -17,6 +17,10 @@ class UserSubscriptionPreferenceGuardTest {
                 "src/main/java/com/offerlab/community/user/controller/UserSubscriptionPreferenceController.java");
         String service = read(
                 "src/main/java/com/offerlab/community/user/application/UserSubscriptionPreferenceService.java");
+        String facade = read(
+                "src/main/java/com/offerlab/community/user/api/UserSubscriptionPreferenceFacade.java");
+        String capability = read(
+                "src/main/java/com/offerlab/community/user/api/DeliveryPreferenceCapability.java");
         String mapper = read(
                 "src/main/java/com/offerlab/community/user/infrastructure/persistence/mapper/"
                         + "UserSubscriptionPreferenceMapper.java");
@@ -50,8 +54,17 @@ class UserSubscriptionPreferenceGuardTest {
         assertTrue(mapper.contains("expires_at IS NULL OR expires_at > #{now}"));
         assertTrue(mapper.contains("findEffectiveBatch"));
         assertTrue(mapper.contains("<foreach collection=\"sourceKeys\""));
-        assertTrue(service.contains("MAX_BATCH_SIZE"));
+        assertTrue(service.contains("MAX_SOURCE_KEY_BATCH_SIZE = 200"));
         assertTrue(service.contains("preferenceMapper.findEffectiveBatch"));
+        assertTrue(facade.contains("findEffectiveForRecipients"));
+        assertTrue(facade.contains("MAX_RECIPIENT_BATCH_SIZE = 1000"));
+        assertTrue(mapper.contains("uid IN"));
+        assertTrue(mapper.contains("<foreach collection=\"receiverUids\""));
+        assertTrue(service.contains("preferenceMapper.findEffectiveForRecipients"));
+        assertTrue(service.contains("normalizeReceiverUids"));
+        assertTrue(service.contains("requireDeliveryPreferenceSupported"));
+        assertTrue(capability.contains("Set.of(\"TOPIC\", \"DISCUSSION\", \"NEED\")"));
+        assertTrue(capability.contains("SOURCE_UPDATE_DELIVERY_NOT_AVAILABLE"));
     }
 
     @Test
