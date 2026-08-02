@@ -55,6 +55,15 @@ class DeepseekContentAssistAiClientTest {
     }
 
     @Test
+    void boundsRequestDurationForThePaidEnhancementExecutionWindow() {
+        assertEquals(DeepseekContentAssistAiClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
+                DeepseekContentAssistAiClient.effectiveRequestTimeoutMillis(0));
+        assertEquals(8000, DeepseekContentAssistAiClient.effectiveRequestTimeoutMillis(8000));
+        assertEquals(DeepseekContentAssistAiClient.HARD_MAX_REQUEST_TIMEOUT_MILLIS,
+                DeepseekContentAssistAiClient.effectiveRequestTimeoutMillis(Integer.MAX_VALUE));
+    }
+
+    @Test
     void rejectsDeclaredContentLengthBeforeReadingBody() {
         TrackingInputStream body = new TrackingInputStream("12345".getBytes(StandardCharsets.UTF_8));
         TestResponse response = new TestResponse(

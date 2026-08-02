@@ -8,7 +8,7 @@
     "core": {
       "location": "classpath:db/flyway/core",
       "autoMigrate": true,
-      "expectedMigrations": 72
+      "expectedMigrations": 75
     },
     "demo": {
       "location": "classpath:db/flyway/demo",
@@ -701,6 +701,33 @@
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260731.01__subscription_update_digest.sql",
       "sha256": "7a6f0212627fedb1a3bf330b576a8a07684292b16415320e29110a7550a6c767",
       "flywayChecksum": -1720044031
+    },
+    {
+      "version": "20260801.01",
+      "description": "entitlement_ai_assist_fulfillment",
+      "stream": "core",
+      "source": "db/migration/20260801_entitlement_ai_assist_fulfillment.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260801.01__entitlement_ai_assist_fulfillment.sql",
+      "sha256": "10d70ce7699eeffdd04f31aec12cff708453c6325e063dd4b951874a4d37b8fb",
+      "flywayChecksum": 903168601
+    },
+    {
+      "version": "20260802.01",
+      "description": "ai_entitlement_recovery_operations",
+      "stream": "core",
+      "source": "db/migration/20260802_ai_entitlement_recovery_operations.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260802.01__ai_entitlement_recovery_operations.sql",
+      "sha256": "63036021f589077a30b238a81d4b02f98e7e8c44512c2ec895f5e7881ba986aa",
+      "flywayChecksum": 1671954939
+    },
+    {
+      "version": "20260802.02",
+      "description": "creator_growth_challenges_badges",
+      "stream": "core",
+      "source": "db/migration/20260802_creator_growth_challenges_badges.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260802.02__creator_growth_challenges_badges.sql",
+      "sha256": "150413a67e354680dcb42d3612e9910d6b10ce76049218b3c67c3c76d6ac22fb",
+      "flywayChecksum": 2127849677
     }
   ]
 }

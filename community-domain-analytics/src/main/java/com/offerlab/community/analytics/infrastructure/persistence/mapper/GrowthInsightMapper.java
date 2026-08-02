@@ -345,6 +345,68 @@ public interface GrowthInsightMapper {
 
     @Select("""
             <script>
+            SELECT p.id AS postId,
+                   p.title AS title,
+                   e.domain AS domain,
+                   p.post_type AS postType,
+                   p.create_time AS publishedAt
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.author_id = #{authorId}
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.create_time &gt;= #{startsAt}
+              AND p.create_time &lt;= #{endsAt}
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+              <if test="domain != null">
+                AND e.domain = #{domain}
+              </if>
+              <if test="postType != null">
+                AND p.post_type = #{postType}
+              </if>
+            ORDER BY p.create_time DESC, p.id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<Map<String, Object>> selectEligibleCreatorChallengePosts(
+            @Param("authorId") Long authorId,
+            @Param("startsAt") LocalDateTime startsAt,
+            @Param("endsAt") LocalDateTime endsAt,
+            @Param("domain") Integer domain,
+            @Param("postType") Integer postType,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT p.id AS postId,
+                   p.title AS title,
+                   e.domain AS domain,
+                   p.post_type AS postType,
+                   p.create_time AS publishedAt
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.id = #{postId}
+              AND p.author_id = #{authorId}
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
+              AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%TESTDATA%'
+            LIMIT 1
+            """)
+    Map<String, Object> selectCreatorChallengeCompletionPost(
+            @Param("authorId") Long authorId,
+            @Param("postId") Long postId);
+
+    @Select("""
+            <script>
             SELECT e.domain AS domain,
                    COUNT(DISTINCT p.id) AS publicPostCount,
                    COUNT(DISTINCT profile.post_id) AS trustProfileCount,

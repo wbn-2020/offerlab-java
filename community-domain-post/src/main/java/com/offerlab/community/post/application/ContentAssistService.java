@@ -63,11 +63,8 @@ public class ContentAssistService {
             return result;
         }
         ContentAssistWritingDTO rule = ruleWriting(domain, cmd == null ? null : cmd.getPostType(), title, content, tagNames);
-        AssistExecution<ContentAssistWritingDTO> execution = tryAiWriting(domain, cmd == null ? null : cmd.getPostType(),
-                title, content, tagNames, assistContext, assistTemplateCode, rule);
-        record(uid, ContentAssistScene.WRITING, execution.recordProvider(), execution.status(), domain, content,
-                execution.promptTokens(), execution.completionTokens(), execution.estimatedCostMicros(), execution.errorCode());
-        return execution.result();
+        record(uid, ContentAssistScene.WRITING, "rules", "RULE_ONLY", domain, content, 0, 0, 0L, null);
+        return rule;
     }
 
     public ContentAssistQualityScoreDTO scoreQuality(Long uid, ContentAssistQualityScoreCmd cmd) {
@@ -86,11 +83,8 @@ public class ContentAssistService {
             return result;
         }
         ContentAssistQualityScoreDTO rule = ruleQuality(domain, cmd == null ? null : cmd.getPostType(), title, content, tagNames);
-        AssistExecution<ContentAssistQualityScoreDTO> execution = tryAiQuality(domain, cmd == null ? null : cmd.getPostType(),
-                title, content, tagNames, assistContext, assistTemplateCode, rule);
-        record(uid, ContentAssistScene.QUALITY_SCORE, execution.recordProvider(), execution.status(), domain, content,
-                execution.promptTokens(), execution.completionTokens(), execution.estimatedCostMicros(), execution.errorCode());
-        return execution.result();
+        record(uid, ContentAssistScene.QUALITY_SCORE, "rules", "RULE_ONLY", domain, content, 0, 0, 0L, null);
+        return rule;
     }
 
     public ContentAssistTagTopicSuggestionsDTO suggestTagsAndTopics(Long uid, ContentAssistTagTopicSuggestionsCmd cmd) {

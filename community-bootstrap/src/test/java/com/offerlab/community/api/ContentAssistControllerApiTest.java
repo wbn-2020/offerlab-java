@@ -2,10 +2,15 @@ package com.offerlab.community.api;
 
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.post.api.dto.ContentAssistCapabilityDTO;
+import com.offerlab.community.post.api.dto.ContentAssistEnhancedResultDTO;
+import com.offerlab.community.post.api.dto.ContentAssistEnhancedRequestSummaryDTO;
+import com.offerlab.community.post.api.dto.ContentAssistEnhancedStatusDTO;
 import com.offerlab.community.post.api.dto.ContentAssistQualityScoreDTO;
 import com.offerlab.community.post.api.dto.ContentAssistTagTopicSuggestionsDTO;
 import com.offerlab.community.post.api.dto.ContentAssistWritingDTO;
 import com.offerlab.community.post.controller.ContentAssistController;
+import com.offerlab.community.post.application.ContentAssistEnhancedService;
 import com.offerlab.community.post.application.ContentAssistService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +28,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -32,13 +39,15 @@ class ContentAssistControllerApiTest {
     @Mock
     private ContentAssistService contentAssistService;
     @Mock
+    private ContentAssistEnhancedService contentAssistEnhancedService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new ContentAssistController(contentAssistService), jwtService);
+        mvc = ApiTestSupport.mvc(new ContentAssistController(contentAssistService, contentAssistEnhancedService), jwtService);
     }
 
     @Test
@@ -190,5 +199,114 @@ class ContentAssistControllerApiTest {
                 .andExpect(jsonPath("$.data.topics[0].slug").value("backend-infra"));
 
         verify(contentAssistService).suggestTagsAndTopics(eq(12L), any());
+    }
+
+    @Test
+    void enhancedEndpointsRequireLoginAndDisableHttpCachingForSensitiveResults() throws Exception {
+        mvc.perform(post("/api/v1/content-assist/enhanced")
+                        .header("Idempotency-Key", "content-assist:test-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"draft\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorCode.UNAUTHORIZED.getCode()));
+
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(contentAssistEnhancedService.capability(7L)).thenReturn(ContentAssistCapabilityDTO.builder()
+                .available(true)
+                .remainingQuota(2L)
+                .benefitCode("AI_ASSIST_QUOTA")
+                .consumerCode("CONTENT_ASSIST_ENHANCED")
+                .build());
+        when(contentAssistEnhancedService.enhance(eq(7L), eq("content-assist:test-key"), any()))
+                .thenReturn(ContentAssistEnhancedResultDTO.builder()
+                        .requestStatus("FALLBACK")
+                        .usageStatus("RELEASED")
+                        .quotaConsumed(false)
+                        .requestFingerprint("a".repeat(64))
+                        .build());
+        when(contentAssistEnhancedService.status(7L, "content-assist:test-key"))
+                .thenReturn(ContentAssistEnhancedStatusDTO.builder()
+                        .requestStatus("FALLBACK")
+                        .usageStatus("RELEASED")
+                        .quotaConsumed(false)
+                        .requestFingerprint("a".repeat(64))
+                        .build());
+
+        mvc.perform(get("/api/v1/content-assist/capability")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.available").value(true))
+                .andExpect(jsonPath("$.data.remainingQuota").value(2));
+
+        mvc.perform(post("/api/v1/content-assist/enhanced")
+                        .header("Authorization", "Bearer token")
+                        .header("Idempotency-Key", "content-assist:test-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"domain\":1,\"postType\":10,\"content\":\"draft\"}"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data.requestStatus").value("FALLBACK"))
+                .andExpect(jsonPath("$.data.usageStatus").value("RELEASED"));
+
+        mvc.perform(get("/api/v1/content-assist/enhanced/status")
+                        .header("Authorization", "Bearer token")
+                        .param("idempotencyKey", "content-assist:test-key"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data.requestStatus").value("FALLBACK"));
+    }
+
+    @Test
+    void enhancedRecentRequiresLoginAndDoesNotCacheRecoverySummaries() throws Exception {
+        mvc.perform(get("/api/v1/content-assist/enhanced/recent"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorCode.UNAUTHORIZED.getCode()));
+
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(contentAssistEnhancedService.recent(7L, 2)).thenReturn(List.of(
+                ContentAssistEnhancedRequestSummaryDTO.builder()
+                        .requestId(101L)
+                        .requestStatus("RUNNING")
+                        .usageStatus("RESERVED")
+                        .quotaConsumed(false)
+                        .requestFingerprint("a".repeat(64))
+                        .build()));
+
+        mvc.perform(get("/api/v1/content-assist/enhanced/recent")
+                        .header("Authorization", "Bearer token")
+                        .param("limit", "2"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data[0].requestId").value(101))
+                .andExpect(jsonPath("$.data[0].requestStatus").value("RUNNING"))
+                .andExpect(jsonPath("$.data[0].idempotencyKey").doesNotExist())
+                .andExpect(jsonPath("$.data[0].contentHash").doesNotExist());
+
+        verify(contentAssistEnhancedService).recent(7L, 2);
+    }
+
+    @Test
+    void enhancedRequestIdStatusRequiresLoginAndDoesNotCacheResult() throws Exception {
+        mvc.perform(get("/api/v1/content-assist/enhanced/requests/101/status"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(ErrorCode.UNAUTHORIZED.getCode()));
+
+        when(jwtService.parseUid("token")).thenReturn(7L);
+        when(contentAssistEnhancedService.statusByRequestId(7L, 101L))
+                .thenReturn(ContentAssistEnhancedStatusDTO.builder()
+                        .requestStatus("SUCCEEDED")
+                        .usageStatus("CONFIRMED")
+                        .quotaConsumed(true)
+                        .requestFingerprint("a".repeat(64))
+                        .build());
+
+        mvc.perform(get("/api/v1/content-assist/enhanced/requests/101/status")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data.requestStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.usageStatus").value("CONFIRMED"));
+
+        verify(contentAssistEnhancedService).statusByRequestId(7L, 101L);
     }
 }

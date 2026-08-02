@@ -11,6 +11,9 @@ import com.offerlab.community.incentive.api.IncentiveDtos.BenefitOrderDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.BenefitEntitlementDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.EntitlementConsumeCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.OrderActionCmd;
+import com.offerlab.community.incentive.api.quota.BenefitCodes;
+import com.offerlab.community.incentive.api.quota.EntitlementUsageDTO;
+import com.offerlab.community.incentive.api.quota.EntitlementUsageStatus;
 import com.offerlab.community.incentive.domain.IncentiveTypes;
 import com.offerlab.community.incentive.infrastructure.IncentiveMapper;
 import com.offerlab.community.incentive.infrastructure.IncentivePersistence.BenefitOrderPO;
@@ -39,7 +42,7 @@ import java.util.HexFormat;
 @RequiredArgsConstructor
 public class BenefitService {
     private static final Set<String> ENABLED_CONSUMABLE_BENEFITS =
-            Set.of("AI_ASSIST_QUOTA", "COLLECTION_ORGANIZATION_QUOTA");
+            Set.of(BenefitCodes.AI_ASSIST_QUOTA);
     private static final Set<String> PROHIBITED_BENEFIT_TERMS = Set.of(
             "充值", "提现", "转账", "现金", "人民币", "抽奖", "赌博", "认证", "专家", "曝光", "流量", "审核权",
             "recharge", "withdraw", "transfer", "cash", "lottery", "gambling", "certification",
@@ -50,14 +53,16 @@ public class BenefitService {
     private final AdminPermissionService adminPermissionService;
     private final AdminAuditService adminAuditService;
     private final ObjectMapper objectMapper;
+    private final EntitlementConsumerRegistry entitlementConsumerRegistry;
 
     public PageResult<BenefitDTO> catalog(Integer page, Integer size) {
         int safePage = safePage(page);
         int safeSize = IncentiveTypes.safeLimit(size);
         List<BenefitDTO> items = mapper.selectBenefits((safePage - 1) * safeSize, safeSize).stream()
+                .filter(item -> entitlementConsumerRegistry.isRuntimeAvailable(item.getBenefitCode()))
                 .map(this::toBenefitDto)
                 .toList();
-        return page(items, mapper.countBenefits(), safePage, safeSize);
+        return page(items, items.size(), safePage, safeSize);
     }
 
     public PageResult<BenefitOrderDTO> orders(Long userId, Integer page, Integer size) {
@@ -70,6 +75,16 @@ public class BenefitService {
         return page(items, mapper.countUserOrders(userId), safePage, safeSize);
     }
 
+    public BenefitOrderDTO orderByIdempotency(Long userId, String idempotencyKey) {
+        requireUser(userId);
+        String key = IncentiveTypes.requireText(idempotencyKey, 96, "idempotencyKey");
+        BenefitOrderPO order = mapper.selectOrderByIdempotency(userId, key);
+        if (order == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return toOrderDto(order);
+    }
+
     public PageResult<BenefitEntitlementDTO> entitlements(Long userId, Integer page, Integer size) {
         requireUser(userId);
         int safePage = safePage(page);
@@ -79,37 +94,22 @@ public class BenefitService {
         return page(items, mapper.countUserEntitlements(userId), safePage, safeSize);
     }
 
-    @Transactional
+    public PageResult<EntitlementUsageDTO> entitlementUsages(Long userId, Integer page, Integer size) {
+        requireUser(userId);
+        int safePage = safePage(page);
+        int safeSize = IncentiveTypes.safeLimit(size);
+        List<EntitlementUsageDTO> items = mapper.selectUserEntitlementUsages(
+                        userId, (safePage - 1) * safeSize, safeSize)
+                .stream()
+                .map(this::toEntitlementUsageDto)
+                .toList();
+        return page(items, mapper.countUserEntitlementUsages(userId), safePage, safeSize);
+    }
+
     public BenefitEntitlementDTO consumeEntitlement(Long entitlementId, EntitlementConsumeCmd cmd, Long userId) {
         requireUser(userId);
-        if (cmd == null) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
-        long amount = IncentiveTypes.requirePositive(cmd.getAmount(), "amount");
-        String key = IncentiveTypes.requireText(cmd.getIdempotencyKey(), 96, "idempotencyKey");
-        String reason = IncentiveTypes.requireReason(cmd.getReason());
-        String fingerprint = sha256(entitlementId + "|" + userId + "|" + amount + "|" + reason);
-        BenefitEntitlementPO entitlement = mapper.lockBenefitEntitlement(entitlementId);
-        if (entitlement == null || !userId.equals(entitlement.getUserId())) {
-            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
-        }
-        if (!ENABLED_CONSUMABLE_BENEFITS.contains(entitlement.getBenefitCode())) {
-            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "entitlement is queryable but not consumable");
-        }
-        BenefitEntitlementUsagePO existingUsage = mapper.selectEntitlementUsage(entitlementId, key);
-        if (existingUsage != null) {
-            requireEquivalentUsage(existingUsage, fingerprint);
-            return toEntitlementDto(entitlement);
-        }
-        if (mapper.insertEntitlementUsage(idGenerator.nextId(), entitlementId, userId, amount, key,
-                fingerprint, reason) != 1) {
-            requireEquivalentUsage(mapper.selectEntitlementUsage(entitlementId, key), fingerprint);
-            return toEntitlementDto(mapper.lockBenefitEntitlement(entitlementId));
-        }
-        if (mapper.consumeEntitlement(entitlementId, userId, amount) != 1) {
-            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "entitlement quota is insufficient");
-        }
-        return toEntitlementDto(mapper.lockBenefitEntitlement(entitlementId));
+        throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
+                "ENTITLEMENT_CONSUME_REQUIRES_BUSINESS_CONTEXT");
     }
 
     public PageResult<BenefitOrderDTO> adminOrders(String status, Integer page, Integer size, Long operatorUid) {
@@ -188,7 +188,8 @@ public class BenefitService {
             po.setCreatedBy(operatorUid);
         }
         po.setEnabled(Boolean.TRUE.equals(cmd.getEnabled())
-                && ENABLED_CONSUMABLE_BENEFITS.contains(po.getBenefitCode()) ? 1 : 0);
+                && ENABLED_CONSUMABLE_BENEFITS.contains(po.getBenefitCode())
+                && entitlementConsumerRegistry.hasInstalledConsumer(po.getBenefitCode()) ? 1 : 0);
         po.setUpdatedBy(operatorUid);
         po.setActionReason(reason);
         mapper.upsertBenefit(po);
@@ -221,6 +222,9 @@ public class BenefitService {
         }
         if (!ENABLED_CONSUMABLE_BENEFITS.contains(benefit.getBenefitCode())) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        if (!entitlementConsumerRegistry.isRuntimeAvailable(benefit.getBenefitCode())) {
+            throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "AI_ASSIST_DISABLED");
         }
         requireAllowedBenefitShape(benefit.getCategory(), benefit.getDeliveryType());
         long totalCost;
@@ -267,6 +271,16 @@ public class BenefitService {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         history(order.getId(), "CREATED", "RESERVED", userId, "Points and stock reserved");
+        BenefitEntitlementPO entitlement = buildEntitlement(order, "AUTO:" + order.getOrderNo(), userId,
+                "Automatic account entitlement delivery");
+        if (mapper.insertBenefitEntitlement(entitlement) != 1) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(), "automatic entitlement delivery failed");
+        }
+        if (mapper.transitionBenefitOrder(order.getId(), "RESERVED", "DELIVERED", null, null,
+                entitlement.getEntitlementKey(), userId, "Automatic account entitlement delivery") != 1) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        history(order.getId(), "RESERVED", "DELIVERED", userId, "Automatic account entitlement delivery");
         return toOrderDto(mapper.lockBenefitOrder(order.getId()));
     }
 
@@ -320,7 +334,7 @@ public class BenefitService {
         }
         BenefitOrderDTO before = toOrderDto(order);
         BenefitEntitlementPO entitlement = mapper.lockEntitlementByOrder(orderId);
-        if (entitlement == null || mapper.countAnyEntitlementUsage(entitlement.getId()) > 0
+        if (entitlement == null || mapper.countRefundBlockingEntitlementUsage(entitlement.getId()) > 0
                 || !Objects.equals(entitlement.getQuantityRemaining(), entitlement.getQuantityTotal())
                 || entitlement.getReversible() == null || entitlement.getReversible() != 1
                 || mapper.revokeEntitlementByOrder(orderId, operatorUid, reason) != 1) {
@@ -495,6 +509,24 @@ public class BenefitService {
                 .revokedAt(po.getRevokedAt()).updateTime(po.getUpdateTime()).build();
     }
 
+    private EntitlementUsageDTO toEntitlementUsageDto(BenefitEntitlementUsagePO po) {
+        return new EntitlementUsageDTO(
+                po.getId(),
+                po.getEntitlementId(),
+                po.getUserId(),
+                po.getBenefitCode(),
+                po.getConsumerCode(),
+                EntitlementUsageStatus.valueOf(po.getUsageStatus()),
+                po.getAmount(),
+                po.getIdempotencyKey(),
+                po.getRequestFingerprint(),
+                po.getFailureCode(),
+                po.getExpiresAt(),
+                po.getConfirmedAt(),
+                po.getReleasedAt()
+        );
+    }
+
     private void requireAdmin(Long uid) {
         adminPermissionService.requireAdmin(uid);
     }
@@ -521,13 +553,6 @@ public class BenefitService {
         if (order == null || !Objects.equals(order.getRequestFingerprint(), fingerprint)) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION.getCode(),
                     "benefit order idempotency key was reused for another request");
-        }
-    }
-
-    private static void requireEquivalentUsage(BenefitEntitlementUsagePO usage, String fingerprint) {
-        if (usage == null || !Objects.equals(usage.getRequestFingerprint(), fingerprint)) {
-            throw new BizException(ErrorCode.DUPLICATE_OPERATION.getCode(),
-                    "entitlement consume idempotency key was reused for another request");
         }
     }
 

@@ -21,6 +21,10 @@
         </dependency>
         <dependency>
             <groupId>com.offerlab</groupId>
+            <artifactId>community-domain-incentive-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.offerlab</groupId>
             <artifactId>community-infrastructure</artifactId>
         </dependency>
         <dependency>

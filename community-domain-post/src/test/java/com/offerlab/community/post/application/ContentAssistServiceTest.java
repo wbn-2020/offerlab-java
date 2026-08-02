@@ -56,7 +56,7 @@ class ContentAssistServiceTest {
     }
 
     @Test
-    void invalidAiJsonFallsBackToRulesAndCapturesErrorCode() {
+    void automaticWritingRemainsRuleOnlyWhenProviderIsConfigured() {
         InMemoryRecordGateway records = new InMemoryRecordGateway();
         StubAiClient aiClient = StubAiClient.withResponse("""
                 {"suggestedTitle":12,"outline":"bad-type","extra":"drop-me"}
@@ -80,18 +80,16 @@ class ContentAssistServiceTest {
                 .build());
 
         assertEquals("rules", result.getProvider());
-        assertTrue(result.getFallbackUsed());
-        assertEquals("AI_INVALID_RESPONSE", result.getErrorCode());
-        assertEquals("problem-solution", aiClient.lastPrompt.assistTemplateCode());
-        assertTrue(aiClient.lastPrompt.assistContext().contains("source=search_gap"));
-        assertTrue(aiClient.lastPrompt.assistContext().contains("keyword=Redis cache rebuild"));
-        assertFalse(aiClient.lastPrompt.assistContext().contains("returnHref"));
-        assertEquals("AI_FALLBACK", records.last().status());
-        assertEquals("AI_INVALID_RESPONSE", records.last().errorCode());
+        assertFalse(result.getFallbackUsed());
+        assertTrue(result.getErrorCode() == null || result.getErrorCode().isBlank());
+        assertEquals(0, aiClient.calls);
+        assertNull(aiClient.lastPrompt);
+        assertEquals("RULE_ONLY", records.last().status());
+        assertTrue(records.last().errorCode() == null || records.last().errorCode().isBlank());
     }
 
     @Test
-    void aiFailureFallsBackToRulesWithoutBreakingAssistFlow() {
+    void automaticWritingNeverCallsProviderWhenProviderWouldFail() {
         InMemoryRecordGateway records = new InMemoryRecordGateway();
         StubAiClient aiClient = StubAiClient.withFailure(new IllegalStateException("request timeout"));
         ContentAssistService service = new ContentAssistService(
@@ -108,12 +106,12 @@ class ContentAssistServiceTest {
                 .build());
 
         assertEquals("rules", result.getProvider());
-        assertTrue(result.getFallbackUsed());
-        assertEquals("AI_TIMEOUT", result.getErrorCode());
-        assertEquals(1, aiClient.calls);
-        assertEquals("AI_FALLBACK", records.last().status());
-        assertEquals("deepseek", records.last().provider());
-        assertEquals("AI_TIMEOUT", records.last().errorCode());
+        assertFalse(result.getFallbackUsed());
+        assertTrue(result.getErrorCode() == null || result.getErrorCode().isBlank());
+        assertEquals(0, aiClient.calls);
+        assertEquals("RULE_ONLY", records.last().status());
+        assertEquals("rules", records.last().provider());
+        assertTrue(records.last().errorCode() == null || records.last().errorCode().isBlank());
     }
 
     @Test

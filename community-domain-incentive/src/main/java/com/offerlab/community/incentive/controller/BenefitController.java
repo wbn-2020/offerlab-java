@@ -42,6 +42,11 @@ public class BenefitController {
         return Result.ok(benefitService.placeOrder(cmd, UserContext.require()));
     }
 
+    @GetMapping("/orders/status")
+    public Result<BenefitOrderDTO> orderStatus(@RequestParam String idempotencyKey) {
+        return Result.ok(benefitService.orderByIdempotency(UserContext.require(), idempotencyKey));
+    }
+
     @PostMapping("/orders/{orderId}/cancel")
     @RateLimit(key = "'incentive:benefit-cancel:' + #uid", rate = 10, per = 300, failOpen = false)
     public Result<BenefitOrderDTO> cancelOrder(@PathVariable Long orderId,

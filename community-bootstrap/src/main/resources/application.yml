@@ -112,6 +112,22 @@ offerlab:
     topic-enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_TOPIC_ENABLED:true}
     discussion-enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_DISCUSSION_ENABLED:true}
     need-enabled: ${OFFERLAB_SUBSCRIPTION_DELIVERY_NEED_ENABLED:true}
+  incentive:
+    ai-assist-entitlement-enabled: ${OFFERLAB_AI_ASSIST_ENTITLEMENT_ENABLED:false}
+    entitlement-reservation:
+      enabled: ${OFFERLAB_ENTITLEMENT_RESERVATION_ENABLED:true}
+      ttl-seconds: ${OFFERLAB_ENTITLEMENT_RESERVATION_TTL_SECONDS:120}
+      recovery-batch-size: ${OFFERLAB_ENTITLEMENT_RESERVATION_RECOVERY_BATCH_SIZE:100}
+      recovery-delay-ms: ${OFFERLAB_ENTITLEMENT_RESERVATION_RECOVERY_DELAY_MS:5000}
+  ai:
+    content-assist:
+      enhanced-enabled: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_ENABLED:false}
+      enhanced-result-retention-hours: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_RESULT_RETENTION_HOURS:24}
+      enhanced-cleanup-batch-size: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_CLEANUP_BATCH_SIZE:100}
+      enhanced-request-timeout-seconds: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_REQUEST_TIMEOUT_SECONDS:120}
+      enhanced-execution-grace-seconds: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_EXECUTION_GRACE_SECONDS:30}
+      enhanced-recovery-delay-ms: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_RECOVERY_DELAY_MS:10000}
+      enhanced-ops-reconcile-enabled: ${OFFERLAB_CONTENT_ASSIST_ENHANCED_OPS_RECONCILE_ENABLED:false}
 
 logging:
   level:

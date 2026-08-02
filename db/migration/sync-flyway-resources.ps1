@@ -200,6 +200,18 @@ $initMirrorMappings = @(
   [pscustomobject]@{
     Source = Join-Path $sourceDir "20260731_subscription_update_digest.sql"
     Destination = Join-Path $repoRoot "db\init\33_subscription_update_digest.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260801_entitlement_ai_assist_fulfillment.sql"
+    Destination = Join-Path $repoRoot "db\init\34_entitlement_ai_assist_fulfillment.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260802_ai_entitlement_recovery_operations.sql"
+    Destination = Join-Path $repoRoot "db\init\35_ai_entitlement_recovery_operations.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260802_creator_growth_challenges_badges.sql"
+    Destination = Join-Path $repoRoot "db\init\36_creator_growth_challenges_badges.sql"
   }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"

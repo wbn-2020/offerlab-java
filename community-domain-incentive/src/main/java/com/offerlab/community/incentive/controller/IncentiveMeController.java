@@ -23,6 +23,7 @@ import com.offerlab.community.incentive.api.IncentiveDtos.RoleWorkspaceV8DTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ThankCmd;
 import com.offerlab.community.incentive.api.IncentiveDtos.ThankTicketDTO;
 import com.offerlab.community.incentive.api.IncentiveDtos.ThankWorkspaceDTO;
+import com.offerlab.community.incentive.api.quota.EntitlementUsageDTO;
 import com.offerlab.community.incentive.application.AccountLedgerService;
 import com.offerlab.community.incentive.application.BenefitService;
 import com.offerlab.community.incentive.application.CommunityRoleService;
@@ -74,6 +75,13 @@ public class IncentiveMeController {
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size) {
         return Result.ok(benefitService.entitlements(UserContext.require(), page, size));
+    }
+
+    @GetMapping("/entitlement-usages")
+    public Result<PageResult<EntitlementUsageDTO>> entitlementUsages(
+            @RequestParam(defaultValue = "1") Integer page,
+            @RequestParam(defaultValue = "20") Integer size) {
+        return Result.ok(benefitService.entitlementUsages(UserContext.require(), page, size));
     }
 
     @PostMapping("/entitlements/{entitlementId}/consume")
