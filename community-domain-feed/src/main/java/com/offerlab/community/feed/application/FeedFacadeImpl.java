@@ -6,9 +6,18 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.utils.CursorUtils;
 import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.feed.api.FeedFacade;
+import com.offerlab.community.feed.api.control.UserDistributionControlsQueryFacade;
+import com.offerlab.community.feed.api.control.UserDistributionControlsSnapshot;
+import com.offerlab.community.feed.api.quality.ChannelQualitySignalSummary;
+import com.offerlab.community.feed.api.quality.CreatorQualitySignalQueryFacade;
+import com.offerlab.community.feed.api.quality.CreatorQualitySignalQueryResult;
+import com.offerlab.community.feed.api.dto.ChannelHotBoardItemVO;
+import com.offerlab.community.feed.api.dto.ChannelHotBoardVO;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
+import com.offerlab.community.feed.api.dto.FeedControlVO;
 import com.offerlab.community.feed.api.dto.FeedFeedbackPreferenceVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
+import com.offerlab.community.feed.api.dto.RecommendationReasonDetailVO;
 import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
@@ -36,6 +45,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -43,17 +53,21 @@ import java.util.stream.Stream;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class FeedFacadeImpl implements FeedFacade {
+public class FeedFacadeImpl implements FeedFacade, UserDistributionControlsQueryFacade, CreatorQualitySignalQueryFacade {
 
     private static final int MAX_DOMAIN_INBOX_SCAN_ROWS = 1000;
     private static final int MAX_FOLLOWING_DB_SCAN_ROWS = 5000;
     private static final int MAX_CROSS_DOMAIN_CANDIDATE_FETCH_SIZE = 100;
+    private static final int AUTHOR_CONTROL_PUBLIC_POST_SCAN_SIZE = 50;
     private static final String CROSS_DOMAIN_CURSOR_VERSION = "cd1";
     private static final String FOLLOWING_DB_CURSOR_VERSION = "fdb1";
     private static final long NEW_CREATOR_MAX_PUBLIC_POSTS = 3L;
     private static final double NEW_CREATOR_BOOST_SCORE = 12D;
     private static final double LESS_LIKE_THIS_PENALTY = 1_000D;
     private static final String NEW_CREATOR_SUPPORT_REASON = "新作者前 3 篇内容扶持";
+    private static final String CHANNEL_HOT_BOARD_RULE_VERSION = "channel-hot.v1";
+    private static final String CHANNEL_HOT_BOARD_REASON = "按公开互动与发布时间综合排序";
+    private static final String RESERVED_FEEDBACK_REASON_PREFIX = "v30:";
 
     private final FeedInboxRedis feedRedis;
     private final FeedFeedbackStore feedbackStore;
@@ -99,10 +113,10 @@ public class FeedFacadeImpl implements FeedFacade {
         }
         UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
         Set<Long> hiddenPostIds = feedbackStore.hiddenPostIds(uid);
+        Set<Long> blockedAuthorIds = blockedAuthorIdsSafely(uid);
         Set<Integer> reducedDomains = feedbackStore.lessLikedDomains(uid);
-        List<PostBriefDTO> visibleCandidates = filterDistributablePosts(page.getItems()).stream()
-                .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
-                .toList();
+        List<PostBriefDTO> visibleCandidates = filterFeedCandidates(
+                page.getItems(), hiddenPostIds, blockedAuthorIds, domain == null);
         Map<Long, Long> publicPostCountByAuthor = postFacade.batchCountPublicPublishedPostsByAuthors(visibleCandidates.stream()
                 .map(PostBriefDTO::getAuthorId)
                 .filter(Objects::nonNull)
@@ -130,7 +144,7 @@ public class FeedFacadeImpl implements FeedFacade {
         UserIntentDTO intent = uid == null ? null : userFacade.getUserIntent(uid);
         Integer sourceDomain = inferCrossDomainSource(intent);
         Set<Long> hiddenPostIds = uid == null ? Set.of() : feedbackStore.hiddenPostIds(uid);
-        Set<Integer> reducedDomains = uid == null ? Set.of() : feedbackStore.lessLikedDomains(uid);
+        Set<Long> blockedAuthorIds = blockedAuthorIdsSafely(uid);
         List<PostBriefDTO> candidates = new ArrayList<>();
         List<String> failedDomains = new ArrayList<>();
         CrossDomainCursor pageCursor = parseCrossDomainCursor(cursor);
@@ -144,8 +158,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     sourceHasMore |= page != null && Boolean.TRUE.equals(page.getHasMore());
                     continue;
                 }
-                filterDistributablePosts(page.getItems()).stream()
-                        .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
+                filterFeedCandidates(page.getItems(), hiddenPostIds, blockedAuthorIds, true)
                         .forEach(candidates::add);
                 sourceHasMore |= Boolean.TRUE.equals(page.getHasMore());
             } catch (RuntimeException e) {
@@ -160,6 +173,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     .filter(Objects::nonNull)
                     .collect(Collectors.toSet()));
             List<PostBriefDTO> ranked = candidates.stream()
+                    // The cursor is a post keyset cursor, so the page order must use the same keyset.
                     .sorted(Comparator.comparing(PostBriefDTO::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder()))
                             .thenComparing(PostBriefDTO::getId, Comparator.nullsLast(Comparator.reverseOrder())))
                     .limit(pageSize)
@@ -324,9 +338,15 @@ public class FeedFacadeImpl implements FeedFacade {
 
     @Override
     public void recordFeedback(Long uid, Long postId, String action, String reason) {
+        recordFeedback(uid, postId, action, reason, null);
+    }
+
+    @Override
+    public void recordFeedback(Long uid, Long postId, String action, String reason, String reasonCode) {
         if (uid == null || uid <= 0 || postId == null || postId <= 0 || action == null || action.isBlank()) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
+        rejectReservedFeedbackReason(reason);
         if (isRestoreAction(action)) {
             feedbackStore.record(uid, postId, "RESTORE", reason, null);
             return;
@@ -337,7 +357,79 @@ public class FeedFacadeImpl implements FeedFacade {
         if (!PublicContentFilter.isDistributablePost(post)) {
             throw new BizException(ErrorCode.POST_NOT_FOUND);
         }
-        feedbackStore.record(uid, postId, action, reason, effectiveDomain(post.getDomain()));
+        if (isLegacyHideAuthorAction(action)) {
+            if (!isBlockablePublicAuthor(post, uid)) {
+                throw new BizException(ErrorCode.POST_NOT_FOUND);
+            }
+            feedbackStore.blockAuthor(uid, post.getAuthorId());
+            return;
+        }
+        feedbackStore.record(uid, postId, action,
+                normalizeFeedbackReason(action, reason, reasonCode), effectiveDomain(post.getDomain()));
+    }
+
+    @Override
+    public ChannelHotBoardVO getChannelHotBoard(Long viewerUid, Integer domain, int size) {
+        if (domain == null || effectiveDomain(domain) == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        int boardSize = Math.min(Math.max(size, 1), 20);
+        PageResult<FeedItemVO> page = getHotFeed(viewerUid, null, boardSize, domain);
+        List<FeedItemVO> entries = page == null || page.getItems() == null ? List.of() : page.getItems();
+        List<ChannelHotBoardItemVO> items = new ArrayList<>(entries.size());
+        for (int index = 0; index < entries.size(); index++) {
+            FeedItemVO item = entries.get(index);
+            if (item == null || item.getPost() == null) {
+                continue;
+            }
+            items.add(ChannelHotBoardItemVO.builder()
+                    .rank(items.size() + 1)
+                    .item(item)
+                    .reasonText(CHANNEL_HOT_BOARD_REASON)
+                    .build());
+        }
+        return ChannelHotBoardVO.builder()
+                .domain(domain)
+                .ruleVersion(CHANNEL_HOT_BOARD_RULE_VERSION)
+                .generatedAt(LocalDateTime.now())
+                .items(items)
+                .build();
+    }
+
+    @Override
+    public UserDistributionControlsSnapshot snapshot(Long viewerUid) {
+        if (viewerUid == null || viewerUid <= 0) {
+            return UserDistributionControlsSnapshot.emptyAvailable();
+        }
+        Set<Long> hiddenPostIds = hiddenPostIdsSafely(viewerUid);
+        Set<Integer> reducedDomains = lessLikedDomainsSafely(viewerUid);
+        if (!feedbackStore.controlsAvailable()) {
+            return new UserDistributionControlsSnapshot(hiddenPostIds, Set.of(), reducedDomains, false);
+        }
+        return new UserDistributionControlsSnapshot(
+                hiddenPostIds,
+                feedbackStore.blockedAuthorIds(viewerUid),
+                reducedDomains,
+                true);
+    }
+
+    @Override
+    public CreatorQualitySignalQueryResult findActiveQualitySignals(
+            java.util.Collection<Long> publicPostIds,
+            LocalDateTime since,
+            LocalDateTime now
+    ) {
+        return feedbackStore.findActiveQualitySignals(publicPostIds, since, now);
+    }
+
+    @Override
+    public ChannelQualitySignalSummary findChannelQualitySignals(
+            java.util.Collection<Integer> domainCodes,
+            int minimumDistinctReaders,
+            LocalDateTime since,
+            LocalDateTime now
+    ) {
+        return feedbackStore.findChannelQualitySignals(domainCodes, minimumDistinctReaders, since, now);
     }
 
     @Override
@@ -356,6 +448,41 @@ public class FeedFacadeImpl implements FeedFacade {
         return feedbackStore.find(uid, postId);
     }
 
+    @Override
+    public FeedControlVO blockAuthor(Long uid, Long authorUid) {
+        if (uid == null || uid <= 0 || authorUid == null || authorUid <= 0 || Objects.equals(uid, authorUid)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (!hasKnownPublicNonAnonymousPost(authorUid)) {
+            throw new BizException(ErrorCode.POST_NOT_FOUND);
+        }
+        return feedbackStore.blockAuthor(uid, authorUid);
+    }
+
+    @Override
+    public void unblockAuthor(Long uid, Long authorUid) {
+        if (uid == null || uid <= 0 || authorUid == null || authorUid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        feedbackStore.unblockAuthor(uid, authorUid);
+    }
+
+    @Override
+    public PageResult<FeedControlVO> listControls(Long uid, String cursor, int size) {
+        if (uid == null || uid <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return feedbackStore.listControls(uid, cursor, size);
+    }
+
+    @Override
+    public void deleteControl(Long uid, Long controlId) {
+        if (uid == null || uid <= 0 || controlId == null || controlId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        feedbackStore.deleteControl(uid, controlId);
+    }
+
     private PageResult<FeedItemVO> assembleFromTuples(Set<ZSetOperations.TypedTuple<String>> tuples,
                                                       int size,
                                                       Long viewerUid,
@@ -369,6 +496,7 @@ public class FeedFacadeImpl implements FeedFacade {
         List<Long> postIds = idsAndScores.stream().map(a -> a[0]).toList();
         var posts = postFacade.batchGetPosts(postIds, viewerUid);
         Set<Long> hiddenPostIds = hiddenPostIdsSafely(viewerUid);
+        Set<Long> blockedAuthorIds = blockedAuthorIdsSafely(viewerUid);
         var counters = postFacade.batchGetCounters(postIds);
         Set<Long> authorIds = posts.values().stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet());
         var authors = userFacade.batchGetUserBriefs(authorIds);
@@ -378,7 +506,7 @@ public class FeedFacadeImpl implements FeedFacade {
         List<FeedItemVO> items = new ArrayList<>(postIds.size());
         for (long[] pair : idsAndScores) {
             PostBriefDTO p = posts.get(pair[0]);
-            if (p == null || hiddenPostIds.contains(p.getId()) || !PublicContentFilter.isDistributablePost(p)) continue;
+            if (!isVisibleFeedCandidate(p, hiddenPostIds, blockedAuthorIds, false)) continue;
             UserBriefDTO author = feedAuthor(p, authors, viewerUid);
             PostCounterDTO counter = counters.get(p.getId());
             FeedItemVO.MyInteraction my = null;
@@ -390,6 +518,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     .author(author)
                     .counter(counter)
                     .myInteraction(my)
+                    .recommendationReasonDetails(sourceReasonDetails(source))
                     .sourceType(source.type())
                     .sourceLabel(source.label())
                     .reasonCode(source.reasonCode())
@@ -489,6 +618,7 @@ public class FeedFacadeImpl implements FeedFacade {
         int scannedRows = 0;
         List<PostBriefDTO> matches = new ArrayList<>(pageSize + 1);
         Set<Long> hiddenPostIds = hiddenPostIdsSafely(uid);
+        Set<Long> blockedAuthorIds = blockedAuthorIdsSafely(uid);
         boolean sourceHasMore = false;
         PostBriefDTO lastRawPost = null;
 
@@ -507,8 +637,7 @@ public class FeedFacadeImpl implements FeedFacade {
             List<PostBriefDTO> scanned = sourceHasMore ? raw.subList(0, fetchSize) : raw;
             scannedRows += scanned.size();
             for (PostBriefDTO post : scanned) {
-                if (PublicContentFilter.isDistributablePost(post)
-                        && !hiddenPostIds.contains(post.getId())) {
+                if (isVisibleFeedCandidate(post, hiddenPostIds, blockedAuthorIds, false)) {
                     matches.add(post);
                     if (matches.size() > pageSize) {
                         break;
@@ -600,7 +729,7 @@ public class FeedFacadeImpl implements FeedFacade {
                                                      boolean hasMore,
                                                      FeedSource source) {
         if (posts == null || posts.isEmpty()) return PageResult.empty();
-        List<PostBriefDTO> visiblePosts = visiblePostsForViewer(posts, viewerUid);
+        List<PostBriefDTO> visiblePosts = filterFeedCandidates(posts, viewerUid, false);
         if (visiblePosts.isEmpty()) return PageResult.empty();
         List<Long> postIds = visiblePosts.stream().map(PostBriefDTO::getId).toList();
         var counters = postFacade.batchGetCounters(postIds);
@@ -615,6 +744,7 @@ public class FeedFacadeImpl implements FeedFacade {
                 .author(feedAuthor(p, authors, viewerUid))
                 .counter(counters.get(p.getId()))
                 .myInteraction(viewerUid == null ? null : myInteraction(p.getId(), likedPostIds, favoritedPostIds))
+                .recommendationReasonDetails(sourceReasonDetails(source))
                 .sourceType(source.type())
                 .sourceLabel(source.label())
                 .reasonCode(source.reasonCode())
@@ -659,13 +789,13 @@ public class FeedFacadeImpl implements FeedFacade {
             PostCounterDTO counter = counters.get(post.getId());
             List<String> reasons = recommendationReasons(post, counter, intent, publicPostCountByAuthor);
             Integer targetDomain = effectiveDomain(post.getDomain());
-            String reasonText = neutralRecommendationReason(
-                    crossDomainReason(post, sourceDomain, targetDomain, reasons, null, intent), post);
+            String reasonText = crossDomainReason(sourceDomain, targetDomain, reasons, null);
             FeedItemVO feedItem = FeedItemVO.builder()
                     .post(post)
                     .author(feedAuthor(post, authors, viewerUid))
                     .counter(counter)
                     .recommendationReasons(reasons)
+                    .recommendationReasonDetails(recommendationReasonDetails(reasons, post))
                     .myInteraction(viewerUid == null ? null : myInteraction(post.getId(), likedPostIds, favoritedPostIds))
                     .sourceType(FeedSource.CROSS_DOMAIN.type())
                     .sourceLabel(FeedSource.CROSS_DOMAIN.label())
@@ -712,6 +842,7 @@ public class FeedFacadeImpl implements FeedFacade {
                     .author(feedAuthor(p, authors, viewerUid))
                     .counter(counters.get(p.getId()))
                     .recommendationReasons(reasons)
+                    .recommendationReasonDetails(recommendationReasonDetails(reasons, p))
                     .myInteraction(viewerUid == null ? null : myInteraction(p.getId(), likedPostIds, favoritedPostIds))
                     .sourceType(FeedSource.RECOMMEND.type())
                     .sourceLabel(FeedSource.RECOMMEND.label())
@@ -804,6 +935,7 @@ public class FeedFacadeImpl implements FeedFacade {
         }
         List<CrossDomainRecommendationVO> items = page.getItems().stream()
                 .filter(Objects::nonNull)
+                .filter(item -> !isHighRiskDomain(item.getPost()))
                 .map(item -> {
                     Integer targetDomain = effectiveDomain(item.getPost() == null ? null : item.getPost().getDomain());
                     return CrossDomainRecommendationVO.builder()
@@ -894,13 +1026,13 @@ public class FeedFacadeImpl implements FeedFacade {
         String content = searchableText(post, ext);
         String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
         if (!matchedInterest.isBlank()) {
-            reasons.add("匹配你的兴趣：" + matchedInterest);
+            reasons.add("匹配你关注的兴趣方向");
         }
         if (intent != null && matchesAny(engineeringArea, intent.getTargetCompanies())) {
-            reasons.add("覆盖你关注的工程场景：" + engineeringArea);
+            reasons.add("关联你关注的工程场景");
         }
         if (intent != null && matchesAny(technicalScenario, intent.getTargetPositions())) {
-            reasons.add("关联你关注的技术主题：" + technicalScenario);
+            reasons.add("关联你关注的技术主题");
         }
         if (intent != null && matchesAny(content, intent.getTechStack())) {
             reasons.add("包含你关注的技术栈");
@@ -925,27 +1057,121 @@ public class FeedFacadeImpl implements FeedFacade {
                 .toList();
     }
 
-    private List<PostBriefDTO> visiblePostsForViewer(List<PostBriefDTO> posts, Long viewerUid) {
+    private List<PostBriefDTO> filterFeedCandidates(List<PostBriefDTO> posts,
+                                                     Long viewerUid,
+                                                     boolean excludeHighRiskDomains) {
         if (posts == null || posts.isEmpty()) {
             return List.of();
         }
-        List<PostBriefDTO> distributablePosts = filterDistributablePosts(posts);
         Set<Long> hiddenPostIds = hiddenPostIdsSafely(viewerUid);
-        if (hiddenPostIds.isEmpty()) {
-            return distributablePosts;
-        }
-        return distributablePosts.stream()
-                .filter(post -> post != null && !hiddenPostIds.contains(post.getId()))
-                .toList();
+        Set<Long> blockedAuthorIds = blockedAuthorIdsSafely(viewerUid);
+        return filterFeedCandidates(posts, hiddenPostIds, blockedAuthorIds, excludeHighRiskDomains);
     }
 
-    private List<PostBriefDTO> filterDistributablePosts(List<PostBriefDTO> posts) {
+    private List<PostBriefDTO> filterFeedCandidates(List<PostBriefDTO> posts,
+                                                     Set<Long> hiddenPostIds,
+                                                     Set<Long> blockedAuthorIds,
+                                                     boolean excludeHighRiskDomains) {
         if (posts == null || posts.isEmpty()) {
             return List.of();
         }
         return posts.stream()
-                .filter(PublicContentFilter::isDistributablePost)
+                .filter(post -> isVisibleFeedCandidate(post, hiddenPostIds, blockedAuthorIds, excludeHighRiskDomains))
                 .toList();
+    }
+
+    private List<RecommendationReasonDetailVO> recommendationReasonDetails(List<String> reasons, PostBriefDTO post) {
+        if (reasons == null || reasons.isEmpty()) {
+            return List.of();
+        }
+        return reasons.stream()
+                .map(reason -> RecommendationReasonDetailVO.builder()
+                        .code(recommendationReasonCode(reason))
+                        .text(neutralRecommendationReason(reason, post))
+                        .build())
+                .filter(detail -> detail.getText() != null && !detail.getText().isBlank())
+                .distinct()
+                .limit(3)
+                .toList();
+    }
+
+    private List<RecommendationReasonDetailVO> sourceReasonDetails(FeedSource source) {
+        if (source == null) {
+            return List.of();
+        }
+        return List.of(RecommendationReasonDetailVO.builder()
+                .code(source.reasonCode())
+                .text(source.reasonText())
+                .build());
+    }
+
+    private String recommendationReasonCode(String reason) {
+        String value = clean(reason);
+        if (NEW_CREATOR_SUPPORT_REASON.equals(value)) {
+            return "NEW_CREATOR_SUPPORT";
+        }
+        if (value.contains("兴趣方向")) {
+            return "INTEREST_MATCH";
+        }
+        if (value.contains("工程场景")) {
+            return "ENGINEERING_CONTEXT";
+        }
+        if (value.contains("技术主题")) {
+            return "TOPIC_MATCH";
+        }
+        if (value.contains("技术栈")) {
+            return "TECH_STACK_MATCH";
+        }
+        if (value.contains("互动") || value.contains("热度")) {
+            return "PUBLIC_ENGAGEMENT";
+        }
+        if (value.contains("新发布")) {
+            return "RECENT_PUBLICATION";
+        }
+        if (value.contains("标签")) {
+            return "TAG_COMPLETENESS";
+        }
+        return "RECENT_ACTIVITY";
+    }
+
+    private String normalizeFeedbackReason(String action, String reason, String reasonCode) {
+        String code = clean(reasonCode).toUpperCase(Locale.ROOT);
+        if (code.isBlank() || !isNegativeFeedbackAction(action)) {
+            return reason;
+        }
+        if (!Set.of("NOT_RELEVANT", "TOO_FREQUENT", "ALREADY_KNOWN", "QUALITY_NOT_EXPECTED", "OTHER").contains(code)) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        return "v30:" + code.toLowerCase(Locale.ROOT);
+    }
+
+    private static void rejectReservedFeedbackReason(String reason) {
+        String value = clean(reason);
+        if (value.regionMatches(true, 0,
+                RESERVED_FEEDBACK_REASON_PREFIX, 0, RESERVED_FEEDBACK_REASON_PREFIX.length())) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+    }
+
+    private static boolean isNegativeFeedbackAction(String action) {
+        if (action == null) {
+            return false;
+        }
+        String value = action.trim().toUpperCase(Locale.ROOT);
+        return "HIDE".equals(value)
+                || "LESS_LIKE_THIS".equals(value)
+                || "NOT_INTERESTED".equals(value)
+                || "DISLIKE".equals(value);
+    }
+
+    private boolean isVisibleFeedCandidate(PostBriefDTO post,
+                                           Set<Long> hiddenPostIds,
+                                           Set<Long> blockedAuthorIds,
+                                           boolean excludeHighRiskDomains) {
+        return PublicContentFilter.isDistributablePost(post)
+                && (hiddenPostIds == null || !hiddenPostIds.contains(post.getId()))
+                && (blockedAuthorIds == null || !blockedAuthorIds.contains(post.getAuthorId()))
+                && (!excludeHighRiskDomains || !isHighRiskDomain(post));
     }
 
     private String neutralRecommendationReason(String reason, PostBriefDTO post) {
@@ -966,14 +1192,42 @@ public class FeedFacadeImpl implements FeedFacade {
     }
 
     private boolean isHighRiskDomain(PostBriefDTO post) {
-        return post != null && Objects.equals(effectiveDomain(post.getDomain()), Post.DOMAIN_INVESTMENT);
+        return post != null && isHighRiskDomain(post.getDomain());
+    }
+
+    private boolean isHighRiskDomain(Integer domain) {
+        return Objects.equals(effectiveDomain(domain), Post.DOMAIN_INVESTMENT);
     }
 
     private Set<Long> hiddenPostIdsSafely(Long viewerUid) {
         if (viewerUid == null) {
             return Set.of();
         }
-        return feedbackStore.hiddenPostIds(viewerUid);
+        try {
+            return feedbackStore.hiddenPostIds(viewerUid);
+        } catch (RuntimeException e) {
+            log.debug("feed hidden control snapshot unavailable, viewerUid={}", LogMask.id(viewerUid), e);
+            return Set.of();
+        }
+    }
+
+    private Set<Integer> lessLikedDomainsSafely(Long viewerUid) {
+        if (viewerUid == null) {
+            return Set.of();
+        }
+        try {
+            return feedbackStore.lessLikedDomains(viewerUid);
+        } catch (RuntimeException e) {
+            log.debug("feed reduced-domain control snapshot unavailable, viewerUid={}", LogMask.id(viewerUid), e);
+            return Set.of();
+        }
+    }
+
+    private Set<Long> blockedAuthorIdsSafely(Long viewerUid) {
+        if (viewerUid == null) {
+            return Set.of();
+        }
+        return feedbackStore.blockedAuthorIds(viewerUid);
     }
 
     private double newCreatorBoost(PostBriefDTO post, Map<Long, Long> publicPostCountByAuthor) {
@@ -1111,35 +1365,21 @@ public class FeedFacadeImpl implements FeedFacade {
                 .anyMatch(item -> text.contains(item) || item.contains(text));
     }
 
-    private String crossDomainReason(PostBriefDTO post,
-                                     Integer sourceDomain,
+    private String crossDomainReason(Integer sourceDomain,
                                      Integer targetDomain,
                                      List<String> baseReasons,
-                                     String fallbackReason,
-                                     UserIntentDTO intent) {
+                                     String fallbackReason) {
         if (fallbackReason != null && !fallbackReason.isBlank()) {
             return fallbackReason;
-        }
-        JsonNode ext = parseExt(post == null ? null : post.getExtJson());
-        String content = searchableText(post, ext);
-        String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
-        String topic = firstNonBlank(ext.path("topic").asText(""), ext.path("category").asText(""));
-        if (!matchedInterest.isBlank()) {
-            if (sourceDomain == null) {
-                return "来自" + domainName(targetDomain) + "频道，匹配你关注的" + matchedInterest;
-            }
-            return "从" + domainName(sourceDomain) + "延伸到" + domainName(targetDomain) + "，匹配你关注的" + matchedInterest;
-        }
-        if (!topic.isBlank()) {
-            if (sourceDomain == null) {
-                return "来自" + domainName(targetDomain) + "频道，覆盖话题：" + topic;
-            }
-            return "从" + domainName(sourceDomain) + "延伸到" + domainName(targetDomain) + "，覆盖话题：" + topic;
         }
         if (baseReasons != null && !baseReasons.isEmpty()) {
             return baseReasons.get(0);
         }
-        return "来自" + domainName(targetDomain) + "领域的延伸内容";
+        if (sourceDomain == null) {
+            return "来自" + domainName(targetDomain) + "频道的相关延展内容";
+        }
+        return "从" + domainName(sourceDomain) + "延伸到"
+                + domainName(targetDomain) + "频道的相关内容";
     }
 
     private double crossDomainBridgeBoost(PostBriefDTO post,
@@ -1184,6 +1424,34 @@ public class FeedFacadeImpl implements FeedFacade {
         return "RESTORE".equals(normalized) || "MORE_LIKE_THIS".equals(normalized);
     }
 
+    private static boolean isLegacyHideAuthorAction(String action) {
+        return action != null && "HIDE_AUTHOR".equalsIgnoreCase(action.trim());
+    }
+
+    private boolean hasKnownPublicNonAnonymousPost(Long authorUid) {
+        try {
+            PageResult<PostBriefDTO> page = postFacade.getPostsByAuthor(
+                    authorUid, 0L, AUTHOR_CONTROL_PUBLIC_POST_SCAN_SIZE);
+            if (page == null || page.getItems() == null) {
+                return false;
+            }
+            return page.getItems().stream()
+                    .anyMatch(post -> isBlockablePublicAuthor(post, null)
+                            && Objects.equals(post.getAuthorId(), authorUid));
+        } catch (RuntimeException e) {
+            log.debug("author control target lookup rejected, authorUid={}", LogMask.id(authorUid), e);
+            return false;
+        }
+    }
+
+    private boolean isBlockablePublicAuthor(PostBriefDTO post, Long viewerUid) {
+        return PublicContentFilter.isDistributablePost(post)
+                && !Boolean.TRUE.equals(post.getAnonymous())
+                && post.getAuthorId() != null
+                && post.getAuthorId() > 0
+                && !Objects.equals(post.getAuthorId(), viewerUid);
+    }
+
     private static long safe(Long value) {
         return value == null ? 0L : value;
     }
@@ -1212,6 +1480,7 @@ public class FeedFacadeImpl implements FeedFacade {
                         Post.DOMAIN_LIFESTYLE,
                         Post.DOMAIN_INVESTMENT)
                 .filter(code -> !Objects.equals(code, sourceDomain))
+                .filter(code -> !isHighRiskDomain(code))
                 .toList();
     }
 

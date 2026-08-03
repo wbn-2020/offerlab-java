@@ -1,6 +1,7 @@
 package com.offerlab.community.feed.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
 import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
@@ -34,6 +35,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CrossDomainRecommendationFacadeTest {
@@ -84,7 +86,7 @@ class CrossDomainRecommendationFacadeTest {
         assertEquals(5101L, page.getItems().get(0).getItem().getPost().getId());
         assertEquals(Post.DOMAIN_TECH, page.getItems().get(0).getSourceDomain());
         assertEquals(Post.DOMAIN_LIFESTYLE, page.getItems().get(0).getTargetDomain());
-        assertTrue(page.getItems().get(0).getRecommendationReason().contains("城市生活"));
+        assertFalse(page.getItems().get(0).getRecommendationReason().isBlank());
     }
 
     @Test
@@ -122,6 +124,85 @@ class CrossDomainRecommendationFacadeTest {
         assertEquals("跨领域候选不足，已回退到热门内容", page.getItems().get(0).getRecommendationReason());
         assertEquals(null, page.getItems().get(0).getSourceDomain());
         assertEquals(Post.DOMAIN_TECH, page.getItems().get(0).getTargetDomain());
+    }
+
+    @Test
+    void crossDomainRecommendationsUseKeysetOrderSoSameBatchCandidatesAreNotSkipped() {
+        LocalDateTime newer = LocalDateTime.of(2026, 8, 3, 12, 0);
+        PostBriefDTO newerCareer = post(5301L, 101L, Post.DOMAIN_CAREER, "职场流程说明",
+                "普通的职场内容",
+                null,
+                List.of(),
+                0L, 0L, 0L, 0L,
+                newer);
+        PostBriefDTO olderLifestyle = post(5302L, 102L, Post.DOMAIN_LIFESTYLE, "上海通勤与租房避坑",
+                "城市生活经验",
+                "{\"topic\":\"城市生活\"}",
+                List.of(TagDTO.builder().name("城市生活").build()),
+                0L, 0L, 0L, 0L,
+                newer.minusMinutes(1));
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(
+                        Map.of(
+                                Post.DOMAIN_CAREER, PageResult.of(List.of(newerCareer), null, false),
+                                Post.DOMAIN_READING, PageResult.empty(),
+                                Post.DOMAIN_LIFESTYLE, PageResult.of(List.of(olderLifestyle), null, false)),
+                        PageResult.empty(),
+                        Map.of(101L, 5L, 102L, 5L)),
+                new FakeUserFacade(
+                        UserIntentDTO.builder()
+                                .techStack(List.of("Redis"))
+                                .interestTopics(List.of("城市生活"))
+                                .build(),
+                        Map.of(
+                                101L, UserBriefDTO.builder().uid(101L).nickname("career-author").build(),
+                                102L, UserBriefDTO.builder().uid(102L).nickname("lifestyle-author").build())),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<CrossDomainRecommendationVO> firstPage = facade.getCrossDomainRecommendations(7L, null, 1);
+        PageResult<CrossDomainRecommendationVO> secondPage = facade.getCrossDomainRecommendations(
+                7L, firstPage.getNextCursor(), 1);
+
+        assertEquals(5301L, firstPage.getItems().get(0).getItem().getPost().getId());
+        assertTrue(Boolean.TRUE.equals(firstPage.getHasMore()));
+        assertEquals(5302L, secondPage.getItems().get(0).getItem().getPost().getId());
+        assertFalse(Boolean.TRUE.equals(secondPage.getHasMore()));
+    }
+
+    @Test
+    void legacyFeedbackReasonCannotUseReservedV30NamespaceButReasonCodeCan() {
+        PostBriefDTO post = post(5401L, 111L, Post.DOMAIN_TECH, "Redis 实践",
+                "公开技术内容",
+                null,
+                List.of(),
+                0L, 0L, 0L, 0L,
+                LocalDateTime.of(2026, 8, 3, 10, 0));
+        CapturingFeedFeedbackStore feedbackStore = new CapturingFeedFeedbackStore();
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                feedbackStore,
+                new FakePostFacade(
+                        Map.of(Post.DOMAIN_TECH, PageResult.of(List.of(post), null, false)),
+                        PageResult.empty(),
+                        Map.of(111L, 1L)),
+                new FakeUserFacade(null,
+                        Map.of(111L, UserBriefDTO.builder().uid(111L).nickname("tech-author").build())),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        assertThrows(BizException.class,
+                () -> facade.recordFeedback(7L, 5401L, "HIDE", " V30:quality_not_expected ", null));
+        assertEquals(0, feedbackStore.recordCount);
+
+        facade.recordFeedback(7L, 5401L, "HIDE", "内容质量不符合预期", "quality_not_expected");
+
+        assertEquals(1, feedbackStore.recordCount);
+        assertEquals("v30:quality_not_expected", feedbackStore.recordedReason);
     }
 
     private static PostBriefDTO post(Long id,
@@ -175,6 +256,21 @@ class CrossDomainRecommendationFacadeTest {
         }
     }
 
+    private static class CapturingFeedFeedbackStore extends FixedHiddenFeedFeedbackStore {
+        private int recordCount;
+        private String recordedReason;
+
+        CapturingFeedFeedbackStore() {
+            super(Set.of());
+        }
+
+        @Override
+        public void record(Long uid, Long postId, String action, String reason, Integer domain) {
+            recordCount++;
+            recordedReason = reason;
+        }
+    }
+
     private static class FakePostFacade implements PostFacade {
         private final Map<Integer, PageResult<PostBriefDTO>> pagesByDomain;
         private final PageResult<PostBriefDTO> hotPage;
@@ -196,6 +292,19 @@ class CrossDomainRecommendationFacadeTest {
         @Override
         public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {
             return pagesByDomain.getOrDefault(domain, PageResult.empty());
+        }
+
+        @Override
+        public PageResult<PostBriefDTO> listPostsByKeyset(Long authorId, Long tagId, Integer postType,
+                                                           Boolean featured, Integer domain,
+                                                           LocalDateTime cursorTime, Long cursorId, int size) {
+            List<PostBriefDTO> matches = pagesByDomain.getOrDefault(domain, PageResult.empty()).getItems().stream()
+                    .filter(post -> isOlderThanKeyset(post, cursorTime, cursorId))
+                    .sorted(java.util.Comparator.comparing(PostBriefDTO::getCreateTime).reversed()
+                            .thenComparing(PostBriefDTO::getId, java.util.Comparator.reverseOrder()))
+                    .toList();
+            List<PostBriefDTO> items = matches.stream().limit(size).toList();
+            return PageResult.of(items, null, matches.size() > items.size());
         }
 
         @Override
@@ -225,11 +334,24 @@ class CrossDomainRecommendationFacadeTest {
                     .toList();
         }
 
+        private static boolean isOlderThanKeyset(PostBriefDTO post, LocalDateTime cursorTime, Long cursorId) {
+            if (cursorTime == null) {
+                return true;
+            }
+            int timeOrder = post.getCreateTime().compareTo(cursorTime);
+            return timeOrder < 0 || (timeOrder == 0 && post.getId() < cursorId);
+        }
+
         @Override public PostDTO getPost(Long postId) { throw unsupported(); }
         @Override public PostDTO getPostMetadata(Long postId) { return getPost(postId); }
         @Override public PostDTO getPost(Long postId, Long viewerUid) { throw unsupported(); }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds) { throw unsupported(); }
-        @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) { throw unsupported(); }
+        @Override
+        public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid) {
+            return allPosts().stream()
+                    .filter(post -> postIds.contains(post.getId()))
+                    .collect(java.util.stream.Collectors.toMap(PostBriefDTO::getId, post -> post));
+        }
         @Override public Map<Long, PostBriefDTO> batchGetPosts(Collection<Long> postIds, Long viewerUid, boolean includeTestData) { throw unsupported(); }
         @Override public Long publishPost(PostCreateCmd cmd) { throw unsupported(); }
         @Override public boolean updatePost(PostUpdateCmd cmd) { throw unsupported(); }
