@@ -11,6 +11,8 @@ import com.offerlab.community.feed.api.control.UserDistributionControlsSnapshot;
 import com.offerlab.community.feed.api.quality.ChannelQualitySignalSummary;
 import com.offerlab.community.feed.api.quality.CreatorQualitySignalQueryFacade;
 import com.offerlab.community.feed.api.quality.CreatorQualitySignalQueryResult;
+import com.offerlab.community.feed.api.quality.QualitySignalWindow;
+import com.offerlab.community.feed.api.quality.RevisionAwareQualitySignalQueryResult;
 import com.offerlab.community.feed.api.dto.ChannelHotBoardItemVO;
 import com.offerlab.community.feed.api.dto.ChannelHotBoardVO;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
@@ -38,6 +40,7 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -420,6 +423,15 @@ public class FeedFacadeImpl implements FeedFacade, UserDistributionControlsQuery
             LocalDateTime now
     ) {
         return feedbackStore.findActiveQualitySignals(publicPostIds, since, now);
+    }
+
+    @Override
+    public RevisionAwareQualitySignalQueryResult findRevisionAwareActiveQualitySignals(
+            java.util.Collection<QualitySignalWindow> windows,
+            Instant baseWindowStart,
+            Instant now
+    ) {
+        return feedbackStore.findRevisionAwareActiveQualitySignals(windows, baseWindowStart, now);
     }
 
     @Override

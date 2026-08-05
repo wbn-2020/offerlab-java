@@ -20,6 +20,7 @@ public class FeedItemVO {
     private PostCounterDTO counter;
     private MyInteraction myInteraction;
     private List<String> recommendationReasons;
+    private List<RecommendationReasonDetailVO> recommendationReasonDetails;
     private String sourceType;
     private String sourceLabel;
     private String reasonCode;

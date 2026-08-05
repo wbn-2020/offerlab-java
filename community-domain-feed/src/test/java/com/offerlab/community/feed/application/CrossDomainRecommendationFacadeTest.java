@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.feed.api.dto.CrossDomainRecommendationVO;
+import com.offerlab.community.feed.api.quality.QualitySignalWindow;
+import com.offerlab.community.feed.api.quality.RevisionAwareQualitySignalQueryResult;
 import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.interaction.api.InteractionFacade;
@@ -25,6 +27,7 @@ import com.offerlab.community.user.api.dto.UserBriefDTO;
 import com.offerlab.community.user.api.dto.UserIntentDTO;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashMap;
@@ -205,6 +208,35 @@ class CrossDomainRecommendationFacadeTest {
         assertEquals("v30:quality_not_expected", feedbackStore.recordedReason);
     }
 
+    @Test
+    void revisionAwareQualitySignalFacadeDelegatesTheOpaqueWindowContract() {
+        CapturingFeedFeedbackStore feedbackStore = new CapturingFeedFeedbackStore();
+        Instant baseWindowStart = Instant.parse("2026-08-01T00:00:00Z");
+        Instant now = Instant.parse("2026-08-04T00:00:00Z");
+        List<QualitySignalWindow> windows = List.of(
+                new QualitySignalWindow(5501L, 115L, baseWindowStart.plusSeconds(1), true, "revision-2"));
+        RevisionAwareQualitySignalQueryResult expected = RevisionAwareQualitySignalQueryResult.available(List.of(
+                new RevisionAwareQualitySignalQueryResult.RevisionAwareQualitySignalSnapshot(
+                        5501L, "revision-2", 3L, 4L)));
+        feedbackStore.revisionAwareResult = expected;
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                feedbackStore,
+                new FakePostFacade(Map.of(), PageResult.empty(), Map.of()),
+                new FakeUserFacade(null, Map.of()),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        RevisionAwareQualitySignalQueryResult actual =
+                facade.findRevisionAwareActiveQualitySignals(windows, baseWindowStart, now);
+
+        assertEquals(expected, actual);
+        assertEquals(windows, feedbackStore.revisionAwareWindows);
+        assertEquals(baseWindowStart, feedbackStore.revisionAwareBaseWindowStart);
+        assertEquals(now, feedbackStore.revisionAwareNow);
+    }
+
     private static PostBriefDTO post(Long id,
                                      Long authorId,
                                      Integer domain,
@@ -259,6 +291,11 @@ class CrossDomainRecommendationFacadeTest {
     private static class CapturingFeedFeedbackStore extends FixedHiddenFeedFeedbackStore {
         private int recordCount;
         private String recordedReason;
+        private List<QualitySignalWindow> revisionAwareWindows;
+        private Instant revisionAwareBaseWindowStart;
+        private Instant revisionAwareNow;
+        private RevisionAwareQualitySignalQueryResult revisionAwareResult =
+                RevisionAwareQualitySignalQueryResult.unavailable();
 
         CapturingFeedFeedbackStore() {
             super(Set.of());
@@ -268,6 +305,17 @@ class CrossDomainRecommendationFacadeTest {
         public void record(Long uid, Long postId, String action, String reason, Integer domain) {
             recordCount++;
             recordedReason = reason;
+        }
+
+        @Override
+        public RevisionAwareQualitySignalQueryResult findRevisionAwareActiveQualitySignals(
+                Collection<QualitySignalWindow> windows,
+                Instant baseWindowStart,
+                Instant now) {
+            revisionAwareWindows = windows == null ? null : List.copyOf(windows);
+            revisionAwareBaseWindowStart = baseWindowStart;
+            revisionAwareNow = now;
+            return revisionAwareResult;
         }
     }
 

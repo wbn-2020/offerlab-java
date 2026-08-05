@@ -6,8 +6,11 @@ import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskCreateCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceCandidateDTO;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskAttemptDTO;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskCloseCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskDTO;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReassignCmd;
+import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReviewContextDTO;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskReviewCmd;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskSubmitCmd;
 import com.offerlab.community.post.collaboration.application.ContentMaintenanceTaskService;
@@ -25,6 +28,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/content-maintenance/tasks")
@@ -57,6 +62,20 @@ public class ContentMaintenanceTaskController {
             @RequestParam(defaultValue = "0") @Min(0) long cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return Result.ok(service.listQueue(domain, status, UserContext.require(), cursor, size));
+    }
+
+    @GetMapping("/{taskId}/review-context")
+    @RateLimit(key = "'maintenance:review-context:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<ContentMaintenanceTaskReviewContextDTO> reviewContext(
+            @PathVariable @Positive Long taskId) {
+        return Result.ok(service.reviewContext(taskId, UserContext.require()));
+    }
+
+    @GetMapping("/{taskId}/attempts")
+    @RateLimit(key = "'maintenance:attempts:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<List<ContentMaintenanceTaskAttemptDTO>> attempts(
+            @PathVariable @Positive Long taskId) {
+        return Result.ok(service.attempts(taskId, UserContext.require()));
     }
 
     @GetMapping("/candidates")
@@ -102,7 +121,7 @@ public class ContentMaintenanceTaskController {
     @PostMapping("/{taskId}/close")
     @RateLimit(key = "'maintenance:close:' + #uid", rate = 20, per = 300, failOpen = false)
     public Result<ContentMaintenanceTaskDTO> close(@PathVariable @Positive Long taskId,
-                                                    @Valid @RequestBody ContentMaintenanceTaskReviewCmd cmd) {
+                                                    @Valid @RequestBody ContentMaintenanceTaskCloseCmd cmd) {
         return Result.ok(service.close(taskId, cmd, UserContext.require()));
     }
 }

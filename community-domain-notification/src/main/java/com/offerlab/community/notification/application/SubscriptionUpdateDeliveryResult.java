@@ -23,4 +23,8 @@ record SubscriptionUpdateDeliveryResult(
     boolean failed() {
         return status == Status.FAILED;
     }
+
+    boolean retryable() {
+        return status == Status.FAILED || status == Status.POLICY_UNAVAILABLE;
+    }
 }

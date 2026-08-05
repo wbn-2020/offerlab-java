@@ -139,6 +139,7 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         post.setPostStatus(nextStatus);
+        versionHistoryService.resolvePendingPublicRevision(post.getId(), post.getVersion(), approved);
         if (approved) {
             publishPostPublishedEvent(post, currentTagIds(post.getId()));
         }
@@ -190,12 +191,19 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
                 mergeDomainToExtJson(input.extJson(), nextDomain), nextDomain, cmd.getAnonymous());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
+        boolean policyReviewRequired = domainConfigService.reviewRequiredForPublish(nextDomain);
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired()) || policyReviewRequired;
+        boolean keywordReviewRequired = Boolean.TRUE.equals(cmd.getKeywordReviewRequired());
         boolean forceVersionSnapshot = !respondedSuggestionIds.isEmpty()
                 || publicUpdateSummary != null
                 || impactScope != null;
-        versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
+        boolean qualityRevisionCandidate = versionHistoryService.isEligiblePublicTextRevision(
+                post, input.title(), input.content(), nextVisibility);
+        PostVersionHistoryService.ContentRevisionCandidate contentRevisionCandidate =
+                versionHistoryService.snapshotBeforeUpdate(
+                post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
                 input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided,
-                publicUpdateSummary, impactScope, forceVersionSnapshot);
+                publicUpdateSummary, impactScope, forceVersionSnapshot, qualityRevisionCandidate);
 
         post.setVisibility(nextVisibility);
         post.setExtJson(enrichedExtJson);
@@ -203,9 +211,6 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
-        boolean policyReviewRequired = domainConfigService.reviewRequiredForPublish(nextDomain);
-        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired()) || policyReviewRequired;
-        boolean keywordReviewRequired = Boolean.TRUE.equals(cmd.getKeywordReviewRequired());
         if (reviewRequired) {
             post.setPostStatus(Post.STATUS_REVIEWING);
         }
@@ -214,6 +219,9 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         }
         if (tagsProvided) {
             syncTags(post.getId(), resolvedTagIds);
+        }
+        if (contentRevisionCandidate != null && !reviewRequired) {
+            versionHistoryService.activateDirectPublicRevision(contentRevisionCandidate);
         }
         if (reviewRequired && !keywordReviewRequired) {
             enqueuePendingPostReview(post, pendingReviewReason(post, policyReviewRequired));
@@ -278,6 +286,7 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         post.setPostStatus(nextStatus);
+        versionHistoryService.resolvePendingPublicRevision(post.getId(), post.getVersion(), approved);
         if (approved) {
             publishPostPublishedEvent(post, currentTagIds(post.getId()));
         }

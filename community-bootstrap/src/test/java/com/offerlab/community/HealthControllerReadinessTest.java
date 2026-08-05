@@ -93,6 +93,7 @@ class HealthControllerReadinessTest {
         when(questionIndexRetryService.status()).thenReturn(Map.of("status", "UP"));
         when(notificationRetryService.status()).thenReturn(Map.of("status", "UP"));
         when(migrationCheckService.governanceStatus()).thenReturn(Map.of("status", "UP", "ready", true));
+        when(migrationCheckService.creatorQualityProjectionReleaseReady()).thenReturn(true);
         when(applicationContext.getBean(AdminPermissionService.class)).thenReturn(adminPermissionService);
     }
 
@@ -209,6 +210,28 @@ class HealthControllerReadinessTest {
                 .contains("db/migration/20260608_mock_interview_ai_review_transparency.sql"));
         assertEquals(true, ((java.util.List<?>) schema.get("migrations"))
                 .contains("db/migration/20260605_ai_extract_task_metrics.sql"));
+    }
+
+    @Test
+    void revisionAwareQualityProjectionSchemaBlocksStrictReleaseWithoutReportingZeroSignals() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("offerlab.kafka.enabled", "false")
+                .withProperty("spring.kafka.bootstrap-servers", "localhost:9092");
+        when(applicationContext.getEnvironment()).thenReturn(environment);
+        when(elasticsearch.enabled()).thenReturn(false);
+        when(elasticsearch.available()).thenReturn(false);
+        when(migrationCheckService.creatorQualityProjectionReleaseReady()).thenReturn(false);
+
+        Map<String, Object> readiness = detailedReadiness();
+        Map<?, ?> releaseGates = (Map<?, ?>) readiness.get("releaseGates");
+        Map<?, ?> projectionGate = (Map<?, ?>) releaseGates.get("revisionAwareQualityProjection");
+
+        assertEquals(false, readiness.get("releaseReady"));
+        assertEquals(false, projectionGate.get("ready"));
+        assertEquals("BLOCKED", projectionGate.get("status"));
+        assertEquals("CREATOR_QUALITY_PROJECTION_SCHEMA_MISSING", projectionGate.get("code"));
+        assertEquals("20260804.01", projectionGate.get("migrationVersion"));
+        assertTrue(String.valueOf(projectionGate.get("action")).contains("read-only preflight"));
     }
 
     @Test

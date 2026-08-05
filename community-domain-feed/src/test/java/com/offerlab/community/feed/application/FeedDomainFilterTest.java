@@ -2,6 +2,7 @@ package com.offerlab.community.feed.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.result.PageResult;
+import com.offerlab.community.feed.api.dto.ChannelHotBoardVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
 import com.offerlab.community.feed.infrastructure.FeedFeedbackStore;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
@@ -35,6 +36,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FeedDomainFilterTest {
@@ -188,6 +190,38 @@ class FeedDomainFilterTest {
     }
 
     @Test
+    void feedSourcesExcludePostsFromBlockedAuthorsWithoutHidingOtherAuthors() {
+        PostBriefDTO blocked = post(925L, 1_925L, Post.DOMAIN_TECH);
+        PostBriefDTO visible = post(926L, 1_926L, Post.DOMAIN_TECH);
+        FeedFacadeImpl latestFacade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of(), Set.of(1_925L)),
+                new FakePostFacade(PageResult.of(List.of(blocked, visible), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> latest = latestFacade.getLatestFeed(7L, null, 2, null);
+        PageResult<FeedItemVO> recommend = latestFacade.getRecommendFeed(7L, null, 2, null);
+
+        assertEquals(List.of(926L), postIds(latest));
+        assertEquals(List.of(926L), postIds(recommend));
+
+        FeedFacadeImpl followingFacade = new FeedFacadeImpl(
+                new ScriptedFeedInboxRedis(List.of(tuple("925", 2_000D), tuple("926", 1_999D))),
+                new FixedHiddenFeedFeedbackStore(Set.of(), Set.of(), Set.of(1_925L)),
+                new FakePostFacade(PageResult.of(List.of(blocked, visible), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+        followingFacade.setKafkaEnabled(true);
+
+        assertEquals(List.of(926L), postIds(followingFacade.getFollowingFeed(7L, null, 2, null)));
+    }
+
+    @Test
     void recommendFeedDemotesDomainsMarkedLessLikeThis() {
         PostBriefDTO tech = post(931L, 1931L, Post.DOMAIN_TECH);
         PostBriefDTO career = post(932L, 1932L, Post.DOMAIN_CAREER);
@@ -205,6 +239,79 @@ class FeedDomainFilterTest {
         assertEquals(List.of(932L, 931L), postIds(page));
         assertEquals("RECOMMEND", page.getItems().get(0).getSourceType());
         assertEquals("RULE_MATCH", page.getItems().get(0).getReasonCode());
+    }
+
+    @Test
+    void recommendFeedExposesNeutralStructuredReasonsWithoutRawIntentValues() {
+        PostBriefDTO candidate = post(936L, 1_936L, Post.DOMAIN_CAREER);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(candidate), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        PageResult<FeedItemVO> page = facade.getRecommendFeed(7L, null, 1, null);
+
+        assertEquals("NEW_CREATOR_SUPPORT", page.getItems().get(0).getRecommendationReasonDetails().get(0).getCode());
+        assertEquals("新作者前 3 篇内容扶持",
+                page.getItems().get(0).getRecommendationReasonDetails().get(0).getText());
+        assertTrue(page.getItems().get(0).getRecommendationReasons().stream()
+                .noneMatch(reason -> reason.contains("1_936")));
+    }
+
+    @Test
+    void crossDomainReasonNeverExposesRawViewerInterestValues() {
+        String privateInterest = "private-interest-marker";
+        PostBriefDTO candidate = post(9361L, 19_361L, Post.DOMAIN_CAREER);
+        candidate.setTitle("包含 " + privateInterest + " 的公开讨论");
+        UserIntentDTO intent = new UserIntentDTO();
+        intent.setInterestTopics(List.of(privateInterest));
+        FakeUserFacade userFacade = new FakeUserFacade() {
+            @Override
+            public UserIntentDTO getUserIntent(Long uid) {
+                return intent;
+            }
+        };
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of()),
+                new FakePostFacade(PageResult.of(List.of(candidate), null, false)),
+                userFacade,
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        var page = facade.getCrossDomainRecommendations(7L, null, 1);
+
+        assertEquals(1, page.getItems().size());
+        assertFalse(page.getItems().get(0).getRecommendationReason().contains(privateInterest));
+        assertFalse(page.getItems().get(0).getItem().getReasonText().contains(privateInterest));
+    }
+
+    @Test
+    void channelHotBoardUsesExistingHotFeedAndRespectsViewerControls() {
+        PostBriefDTO hidden = post(937L, 1_937L, Post.DOMAIN_TECH);
+        PostBriefDTO visible = post(938L, 1_938L, Post.DOMAIN_TECH);
+        FeedFacadeImpl facade = new FeedFacadeImpl(
+                new EmptyFeedInboxRedis(),
+                new FixedHiddenFeedFeedbackStore(Set.of(937L)),
+                new FakePostFacade(PageResult.of(List.of(hidden, visible), null, false)),
+                new FakeUserFacade(),
+                new FakeInteractionFacade(),
+                new ObjectMapper(),
+                (viewerUid, domain, deliveredItemCount, supportHitItemCount) -> { });
+
+        ChannelHotBoardVO board = facade.getChannelHotBoard(7L, Post.DOMAIN_TECH, 10);
+
+        assertEquals(Post.DOMAIN_TECH, board.getDomain());
+        assertEquals("channel-hot.v1", board.getRuleVersion());
+        assertEquals(1, board.getItems().size());
+        assertEquals(1, board.getItems().get(0).getRank());
+        assertEquals(938L, board.getItems().get(0).getItem().getPost().getId());
+        assertEquals("按公开互动与发布时间综合排序", board.getItems().get(0).getReasonText());
     }
 
     @Test
@@ -442,15 +549,23 @@ class FeedDomainFilterTest {
     private static class FixedHiddenFeedFeedbackStore extends FeedFeedbackStore {
         private final Set<Long> hiddenPostIds;
         private final Set<Integer> lessLikedDomains;
+        private final Set<Long> blockedAuthorIds;
 
         FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds) {
-            this(hiddenPostIds, Set.of());
+            this(hiddenPostIds, Set.of(), Set.of());
         }
 
         FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds, Set<Integer> lessLikedDomains) {
+            this(hiddenPostIds, lessLikedDomains, Set.of());
+        }
+
+        FixedHiddenFeedFeedbackStore(Set<Long> hiddenPostIds,
+                                     Set<Integer> lessLikedDomains,
+                                     Set<Long> blockedAuthorIds) {
             super(null);
             this.hiddenPostIds = hiddenPostIds;
             this.lessLikedDomains = lessLikedDomains;
+            this.blockedAuthorIds = blockedAuthorIds;
         }
 
         @Override
@@ -461,6 +576,11 @@ class FeedDomainFilterTest {
         @Override
         public Set<Integer> lessLikedDomains(Long uid) {
             return lessLikedDomains;
+        }
+
+        @Override
+        public Set<Long> blockedAuthorIds(Long uid) {
+            return blockedAuthorIds;
         }
     }
 
@@ -536,7 +656,17 @@ class FeedDomainFilterTest {
         @Override public boolean updatePost(PostUpdateCmd cmd) { throw unsupported(); }
         @Override public void deletePost(Long postId, Long operatorUid) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getPostsByAuthor(Long authorId, long cursor, int size) { throw unsupported(); }
-        @Override public PageResult<PostBriefDTO> getHot(String cursor, int size) { throw unsupported(); }
+        @Override
+        public PageResult<PostBriefDTO> getHot(String cursor, int size) {
+            return PageResult.of(latestPage.getItems().stream().limit(size).toList(), null, false);
+        }
+        @Override
+        public PageResult<PostBriefDTO> getHot(String cursor, int size, Integer domain) {
+            return PageResult.of(latestPage.getItems().stream()
+                    .filter(post -> domain == null || java.util.Objects.equals(post.getDomain(), domain))
+                    .limit(size)
+                    .toList(), null, false);
+        }
         @Override public List<PostVersionHistoryDTO> listPostVersions(Long postId, Long viewerUid, boolean moderator, int limit) { throw unsupported(); }
         @Override
         public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size) {

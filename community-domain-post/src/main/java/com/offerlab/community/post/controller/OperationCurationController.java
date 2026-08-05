@@ -255,7 +255,7 @@ public class OperationCurationController {
     public Result<OperationSlotDTO> publicSlot(@PathVariable @Size(max = 64) String slotCode,
                                                @RequestParam(defaultValue = "0") @Min(0) @Max(20) int limit,
                                                HttpServletRequest request) {
-        return Result.ok(operationCurationService.getPublicSlot(slotCode, limit));
+        return Result.ok(operationCurationService.getPublicSlot(slotCode, limit, UserContext.get()));
     }
 
     @PublicApi
@@ -263,7 +263,7 @@ public class OperationCurationController {
     @RateLimit(key = "'public:operations:topic:' + #slug + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<OperationTopicDTO> publicTopic(@PathVariable @Size(max = 128) String slug,
                                                   HttpServletRequest request) {
-        return Result.ok(operationCurationService.getPublicTopic(slug));
+        return Result.ok(operationCurationService.getPublicTopic(slug, UserContext.get()));
     }
 
     private Long requireOps() {

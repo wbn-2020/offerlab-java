@@ -116,6 +116,12 @@ const columnDefinitions = [
   columnDefinition('t_post_version_history', 'result_version', 'int', true),
   columnDefinition('t_post_version_history', 'public_update_summary', 'varchar(500)', true),
   columnDefinition('t_post_version_history', 'impact_scope', 'varchar(255)', true),
+  columnDefinition('t_post_main', 'latest_effective_content_revision_at', 'datetime(3)', true),
+  columnDefinition('t_post_main', 'latest_effective_content_revision_token', 'varchar(64)', true),
+  columnDefinition('t_post_version_history', 'quality_signal_revision', 'tinyint', false),
+  columnDefinition('t_post_version_history', 'quality_signal_revision_state', 'varchar(32)', true),
+  columnDefinition('t_post_version_history', 'quality_signal_effective_at', 'datetime(3)', true),
+  columnDefinition('t_post_version_history', 'quality_signal_revision_token', 'varchar(64)', true),
   columnDefinition('t_growth_event', 'event_key', 'varchar(128)', true, {
     characterSet: 'ascii',
     collation: 'ascii_bin',
@@ -231,6 +237,8 @@ const indexDefinitions = [
     'post_id,result_version'),
   indexDefinition('t_post_version_history', 'idx_post_public_update', false,
     'post_id,result_version,create_time,id'),
+  indexDefinition('t_post_version_history', 'idx_post_quality_signal_revision', false,
+    'post_id,quality_signal_revision,quality_signal_revision_state,quality_signal_effective_at,result_version,id'),
   indexDefinition('t_growth_event', 'uk_growth_event_key', true, 'event_key'),
   indexDefinition('t_collab_content_need_follow', 'uk_collab_need_follow', true,
     'need_id,uid'),
@@ -560,6 +568,14 @@ const expectations = [
     'result_version',
     'public_update_summary',
     'impact_scope',
+    'quality_signal_revision',
+    'quality_signal_revision_state',
+    'quality_signal_effective_at',
+    'quality_signal_revision_token',
+  ]),
+  ...columns('t_post_main', [
+    'latest_effective_content_revision_at',
+    'latest_effective_content_revision_token',
   ]),
   ...columns('t_post_extension', [
     'domain',
@@ -874,6 +890,7 @@ const expectations = [
   ...indexes('t_post_version_history', [
     'uk_post_result_version',
     'idx_post_public_update',
+    'idx_post_quality_signal_revision',
   ]),
   ...indexes('t_post_extension', ['idx_post_extension_domain_post']),
   ...indexes('t_user_task_state', ['uk_user_task_scope_code_day', 'idx_user_task_scope_date']),
@@ -902,6 +919,7 @@ const expectations = [
     'idx_feed_feedback_uid_action_active',
     'idx_feed_feedback_uid_target_active',
     'idx_feed_feedback_uid_cursor',
+    'idx_feed_feedback_quality_signal_v32',
   ]),
   ...indexes('t_expert_cert_application', [
     'uk_expert_cert_active_guard',
@@ -1702,6 +1720,13 @@ function migrationForTable(table) {
 }
 
 function migrationForColumn(table, name) {
+  if ((table === 't_post_main'
+      && ['latest_effective_content_revision_at', 'latest_effective_content_revision_token'].includes(name))
+    || (table === 't_post_version_history'
+      && ['quality_signal_revision', 'quality_signal_revision_state',
+        'quality_signal_effective_at', 'quality_signal_revision_token'].includes(name))) {
+    return 'db/migration/20260804_creator_content_revision_boundary.sql'
+  }
   if (['t_post_reference', 't_post_knowledge_relation', 't_int_post_outcome'].includes(table)
     || (table === 't_int_content_suggestion' && [
       'base_version', 'target_scope', 'target_locator', 'expected_change',
@@ -1787,6 +1812,10 @@ function migrationForColumn(table, name) {
 }
 
 function migrationForIndex(table, name) {
+  if ((table === 't_post_version_history' && name === 'idx_post_quality_signal_revision')
+    || (table === 't_feed_feedback_preference' && name === 'idx_feed_feedback_quality_signal_v32')) {
+    return 'db/migration/20260804_creator_content_revision_boundary.sql'
+  }
   if (['t_post_reference', 't_post_knowledge_relation', 't_int_post_outcome'].includes(table)) {
     return 'db/migration/20260720_knowledge_lifecycle.sql'
   }

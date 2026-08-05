@@ -1661,6 +1661,30 @@ public class MigrationCheckService {
                 && checkConstraintExists("t_feed_feedback_preference", "chk_feed_feedback_target_type");
     }
 
+    public boolean creatorContentRevisionBoundaryReady() {
+        return tableExists("t_post_main")
+                && columnExists("t_post_main", "latest_effective_content_revision_at")
+                && columnExists("t_post_main", "latest_effective_content_revision_token")
+                && tableExists("t_post_version_history")
+                && columnExists("t_post_version_history", "quality_signal_revision")
+                && columnExists("t_post_version_history", "quality_signal_revision_state")
+                && columnExists("t_post_version_history", "quality_signal_effective_at")
+                && columnExists("t_post_version_history", "quality_signal_revision_token")
+                && indexExists("t_post_version_history", "idx_post_quality_signal_revision")
+                && tableExists("t_feed_feedback_preference")
+                && indexExists("t_feed_feedback_preference", "idx_feed_feedback_quality_signal_v32");
+    }
+
+    public boolean creatorQualityProjectionReady() {
+        return creatorContentRevisionBoundaryReady()
+                && postExtensionDomainReady();
+    }
+
+    public boolean creatorQualityProjectionReleaseReady() {
+        return creatorQualityProjectionReady()
+                && Boolean.TRUE.equals(flywayLifecycleStatus().get("ready"));
+    }
+
     public boolean expertCertificationReady() {
         return tableExists("t_expert_cert_application")
                 && columnExists("t_expert_cert_application", "applicant_uid")

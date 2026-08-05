@@ -3,6 +3,7 @@ package com.offerlab.community.post.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.incentive.api.quota.BenefitCodes;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
@@ -47,13 +48,29 @@ public class ContentAssistEnhancedOperationsService {
     @Value("${offerlab.ai.content-assist.enhanced-ops-reconcile-enabled:false}")
     private boolean reconcileEnabled;
 
-    public List<ContentAssistEnhancedExceptionDTO> exceptions(Long operatorUid, int requestedLimit) {
+    public PageResult<ContentAssistEnhancedExceptionDTO> exceptions(
+            Long operatorUid,
+            String rawCursor,
+            int requestedSize) {
         requireOperations(operatorUid);
-        int limit = safeLimit(requestedLimit);
+        int size = safeLimit(requestedSize);
+        long cursor = parseCursor(rawCursor);
         long timeout = enhancedService.effectiveRecoveryTimeoutSeconds(requestTimeoutSeconds);
-        return operationsMapper.selectExceptions(timeout, limit).stream()
+        List<ContentAssistEnhancedExceptionRow> rows = operationsMapper.selectExceptionPage(
+                timeout, cursor == 0L ? null : cursor, size + 1);
+        boolean hasMore = rows.size() > size;
+        List<ContentAssistEnhancedExceptionRow> visible = rows.stream().limit(size).toList();
+        String nextCursor = hasMore && !visible.isEmpty()
+                ? String.valueOf(visible.get(visible.size() - 1).getRequestId())
+                : null;
+        List<ContentAssistEnhancedExceptionDTO> items = visible.stream()
                 .map(this::toException)
                 .toList();
+        return PageResult.of(items, nextCursor, hasMore);
+    }
+
+    public List<ContentAssistEnhancedExceptionDTO> exceptions(Long operatorUid, int requestedLimit) {
+        return exceptions(operatorUid, "0", requestedLimit).getItems();
     }
 
     @Transactional
@@ -246,6 +263,25 @@ public class ContentAssistEnhancedOperationsService {
     private static int safeLimit(Integer requestedLimit) {
         int value = requestedLimit == null ? 20 : requestedLimit;
         return Math.max(1, Math.min(value, 100));
+    }
+
+    private static long parseCursor(String rawCursor) {
+        String value = rawCursor == null ? "" : rawCursor.trim();
+        if (value.isEmpty() || "0".equals(value)) {
+            return 0L;
+        }
+        if (!value.matches("[0-9]+")) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "cursor is invalid");
+        }
+        try {
+            long cursor = Long.parseLong(value);
+            if (cursor <= 0) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "cursor is invalid");
+            }
+            return cursor;
+        } catch (NumberFormatException ex) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "cursor is invalid");
+        }
     }
 
     private static String fingerprint(ReconcileCommand command) {

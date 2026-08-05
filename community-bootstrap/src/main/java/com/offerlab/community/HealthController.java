@@ -378,7 +378,34 @@ public class HealthController {
         Map<String, Object> gates = new LinkedHashMap<>();
         gates.put("kafka", kafkaGate);
         gates.put("elasticsearch", elasticsearchGate);
+        gates.put("revisionAwareQualityProjection", revisionAwareQualityProjectionGate());
         return gates;
+    }
+
+    private Map<String, Object> revisionAwareQualityProjectionGate() {
+        try {
+            boolean ready = migrationCheckService.creatorQualityProjectionReleaseReady();
+            Map<String, Object> gate = new LinkedHashMap<>();
+            gate.put("ready", ready);
+            gate.put("status", ready ? "UP" : "BLOCKED");
+            gate.put("code", ready
+                    ? "CREATOR_QUALITY_PROJECTION_READY"
+                    : "CREATOR_QUALITY_PROJECTION_SCHEMA_MISSING");
+            gate.put("migrationVersion", "20260804.01");
+            if (!ready) {
+                gate.put("action",
+                        "Apply the reviewed migration set in an authorized environment, then rerun read-only preflight.");
+            }
+            return gate;
+        } catch (RuntimeException e) {
+            return Map.of(
+                    "ready", false,
+                    "status", "UNAVAILABLE",
+                    "code", "CREATOR_QUALITY_PROJECTION_CHECK_FAILED",
+                    "migrationVersion", "20260804.01",
+                    "action", "Rerun read-only preflight after database connectivity is restored."
+            );
+        }
     }
 
     private boolean readyReleaseGate(Object value) {

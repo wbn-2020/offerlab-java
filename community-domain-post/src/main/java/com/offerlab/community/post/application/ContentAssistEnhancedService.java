@@ -389,7 +389,8 @@ public class ContentAssistEnhancedService {
     private static String fingerprint(Long uid, ContentAssistEnhancedCmd cmd) {
         String source = uid + "|" + clean(cmd.getTitle()) + "|" + cmd.getPostType() + "|" + cmd.getDomain() + "|"
                 + cmd.getContent() + "|" + String.join(",", cmd.getTagNames() == null ? List.of() : cmd.getTagNames())
-                + "|" + clean(cmd.getAssistTemplateCode());
+                + "|" + clean(cmd.getAssistTemplateCode())
+                + "|" + ContentAssistSafety.sha256Hex(String.valueOf(cmd.getAssistContext()));
         return ContentAssistSafety.sha256Hex(source);
     }
 

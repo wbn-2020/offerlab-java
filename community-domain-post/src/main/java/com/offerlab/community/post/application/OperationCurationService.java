@@ -3,6 +3,8 @@ package com.offerlab.community.post.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.feed.api.control.UserDistributionControlsQueryFacade;
+import com.offerlab.community.feed.api.control.UserDistributionControlsSnapshot;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
@@ -118,6 +120,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
     private final EventPublisher events;
+    private final UserDistributionControlsQueryFacade distributionControlsQuery;
 
     public List<OperationCandidateDTO> listCandidates(String keyword, Integer domain, Integer postType, int limit) {
         Integer activeDomain = requireOptionalDomain(domain);
@@ -261,6 +264,10 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     public OperationSlotDTO getPublicSlot(String slotCode, int limit) {
+        return getPublicSlot(slotCode, limit, null);
+    }
+
+    public OperationSlotDTO getPublicSlot(String slotCode, int limit, Long viewerUid) {
         OperationSlotPO slot = slotMapper.selectByCode(requireCode(slotCode, 64));
         requireSupportedOperationSlot(slot == null ? slotCode : slot.getSlotCode());
         if (slot == null || !STATUS_PUBLISHED.equals(slot.getSlotStatus()) || !inWindow(slot.getStartsAt(), slot.getEndsAt())) {
@@ -268,7 +275,9 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         }
         int displayLimit = slotLimit(limit <= 0 ? slot.getDefaultLimit() : limit);
         OperationSlotDTO snapshot = readSlotSnapshot(slot.getPublishedSnapshotJson());
-        OperationSlotDTO dto = snapshot == null ? null : filterSlotSnapshot(copySlotSnapshot(snapshot));
+        OperationSlotDTO dto = snapshot == null
+                ? null
+                : filterSlotSnapshot(copySlotSnapshot(snapshot), distributionControls(viewerUid));
         if (dto == null || dto.getItems() == null || dto.getItems().isEmpty()) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
@@ -458,6 +467,14 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     public OperationTopicDTO getPublicTopic(String slug) {
+        return getPublicTopic(slug, null);
+    }
+
+    public OperationTopicDTO getPublicTopic(String slug, Long viewerUid) {
+        return getPublicTopicWithControls(slug, distributionControls(viewerUid));
+    }
+
+    private OperationTopicDTO getPublicTopicWithControls(String slug, UserDistributionControlsSnapshot controls) {
         OperationTopicPO topic = topicMapper.selectBySlug(requireCode(slug, 64));
         if (topic == null
                 || !isPublicReadableTopicStatus(topic.getTopicStatus())
@@ -468,7 +485,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         OperationTopicDTO source = snapshot == null
                 ? toTopicDto(topic, topicSectionMapper.listByTopic(topic.getId(), ITEM_ACTIVE, MAX_ADMIN_LIST), true)
                 : snapshot;
-        OperationTopicDTO dto = filterTopicSnapshot(source);
+        OperationTopicDTO dto = filterTopicSnapshot(source, controls);
         if (dto == null || dto.getSections() == null || dto.getSections().isEmpty()) {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
@@ -1224,6 +1241,11 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     private OperationTopicDTO filterTopicSnapshot(OperationTopicDTO snapshot) {
+        return filterTopicSnapshot(snapshot, UserDistributionControlsSnapshot.emptyAvailable());
+    }
+
+    private OperationTopicDTO filterTopicSnapshot(OperationTopicDTO snapshot,
+                                                   UserDistributionControlsSnapshot controls) {
         if (snapshot == null) {
             return null;
         }
@@ -1234,7 +1256,7 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
                         return null;
                     }
                     PostBriefDTO post = loadPost(section.getSourceId());
-                    if (!PublicContentFilter.isDistributablePost(post)) {
+                    if (!isVisibleForViewer(post, controls)) {
                         return null;
                     }
                     if (!topicScopeBlockReasons(snapshot.getDomain(), post).isEmpty()) {
@@ -1267,35 +1289,16 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     private OperationSlotDTO filterSlotSnapshot(OperationSlotDTO snapshot) {
+        return filterSlotSnapshot(snapshot, UserDistributionControlsSnapshot.emptyAvailable());
+    }
+
+    private OperationSlotDTO filterSlotSnapshot(OperationSlotDTO snapshot,
+                                                 UserDistributionControlsSnapshot controls) {
         if (snapshot == null) {
             return null;
         }
         List<OperationSlotItemDTO> items = snapshot.getItems() == null ? List.of() : snapshot.getItems().stream()
-                .filter(this::isPublishablePublicSlotItem)
-                .map(item -> {
-                    if (SOURCE_POST.equals(item.getSourceType())) {
-                        PostBriefDTO post = safeLoadPublicSlotPost(item.getSourceId());
-                        if (post == null) {
-                            return null;
-                        }
-                        item.setPost(post);
-                    } else if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
-                        OperationTopicPO topicPO = topicMapper.selectById(item.getSourceId());
-                        try {
-                            item.setTopic(topicPO == null ? null : getPublicTopic(topicPO.getSlug()));
-                        } catch (BizException ignored) {
-                            return null;
-                        }
-                    }
-                    item.setReasonText(item.getReasonText() == null ? item.getNote() : item.getReasonText());
-                    item.setNote(null);
-                    item.setContentId(item.getSourceId());
-                    item.setContentType(item.getSourceType());
-                    item.setSource(OPERATION_SOURCE_REMOTE);
-                    item.setBlocked(false);
-                    item.setBlockReasons(List.of());
-                    return item;
-                })
+                .map(item -> publicSlotItemForViewer(item, controls))
                 .filter(Objects::nonNull)
                 .toList();
         snapshot.setSlotCode(requireSupportedOperationSlot(snapshot.getSlotCode()));
@@ -1307,24 +1310,66 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
         return snapshot;
     }
 
-    private boolean isPublishablePublicSlotItem(OperationSlotItemDTO item) {
+    private OperationSlotItemDTO publicSlotItemForViewer(OperationSlotItemDTO item,
+                                                         UserDistributionControlsSnapshot controls) {
         if (item == null || !ITEM_ACTIVE.equals(item.getStatus())) {
-            return false;
+            return null;
         }
         if (SOURCE_POST.equals(item.getSourceType())) {
             PostBriefDTO post = safeLoadPublicSlotPost(item.getSourceId());
-            return post != null && PublicContentFilter.isDistributablePost(post);
-        }
-        if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
+            if (!isVisibleForViewer(post, controls)) {
+                return null;
+            }
+            item.setPost(post);
+        } else if (SOURCE_OPERATION_TOPIC.equals(item.getSourceType())) {
             try {
                 OperationTopicPO topic = topicMapper.selectById(item.getSourceId());
-                return topic != null && STATUS_PUBLISHED.equals(topic.getTopicStatus())
-                        && getPublicTopic(topic.getSlug()) != null;
+                if (topic == null || !STATUS_PUBLISHED.equals(topic.getTopicStatus())) {
+                    return null;
+                }
+                item.setTopic(getPublicTopicWithControls(topic.getSlug(), controls));
             } catch (BizException ignored) {
-                return false;
+                return null;
             }
+        } else {
+            return null;
         }
-        return false;
+        item.setReasonText(item.getReasonText() == null ? item.getNote() : item.getReasonText());
+        item.setNote(null);
+        item.setContentId(item.getSourceId());
+        item.setContentType(item.getSourceType());
+        item.setSource(OPERATION_SOURCE_REMOTE);
+        item.setBlocked(false);
+        item.setBlockReasons(List.of());
+        return item;
+    }
+
+    private UserDistributionControlsSnapshot distributionControls(Long viewerUid) {
+        if (viewerUid == null || viewerUid <= 0 || distributionControlsQuery == null) {
+            return UserDistributionControlsSnapshot.emptyAvailable();
+        }
+        try {
+            UserDistributionControlsSnapshot snapshot = distributionControlsQuery.snapshot(viewerUid);
+            return snapshot == null ? UserDistributionControlsSnapshot.unavailable() : snapshot;
+        } catch (RuntimeException ignored) {
+            return UserDistributionControlsSnapshot.unavailable();
+        }
+    }
+
+    private boolean isVisibleForViewer(PostBriefDTO post, UserDistributionControlsSnapshot controls) {
+        if (!PublicContentFilter.isDistributablePost(post)) {
+            return false;
+        }
+        if (controls == null) {
+            return false;
+        }
+        Long postId = post.getId();
+        Long authorId = post.getAuthorId();
+        Integer domain = post.getDomain();
+        boolean excludedByKnownControls = (postId != null && controls.hiddenPostIds().contains(postId))
+                || (authorId != null && controls.blockedAuthorIds().contains(authorId))
+                || (domain != null && controls.reducedDomainCodes().contains(domain));
+        return !excludedByKnownControls && controls.available();
     }
 
     private boolean isRealRemotePlacement(String source, String fallbackReason) {

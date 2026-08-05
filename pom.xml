@@ -15,6 +15,7 @@
     <modules>
         <module>community-common</module>
         <module>community-domain-incentive-api</module>
+        <module>community-domain-feed-api</module>
         <module>community-infrastructure</module>
         <module>community-domain-user</module>
         <module>community-domain-post</module>
@@ -218,6 +219,11 @@
             <dependency>
                 <groupId>com.offerlab</groupId>
                 <artifactId>community-domain-incentive-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.offerlab</groupId>
+                <artifactId>community-domain-feed-api</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

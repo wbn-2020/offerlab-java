@@ -80,16 +80,21 @@ public class NotificationRetryService {
                                               SubscriptionUpdateDeliveryMode deliveryMode,
                                               Throwable cause) {
         if (command == null
-                || deliveryMode == null
                 || deliveryMode == SubscriptionUpdateDeliveryMode.MUTED
                 || command.notificationKind() == null
                 || command.retrySenderUid() == null) {
             return false;
         }
+        SubscriptionUpdateRetryStrategy retryStrategy = deliveryMode == null
+                ? SubscriptionUpdateRetryStrategy.POLICY_REEVALUATION
+                : SubscriptionUpdateRetryStrategy.RESOLVED_DELIVERY;
         Map<String, Object> content = new LinkedHashMap<>();
-        content.put("dedupKey", subscriptionDeliveryRetryDedupKey(command, deliveryMode));
+        content.put("dedupKey", subscriptionDeliveryRetryDedupKey(command, deliveryMode, retryStrategy));
         content.put("retryVersion", SUBSCRIPTION_UPDATE_RETRY_VERSION);
-        content.put("deliveryMode", deliveryMode.name());
+        content.put("retryStrategy", retryStrategy.name());
+        if (deliveryMode != null) {
+            content.put("deliveryMode", deliveryMode.name());
+        }
         content.put("receiverUid", command.receiverUid());
         content.put("sourceType", command.sourceType());
         content.put("sourceId", command.sourceId());
@@ -261,15 +266,15 @@ public class NotificationRetryService {
         }
         SubscriptionUpdateRetryPayload payload =
                 parseSubscriptionUpdateRetryPayload(parseContent(task.getContentJson()));
-        SubscriptionUpdateDeliveryResult result = deliveryService.deliverResolved(
-                payload.command(), payload.deliveryMode());
-        if (result.failed()) {
+        SubscriptionUpdateDeliveryResult result = switch (payload.retryStrategy()) {
+            case RESOLVED_DELIVERY -> deliveryService.deliverResolved(
+                    payload.command(), payload.deliveryMode());
+            case POLICY_REEVALUATION -> deliveryService.deliverForSource(List.of(payload.command())).get(0);
+        };
+        if (result.retryable()) {
             throw result.failure() == null
-                    ? new IllegalStateException("subscription update delivery replay failed")
+                    ? new IllegalStateException("subscription update delivery replay is unavailable")
                     : result.failure();
-        }
-        if (result.status() == SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE) {
-            throw new IllegalStateException("subscription update delivery policy is unavailable");
         }
     }
 
@@ -318,10 +323,14 @@ public class NotificationRetryService {
         if (number(content.get("retryVersion")) != SUBSCRIPTION_UPDATE_RETRY_VERSION) {
             throw new IllegalArgumentException("subscription update retry version is invalid");
         }
-        SubscriptionUpdateDeliveryMode deliveryMode = parseEnum(
-                content.get("deliveryMode"), SubscriptionUpdateDeliveryMode.class, "deliveryMode");
-        if (deliveryMode == SubscriptionUpdateDeliveryMode.MUTED) {
-            throw new IllegalArgumentException("muted subscription update must not be retried");
+        SubscriptionUpdateRetryStrategy retryStrategy = parseRetryStrategy(content);
+        SubscriptionUpdateDeliveryMode deliveryMode = retryStrategy == SubscriptionUpdateRetryStrategy.RESOLVED_DELIVERY
+                ? parseEnum(content.get("deliveryMode"), SubscriptionUpdateDeliveryMode.class, "deliveryMode")
+                : null;
+        if (deliveryMode == SubscriptionUpdateDeliveryMode.MUTED
+                || (retryStrategy == SubscriptionUpdateRetryStrategy.POLICY_REEVALUATION
+                && content.containsKey("deliveryMode"))) {
+            throw new IllegalArgumentException("subscription update retry delivery mode is invalid");
         }
         SubscriptionUpdateNotificationKind notificationKind = parseEnum(
                 content.get("notificationKind"), SubscriptionUpdateNotificationKind.class, "notificationKind");
@@ -339,17 +348,27 @@ public class NotificationRetryService {
                 positiveLong(content.get("notificationTargetId"), "notificationTargetId"),
                 nestedMap(content.get("safePayload"), "safePayload"),
                 Instant.ofEpochMilli(positiveLong(content.get("occurredAt"), "occurredAt")));
-        return new SubscriptionUpdateRetryPayload(command, deliveryMode);
+        return new SubscriptionUpdateRetryPayload(command, deliveryMode, retryStrategy);
     }
 
     private static String subscriptionDeliveryRetryDedupKey(
             SubscriptionUpdateDeliveryCommand command,
-            SubscriptionUpdateDeliveryMode deliveryMode) {
+            SubscriptionUpdateDeliveryMode deliveryMode,
+            SubscriptionUpdateRetryStrategy retryStrategy) {
         return SUBSCRIPTION_UPDATE_DELIVERY_SCENE
                 + ":" + command.sourceType()
                 + ":" + command.sourceId()
                 + ":" + command.eventKey()
-                + ":" + deliveryMode;
+                + ":" + (retryStrategy == SubscriptionUpdateRetryStrategy.RESOLVED_DELIVERY
+                ? deliveryMode
+                : retryStrategy);
+    }
+
+    private static SubscriptionUpdateRetryStrategy parseRetryStrategy(Map<String, Object> content) {
+        Object value = content.get("retryStrategy");
+        return value == null
+                ? SubscriptionUpdateRetryStrategy.RESOLVED_DELIVERY
+                : parseEnum(value, SubscriptionUpdateRetryStrategy.class, "retryStrategy");
     }
 
     private static Map<String, Object> nestedMap(Object value, String field) {
@@ -544,6 +563,12 @@ public class NotificationRetryService {
 
     private record SubscriptionUpdateRetryPayload(
             SubscriptionUpdateDeliveryCommand command,
-            SubscriptionUpdateDeliveryMode deliveryMode) {
+            SubscriptionUpdateDeliveryMode deliveryMode,
+            SubscriptionUpdateRetryStrategy retryStrategy) {
+    }
+
+    private enum SubscriptionUpdateRetryStrategy {
+        RESOLVED_DELIVERY,
+        POLICY_REEVALUATION
     }
 }

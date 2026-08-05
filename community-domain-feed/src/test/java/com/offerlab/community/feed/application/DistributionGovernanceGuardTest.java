@@ -26,8 +26,10 @@ class DistributionGovernanceGuardTest {
 
         assertTrue(feedFacade.contains("PublicContentFilter.isDistributablePost"),
                 "Recommend, latest, hot, and cross-domain feed entries must reuse current distribution visibility.");
-        assertTrue(feedFacade.contains("filterDistributablePosts"),
+        assertTrue(feedFacade.contains("filterFeedCandidates"),
                 "FeedFacadeImpl must filter candidate pools through one distribution helper.");
+        assertTrue(feedFacade.contains("blockedAuthorIdsSafely"),
+                "All feed sources must apply the current user's author controls.");
         assertTrue(feedFacade.contains("neutralRecommendationReason"),
                 "FeedFacadeImpl must normalize unsafe or high-risk recommendation reasons.");
         assertTrue(feedFacade.contains("isHighRiskDomain"),

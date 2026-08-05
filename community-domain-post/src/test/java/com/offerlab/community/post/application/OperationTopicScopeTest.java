@@ -3,8 +3,12 @@ package com.offerlab.community.post.application;
 import com.baomidou.mybatisplus.annotation.Version;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.feed.api.control.UserDistributionControlsQueryFacade;
+import com.offerlab.community.feed.api.control.UserDistributionControlsSnapshot;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.OperationCandidateDTO;
+import com.offerlab.community.post.api.dto.OperationSlotDTO;
+import com.offerlab.community.post.api.dto.OperationSlotItemDTO;
 import com.offerlab.community.post.api.dto.OperationTopicCmd;
 import com.offerlab.community.post.api.dto.OperationTopicCandidateHintCmd;
 import com.offerlab.community.post.api.dto.OperationTopicDTO;
@@ -20,6 +24,7 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.OperationTo
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicPO;
 import com.offerlab.community.post.infrastructure.persistence.po.OperationTopicSectionPO;
+import com.offerlab.community.post.infrastructure.persistence.po.OperationSlotPO;
 import com.offerlab.community.infra.audit.AdminAuditLogMapper;
 import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
@@ -28,7 +33,9 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -311,6 +318,144 @@ class OperationTopicScopeTest {
                 "legacy snapshots must receive the same stable key shape as the SQL migration");
     }
 
+    @Test
+    void publicTopicAppliesViewerControlsWithoutMutatingPublishedSnapshot() throws Exception {
+        OperationTopicPO topic = topic(Post.DOMAIN_TECH);
+        topic.setTopicStatus(OperationCurationService.STATUS_PUBLISHED);
+        PostBriefDTO hidden = post(201L, Post.DOMAIN_TECH);
+        hidden.setAuthorId(2_001L);
+        PostBriefDTO blockedAuthor = post(202L, Post.DOMAIN_TECH);
+        blockedAuthor.setAuthorId(2_002L);
+        PostBriefDTO visible = post(203L, Post.DOMAIN_TECH);
+        visible.setAuthorId(2_003L);
+        OperationTopicDTO snapshot = OperationTopicDTO.builder()
+                .id(topic.getId())
+                .slug(topic.getSlug())
+                .name(topic.getTopicName())
+                .domain(topic.getDomain())
+                .status(OperationCurationService.STATUS_PUBLISHED)
+                .source("remote")
+                .sections(List.of(snapshotSection(201L), snapshotSection(202L), snapshotSection(203L)))
+                .build();
+        String publishedSnapshot = new ObjectMapper().writeValueAsString(snapshot);
+        topic.setPublishedSnapshotJson(publishedSnapshot);
+        UserDistributionControlsQueryFacade controls = viewerUid -> new UserDistributionControlsSnapshot(
+                Set.of(201L), Set.of(2_002L), Set.of(), true);
+        OperationCurationService service = service(topic,
+                Map.of(201L, hidden, 202L, blockedAuthor, 203L, visible),
+                List.of(), new AtomicBoolean(), new AtomicBoolean(), controls);
+
+        OperationTopicDTO result = service.getPublicTopic(topic.getSlug(), 99L);
+
+        assertEquals(List.of(203L), result.getSections().stream()
+                .map(OperationTopicSectionDTO::getSourceId)
+                .toList());
+        assertEquals(publishedSnapshot, topic.getPublishedSnapshotJson(),
+                "viewer filtering must never mutate the published operation snapshot");
+    }
+
+    @Test
+    void authenticatedPublicTopicFailsClosedWhenControlsAreUnavailable() throws Exception {
+        OperationTopicPO topic = topic(Post.DOMAIN_TECH);
+        topic.setTopicStatus(OperationCurationService.STATUS_PUBLISHED);
+        PostBriefDTO visible = post(204L, Post.DOMAIN_TECH);
+        OperationTopicDTO snapshot = OperationTopicDTO.builder()
+                .id(topic.getId())
+                .slug(topic.getSlug())
+                .name(topic.getTopicName())
+                .domain(topic.getDomain())
+                .status(OperationCurationService.STATUS_PUBLISHED)
+                .source("remote")
+                .sections(List.of(snapshotSection(204L)))
+                .build();
+        topic.setPublishedSnapshotJson(new ObjectMapper().writeValueAsString(snapshot));
+        OperationCurationService service = service(topic,
+                Map.of(204L, visible),
+                List.of(), new AtomicBoolean(), new AtomicBoolean(),
+                ignored -> UserDistributionControlsSnapshot.unavailable());
+
+        assertThrows(BizException.class, () -> service.getPublicTopic(topic.getSlug(), 99L));
+    }
+
+    @Test
+    void publicSlotAppliesViewerControlsWithOnePostReadPerItem() throws Exception {
+        OperationSlotPO slot = new OperationSlotPO();
+        slot.setId(8L);
+        slot.setSlotCode("HOME_FEATURED");
+        slot.setSlotName("首页精选");
+        slot.setSlotStatus(OperationCurationService.STATUS_PUBLISHED);
+        slot.setDefaultLimit(3);
+
+        OperationSlotDTO snapshot = OperationSlotDTO.builder()
+                .id(slot.getId())
+                .slotCode(slot.getSlotCode())
+                .name(slot.getSlotName())
+                .status(slot.getSlotStatus())
+                .defaultLimit(slot.getDefaultLimit())
+                .items(List.of(
+                        OperationSlotItemDTO.builder()
+                                .sourceType("POST")
+                                .sourceId(301L)
+                                .status("ACTIVE")
+                                .build(),
+                        OperationSlotItemDTO.builder()
+                                .sourceType("POST")
+                                .sourceId(302L)
+                                .status("ACTIVE")
+                                .build()))
+                .build();
+        slot.setPublishedSnapshotJson(new ObjectMapper().writeValueAsString(snapshot));
+
+        PostBriefDTO hidden = post(301L, Post.DOMAIN_TECH);
+        PostBriefDTO visible = post(302L, Post.DOMAIN_TECH);
+        Map<Long, PostBriefDTO> posts = Map.of(301L, hidden, 302L, visible);
+        AtomicInteger postReadCount = new AtomicInteger();
+        PostFacade postFacade = (PostFacade) Proxy.newProxyInstance(
+                OperationTopicScopeTest.class.getClassLoader(),
+                new Class<?>[] {PostFacade.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "batchGetPosts" -> {
+                        postReadCount.incrementAndGet();
+                        yield posts;
+                    }
+                    case "toString" -> "SlotPostFacadeStub";
+                    case "hashCode" -> 0;
+                    case "equals" -> proxy == args[0];
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+        OperationSlotMapper slotMapper = (OperationSlotMapper) Proxy.newProxyInstance(
+                OperationTopicScopeTest.class.getClassLoader(),
+                new Class<?>[] {OperationSlotMapper.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "selectByCode" -> slot;
+                    case "toString" -> "OperationSlotMapperStub";
+                    case "hashCode" -> 0;
+                    case "equals" -> proxy == args[0];
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+        OperationCurationService service = new OperationCurationService(
+                unsupported(PostMapper.class),
+                unsupported(OperationCurationItemMapper.class),
+                slotMapper,
+                unsupported(OperationSlotItemMapper.class),
+                unsupported(OperationTopicMapper.class),
+                unsupported(OperationTopicSectionMapper.class),
+                postFacade,
+                auditService(),
+                new SnowflakeIdGenerator(),
+                new ObjectMapper(),
+                null,
+                viewerUid -> new UserDistributionControlsSnapshot(Set.of(301L), Set.of(), Set.of(), true));
+
+        OperationSlotDTO result = service.getPublicSlot(slot.getSlotCode(), 5, 99L);
+
+        assertEquals(List.of(302L), result.getItems().stream()
+                .map(OperationSlotItemDTO::getSourceId)
+                .toList());
+        assertEquals(2, postReadCount.get(),
+                "each slot post should be loaded once before visibility filtering");
+    }
+
     private OperationCandidateDTO receiveHint(OperationTopicPO topic, PostBriefDTO post) {
         OperationCurationService service = service(topic, Map.of(post.getId(), post),
                 List.of(), new AtomicBoolean(), new AtomicBoolean());
@@ -404,7 +549,8 @@ class OperationTopicScopeTest {
                                                      List<OperationTopicSectionPO> sections,
                                                      AtomicBoolean inserted,
                                                      AtomicBoolean updated) {
-        return service(topic, posts, sections, inserted, updated, 1, new AtomicBoolean());
+        return service(topic, posts, sections, inserted, updated, 1, new AtomicBoolean(),
+                ignored -> UserDistributionControlsSnapshot.emptyAvailable());
     }
 
     private static OperationCurationService service(OperationTopicPO topic,
@@ -414,6 +560,27 @@ class OperationTopicScopeTest {
                                                      AtomicBoolean updated,
                                                      int updateResult,
                                                      AtomicBoolean sectionsSoftDeleted) {
+        return service(topic, posts, sections, inserted, updated, updateResult, sectionsSoftDeleted,
+                ignored -> UserDistributionControlsSnapshot.emptyAvailable());
+    }
+
+    private static OperationCurationService service(OperationTopicPO topic,
+                                                     Map<Long, PostBriefDTO> posts,
+                                                     List<OperationTopicSectionPO> sections,
+                                                     AtomicBoolean inserted,
+                                                     AtomicBoolean updated,
+                                                     UserDistributionControlsQueryFacade distributionControlsQuery) {
+        return service(topic, posts, sections, inserted, updated, 1, new AtomicBoolean(), distributionControlsQuery);
+    }
+
+    private static OperationCurationService service(OperationTopicPO topic,
+                                                     Map<Long, PostBriefDTO> posts,
+                                                     List<OperationTopicSectionPO> sections,
+                                                     AtomicBoolean inserted,
+                                                     AtomicBoolean updated,
+                                                     int updateResult,
+                                                     AtomicBoolean sectionsSoftDeleted,
+                                                     UserDistributionControlsQueryFacade distributionControlsQuery) {
         return new OperationCurationService(
                 unsupported(PostMapper.class),
                 unsupported(OperationCurationItemMapper.class),
@@ -425,7 +592,8 @@ class OperationTopicScopeTest {
                 auditService(),
                 new SnowflakeIdGenerator(),
                 new ObjectMapper(),
-                null);
+                null,
+                distributionControlsQuery);
     }
 
     private static OperationTopicMapper topicMapper(OperationTopicPO topic,

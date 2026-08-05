@@ -22,10 +22,9 @@ import java.util.Set;
 /**
  * Routes FOLLOWER_UPDATE facts before a normal notification can be created.
  *
- * <p>A policy read failure is deliberately fail-closed. Re-evaluating a
- * historical follower update after a policy outage would not preserve the
- * user's event-time choice, so only already-resolved write failures enter the
- * retry queue.</p>
+ * <p>A policy read failure is deliberately fail-closed. The caller may persist
+ * an unresolved-policy retry, whose replay must enter this V25 policy path
+ * again instead of choosing a delivery mode from task data.</p>
  */
 @Slf4j
 @Service
@@ -79,20 +78,28 @@ public class SubscriptionUpdateDeliveryService {
             log.warn("subscription delivery policy lookup failed closed: sourceType={} sourceId={} receivers={}",
                     first.sourceType(), LogMask.id(first.sourceId()), commands.size(), e);
             return resultsFor(commands, null,
-                    SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, null);
+                    SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, e);
         }
-        Map<Long, UserSubscriptionPreferenceDTO> safePreferences =
-                preferences == null ? Map.of() : preferences;
+        if (preferences == null) {
+            IllegalStateException failure =
+                    new IllegalStateException("subscription delivery policy lookup returned no result");
+            log.warn("subscription delivery policy lookup returned no result: sourceType={} sourceId={} receivers={}",
+                    first.sourceType(), LogMask.id(first.sourceId()), commands.size());
+            return resultsFor(commands, null,
+                    SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, failure);
+        }
 
         List<SubscriptionUpdateDeliveryResult> results = new ArrayList<>(commands.size());
         for (SubscriptionUpdateDeliveryCommand command : commands) {
             SubscriptionUpdateDeliveryMode mode =
-                    SubscriptionUpdateDeliveryMode.fromPreference(safePreferences.get(command.receiverUid()));
+                    SubscriptionUpdateDeliveryMode.fromPreference(preferences.get(command.receiverUid()));
             if (mode == null) {
+                IllegalStateException failure =
+                        new IllegalStateException("subscription delivery preference is invalid");
                 log.warn("subscription delivery preference is invalid; delivery skipped: receiverUid={} sourceType={} sourceId={}",
                         LogMask.id(command.receiverUid()), command.sourceType(), LogMask.id(command.sourceId()));
                 results.add(new SubscriptionUpdateDeliveryResult(
-                        command, null, SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, null));
+                        command, null, SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, failure));
                 continue;
             }
             results.add(deliverResolved(command, mode));
@@ -128,7 +135,7 @@ public class SubscriptionUpdateDeliveryService {
             log.warn("subscription delivery global preference check failed closed: receiverUid={} sourceType={} sourceId={}",
                     LogMask.id(command.receiverUid()), command.sourceType(), LogMask.id(command.sourceId()), e);
             return new SubscriptionUpdateDeliveryResult(command, mode,
-                    SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, null);
+                    SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE, e);
         }
 
         try {

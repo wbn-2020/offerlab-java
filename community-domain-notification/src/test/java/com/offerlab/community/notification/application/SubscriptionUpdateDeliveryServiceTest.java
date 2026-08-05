@@ -81,6 +81,42 @@ class SubscriptionUpdateDeliveryServiceTest {
     }
 
     @Test
+    void policyLookupOutageQueuesAnUnresolvedPolicyRetry() {
+        RecordingNotificationFacade notifications = new RecordingNotificationFacade();
+        RecordingSubscriptionRetryService retry = new RecordingSubscriptionRetryService();
+        UserFacade users = userFacade(uid -> true, Map.of());
+        SubscriptionUpdateDeliveryService delivery = new SubscriptionUpdateDeliveryService(
+                preferenceFacade((receiverUids, sourceType, sourceId) -> {
+                    throw new IllegalStateException("subscription policy unavailable");
+                }),
+                users,
+                notifications.facade,
+                digestService(new ArrayList<>(), true));
+        delivery.setFeatureFlagsForTest(true, true, true, true);
+        NotificationEventListener listener = new NotificationEventListener(
+                notifications.facade,
+                users,
+                emptyDiscussionFollows(),
+                emptyNeedFollows(),
+                retry,
+                delivery);
+
+        listener.handlePostPublishedSynchronously(PostPublishedEvent.builder()
+                .postId(501L)
+                .authorId(9L)
+                .visibility(1)
+                .postStatus(1)
+                .timestamp(1_722_419_200_000L)
+                .topicNotificationTargets(List.of(topicTarget(10L, "system-design", 77L)))
+                .build());
+
+        assertTrue(notifications.systemReceivers().isEmpty());
+        assertEquals(1, retry.commands.size());
+        assertEquals(null, retry.modes.get(0));
+        assertTrue(retry.causes.get(0) instanceof IllegalStateException);
+    }
+
+    @Test
     void topicFanoutRoutesMixedTopicModesPerSourceBeforeReceiverAggregation() {
         RecordingNotificationFacade notifications = new RecordingNotificationFacade();
         List<SubscriptionUpdateDigestPO> digests = new ArrayList<>();
@@ -450,6 +486,7 @@ class SubscriptionUpdateDeliveryServiceTest {
     private static final class RecordingSubscriptionRetryService extends NotificationRetryService {
         private final List<SubscriptionUpdateDeliveryCommand> commands = new ArrayList<>();
         private final List<SubscriptionUpdateDeliveryMode> modes = new ArrayList<>();
+        private final List<Throwable> causes = new ArrayList<>();
 
         private RecordingSubscriptionRetryService() {
             super(null, null, null, null);
@@ -461,6 +498,7 @@ class SubscriptionUpdateDeliveryServiceTest {
                                                   Throwable cause) {
             commands.add(command);
             modes.add(deliveryMode);
+            causes.add(cause);
             return true;
         }
     }

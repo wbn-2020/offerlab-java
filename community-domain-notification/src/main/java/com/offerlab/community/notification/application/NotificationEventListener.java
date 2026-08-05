@@ -978,7 +978,7 @@ public class NotificationEventListener {
         List<SubscriptionUpdateDeliveryResult> results =
                 subscriptionUpdateDeliveryService.deliverForSource(commands);
         for (SubscriptionUpdateDeliveryResult result : results) {
-            if (result.failed()) {
+            if (result.retryable()) {
                 SubscriptionUpdateDeliveryCommand command = result.command();
                 if (retryService == null || !retryService.enqueueSubscriptionUpdateDelivery(
                         command, result.deliveryMode(), result.failure())) {
@@ -987,11 +987,6 @@ public class NotificationEventListener {
                             result.failure());
                 }
                 continue;
-            }
-            if (result.status() == SubscriptionUpdateDeliveryResult.Status.POLICY_UNAVAILABLE) {
-                SubscriptionUpdateDeliveryCommand command = result.command();
-                log.warn("subscription follower update skipped because policy could not be resolved: receiverUid={} sourceType={} sourceId={}",
-                        LogMask.id(command.receiverUid()), command.sourceType(), LogMask.id(command.sourceId()));
             }
         }
         return results;

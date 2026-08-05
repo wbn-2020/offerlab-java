@@ -213,6 +213,18 @@ $initMirrorMappings = @(
     Source = Join-Path $sourceDir "20260802_creator_growth_challenges_badges.sql"
     Destination = Join-Path $repoRoot "db\init\36_creator_growth_challenges_badges.sql"
   }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260802_user_controls_trustworthy_distribution.sql"
+    Destination = Join-Path $repoRoot "db\init\37_user_controls_trustworthy_distribution.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260803_creator_quality_signal_query_index.sql"
+    Destination = Join-Path $repoRoot "db\init\38_creator_quality_signal_query_index.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260804_creator_content_revision_boundary.sql"
+    Destination = Join-Path $repoRoot "db\init\39_creator_content_revision_boundary.sql"
+  }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"
 $generatedSeedEnd = "-- END GENERATED FROM db/migration/20260712_demo_community_seed.sql"

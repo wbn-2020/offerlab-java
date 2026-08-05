@@ -5,6 +5,9 @@ import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.feed.api.FeedFacade;
+import com.offerlab.community.feed.api.dto.FeedAuthorControlCmd;
+import com.offerlab.community.feed.api.dto.ChannelHotBoardVO;
+import com.offerlab.community.feed.api.dto.FeedControlVO;
 import com.offerlab.community.feed.api.dto.FeedFeedbackCmd;
 import com.offerlab.community.feed.api.dto.FeedFeedbackPreferenceVO;
 import com.offerlab.community.feed.api.dto.FeedItemVO;
@@ -69,11 +72,53 @@ public class FeedController {
         return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
     }
 
+    @PublicApi
+    @GetMapping("/channels/{domain}/hot-board")
+    @RateLimit(key = "'public:feed:channel-hot-board:' + #domain + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
+    public Result<ChannelHotBoardVO> channelHotBoard(@PathVariable Integer domain,
+                                                      @RequestParam(defaultValue = "10") int size,
+                                                      HttpServletRequest request) {
+        return Result.ok(feedFacade.getChannelHotBoard(UserContext.get(), requireOptionalDomain(domain),
+                Math.min(Math.max(size, 1), 20)));
+    }
+
     @PostMapping("/feedback")
     @RateLimit(key = "'feed:feedback:' + #uid", rate = 60, per = 60, failOpen = false)
     public Result<Void> feedback(@Valid @RequestBody FeedFeedbackCmd cmd) {
         Long uid = UserContext.require();
-        feedFacade.recordFeedback(uid, cmd.getPostId(), cmd.getAction(), cmd.getReason());
+        feedFacade.recordFeedback(uid, cmd.getPostId(), cmd.getAction(), cmd.getReason(), cmd.getReasonCode());
+        return Result.ok();
+    }
+
+    @PostMapping("/author-controls")
+    @RateLimit(key = "'feed:author-controls:' + #uid", rate = 30, per = 60, failOpen = false)
+    public Result<FeedControlVO> blockAuthor(@Valid @RequestBody FeedAuthorControlCmd cmd) {
+        Long uid = UserContext.require();
+        return Result.ok(feedFacade.blockAuthor(uid, cmd.getAuthorUid()));
+    }
+
+    @DeleteMapping("/author-controls/{authorUid}")
+    @RateLimit(key = "'feed:author-controls:remove:' + #uid", rate = 30, per = 60, failOpen = false)
+    public Result<Void> unblockAuthor(@PathVariable Long authorUid) {
+        Long uid = UserContext.require();
+        feedFacade.unblockAuthor(uid, authorUid);
+        return Result.ok();
+    }
+
+    @GetMapping("/controls")
+    @RateLimit(key = "'feed:controls:' + #uid", rate = 120, per = 60, failOpen = false)
+    public Result<PageResult<FeedControlVO>> controls(
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size) {
+        Long uid = UserContext.require();
+        return Result.ok(feedFacade.listControls(uid, cursor, clamp(size)));
+    }
+
+    @DeleteMapping("/controls/{controlId}")
+    @RateLimit(key = "'feed:controls:remove:' + #uid", rate = 60, per = 60, failOpen = false)
+    public Result<Void> deleteControl(@PathVariable Long controlId) {
+        Long uid = UserContext.require();
+        feedFacade.deleteControl(uid, controlId);
         return Result.ok();
     }
 

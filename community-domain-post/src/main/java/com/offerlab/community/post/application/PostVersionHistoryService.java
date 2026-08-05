@@ -11,14 +11,17 @@ import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostVersionHistoryMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostVersionHistoryPO;
+import com.offerlab.community.post.infrastructure.persistence.projection.PostContentRevisionCandidateRow;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -34,29 +37,38 @@ public class PostVersionHistoryService {
     private final SnowflakeIdGenerator idGen;
     private final ObjectMapper objectMapper;
 
-    public void snapshotBeforeUpdate(Post current, Long editorUid, List<TagDTO> currentTags, Integer baseVersion,
-                                     String nextTitle, String nextContent, String nextCoverUrl, Integer nextVisibility,
-                                     String nextExtJson, List<Long> nextTagIds, boolean tagsProvided,
-                                     String publicUpdateSummary, String impactScope, boolean forceSnapshot) {
+    public ContentRevisionCandidate snapshotBeforeUpdate(Post current, Long editorUid, List<TagDTO> currentTags,
+                                                         Integer baseVersion, String nextTitle, String nextContent,
+                                                         String nextCoverUrl, Integer nextVisibility, String nextExtJson,
+                                                         List<Long> nextTagIds, boolean tagsProvided,
+                                                         String publicUpdateSummary, String impactScope,
+                                                         boolean forceSnapshot, boolean qualityRevisionCandidate) {
         if (current == null || current.getId() == null) {
-            return;
+            return null;
+        }
+        boolean requiredHistory = qualityRevisionCandidate;
+        if (forceSnapshot) {
+            requiredHistory = true;
         }
         try {
             if (versionMapper.tableExists() <= 0) {
-                if (forceSnapshot) {
+                if (requiredHistory) {
                     throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
                             "post version history is required for trusted content updates");
                 }
                 log.warn("post version history table missing, skip snapshot postId={}", current.getId());
-                return;
+                return null;
+            }
+            if (qualityRevisionCandidate) {
+                requireQualitySignalSchema();
             }
             String changeSummary = changeSummary(current, nextTitle, nextContent, nextCoverUrl, nextVisibility,
                     nextExtJson, nextTagIds, tagsProvided);
-            if ("no-op".equals(changeSummary) && !forceSnapshot) {
-                return;
+            if ("no-op".equals(changeSummary) && !requiredHistory) {
+                return null;
             }
             if ("no-op".equals(changeSummary)) {
-                changeSummary = "trusted-content";
+                changeSummary = qualityRevisionCandidate ? "quality-content-revision" : "trusted-content";
             }
 
             PostVersionHistoryPO po = new PostVersionHistoryPO();
@@ -77,16 +89,75 @@ public class PostVersionHistoryService {
             po.setChangeSummary(changeSummary);
             po.setPublicUpdateSummary(boundedOptional(publicUpdateSummary, MAX_PUBLIC_UPDATE_SUMMARY_LEN));
             po.setImpactScope(boundedOptional(impactScope, MAX_IMPACT_SCOPE_LEN));
+            ContentRevisionCandidate candidate = null;
+            if (qualityRevisionCandidate) {
+                String revisionToken = UUID.randomUUID().toString();
+                po.setQualitySignalRevision(po.getResultVersion());
+                po.setQualitySignalRevisionState("CANDIDATE");
+                po.setQualitySignalRevisionToken(revisionToken);
+                candidate = new ContentRevisionCandidate(po.getPostId(), po.getResultVersion(), revisionToken);
+            }
             versionMapper.insert(po);
+            if (candidate != null) {
+                versionMapper.supersedeOtherPendingQualityRevisions(candidate.postId(), candidate.resultVersion());
+            }
+            return candidate;
         } catch (Exception e) {
-            if (forceSnapshot) {
+            if (requiredHistory) {
                 if (e instanceof BizException bizException) {
                     throw bizException;
                 }
                 throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
-                        "post version history snapshot is unavailable");
+                        qualityRevisionCandidate
+                                ? "effective content revision boundary is unavailable"
+                                : "post version history snapshot is unavailable");
             }
             log.warn("post version history snapshot failed, postId={}", current.getId(), e);
+            return null;
+        }
+    }
+
+    public boolean isEligiblePublicTextRevision(Post current, String nextTitle, String nextContent,
+                                                Integer nextVisibility) {
+        if (current == null
+                || !Objects.equals(current.getPostStatus(), Post.STATUS_PUBLISHED)
+                || !isPublicVisibility(current.getVisibility())
+                || !isPublicVisibility(nextVisibility)) {
+            return false;
+        }
+        return !Objects.equals(normalizePublicText(current.getTitle()), normalizePublicText(nextTitle))
+                || !Objects.equals(normalizePublicText(current.getContent()), normalizePublicText(nextContent));
+    }
+
+    public void activateDirectPublicRevision(ContentRevisionCandidate candidate) {
+        if (candidate == null) {
+            return;
+        }
+        activateCandidate(candidate);
+    }
+
+    public void resolvePendingPublicRevision(Long postId, Integer resultVersion, boolean approved) {
+        if (postId == null || postId <= 0 || resultVersion == null || resultVersion < 0) {
+            return;
+        }
+        if (!qualitySignalSchemaReady()) {
+            // A candidate could not have been written without the same readiness check.
+            return;
+        }
+        PostContentRevisionCandidateRow row = versionMapper.selectPendingQualityRevision(postId, resultVersion);
+        if (row == null || !StringUtils.hasText(row.getRevisionToken())) {
+            return;
+        }
+        ContentRevisionCandidate candidate = new ContentRevisionCandidate(
+                row.getPostId(), row.getResultVersion(), row.getRevisionToken());
+        if (approved) {
+            activateCandidate(candidate);
+            return;
+        }
+        if (versionMapper.rejectQualityRevision(candidate.postId(), candidate.resultVersion(),
+                candidate.revisionToken()) != 1) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
+                    "effective content revision rejection is unavailable");
         }
     }
 
@@ -174,6 +245,46 @@ public class PostVersionHistoryService {
         return String.join(",", fields);
     }
 
+    private void activateCandidate(ContentRevisionCandidate candidate) {
+        requireQualitySignalSchema();
+        LocalDateTime effectiveAt = LocalDateTime.now();
+        if (versionMapper.activateQualityRevision(candidate.postId(), candidate.resultVersion(),
+                candidate.revisionToken(), effectiveAt) != 1) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
+                    "effective content revision activation is unavailable");
+        }
+        if (versionMapper.updateLatestEffectiveContentRevision(candidate.postId(), candidate.revisionToken(),
+                effectiveAt) != 1) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
+                    "effective content revision boundary is unavailable");
+        }
+    }
+
+    private void requireQualitySignalSchema() {
+        if (!qualitySignalSchemaReady()) {
+            throw new BizException(ErrorCode.DATABASE_ERROR.getCode(),
+                    "effective content revision schema is unavailable");
+        }
+    }
+
+    private boolean qualitySignalSchemaReady() {
+        return versionMapper.qualitySignalSchemaColumnCount() == 6;
+    }
+
+    private static boolean isPublicVisibility(Integer visibility) {
+        return visibility == null || Objects.equals(visibility, Post.VIS_PUBLIC);
+    }
+
+    private static String normalizePublicText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     private PublicPostUpdateDTO sanitizePublicUpdate(PublicPostUpdateDTO update) {
         if (update == null || update.getResultVersion() == null || update.getResultVersion() <= 0) {
             return null;
@@ -208,5 +319,14 @@ public class PostVersionHistoryService {
         }
         String normalized = content.replaceAll("\\s+", " ").trim();
         return normalized.length() <= CONTENT_SUMMARY_LEN ? normalized : normalized.substring(0, CONTENT_SUMMARY_LEN) + "...";
+    }
+
+    public record ContentRevisionCandidate(Long postId, Integer resultVersion, String revisionToken) {
+        public ContentRevisionCandidate {
+            if (postId == null || postId <= 0 || resultVersion == null || resultVersion < 0
+                    || !StringUtils.hasText(revisionToken)) {
+                throw new IllegalArgumentException("invalid content revision candidate");
+            }
+        }
     }
 }

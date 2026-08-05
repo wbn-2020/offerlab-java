@@ -3,6 +3,7 @@ package com.offerlab.community.post.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
+import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.incentive.api.quota.BenefitCodes;
 import com.offerlab.community.incentive.api.quota.EntitlementQuotaFacade;
 import com.offerlab.community.infra.audit.AdminAuditService;
@@ -18,6 +19,7 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.ContentAssi
 import com.offerlab.community.post.infrastructure.persistence.po.ContentAssistEnhancedExceptionRow;
 import com.offerlab.community.post.infrastructure.persistence.po.ContentAssistEnhancedReconcileRequestPO;
 import com.offerlab.community.post.infrastructure.persistence.po.ContentAssistEnhancedRequestPO;
+import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -118,6 +121,48 @@ class ContentAssistEnhancedRecoveryTest {
 
         assertEquals(ErrorCode.RESOURCE_NOT_FOUND.getCode(), error.getCode());
         verify(requestMapper).selectByIdAndUid(101L, 7L, BenefitCodes.CONTENT_ASSIST_ENHANCED);
+    }
+
+    @Test
+    void exceptionQueueUsesKeysetCursorAndLookAheadMetadata() {
+        ContentAssistEnhancedExceptionRow first = exceptionRow(
+                101L, 7L, 501L, 7L, "RUNNING", "RESERVED", "101");
+        ContentAssistEnhancedExceptionRow second = exceptionRow(
+                102L, 8L, 502L, 8L, "SUCCEEDED", "RELEASED", "102");
+        ContentAssistEnhancedExceptionRow extra = exceptionRow(
+                103L, 9L, 503L, 9L, "FAILED", "RESERVED", "103");
+        when(enhancedService.effectiveRecoveryTimeoutSeconds(120L)).thenReturn(120L);
+        when(operationsMapper.selectExceptionPage(120L, 100L, 3))
+                .thenReturn(List.of(first, second, extra));
+
+        PageResult<ContentAssistEnhancedExceptionDTO> page = operationsService.exceptions(99L, "100", 2);
+
+        assertEquals(2, page.getItems().size());
+        assertTrue(page.getHasMore());
+        assertEquals("102", page.getNextCursor());
+        assertEquals(2L, page.getTotal());
+        verify(operationsMapper).selectExceptionPage(120L, 100L, 3);
+    }
+
+    @Test
+    void exceptionQueueRejectsInvalidCursorBeforeReading() {
+        BizException error = assertThrows(BizException.class,
+                () -> operationsService.exceptions(99L, "not-a-cursor", 20));
+
+        assertEquals(ErrorCode.PARAM_ERROR.getCode(), error.getCode());
+        verify(operationsMapper, never()).selectExceptionPage(anyLong(), any(), anyInt());
+    }
+
+    @Test
+    void exceptionQueueMapperUsesKeysetInsteadOfOnlyLimitingOldestRows() throws Exception {
+        Select select = ContentAssistEnhancedOperationsMapper.class
+                .getMethod("selectExceptionPage", long.class, Long.class, int.class)
+                .getAnnotation(Select.class);
+        String sql = String.join("\n", select.value());
+
+        assertTrue(sql.contains("r.id > #{cursor}"));
+        assertTrue(sql.contains("ORDER BY r.id ASC"));
+        assertTrue(sql.contains("LIMIT #{limit}"));
     }
 
     @Test

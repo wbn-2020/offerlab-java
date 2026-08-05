@@ -28,5 +28,9 @@ public class PostVersionHistoryPO {
     private String changeSummary;
     private String publicUpdateSummary;
     private String impactScope;
+    private Integer qualitySignalRevision;
+    private String qualitySignalRevisionState;
+    private LocalDateTime qualitySignalEffectiveAt;
+    private String qualitySignalRevisionToken;
     private LocalDateTime createTime;
 }
