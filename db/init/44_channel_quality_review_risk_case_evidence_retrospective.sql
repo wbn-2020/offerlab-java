@@ -606,24 +606,6 @@ COMMENT='Immutable V41 governance facts exported as V41_FACT_V1';
 
 -- Historical case-owner facts are reconstructed only from V40 lifecycle
 -- events. The window order is stable even when multiple events share a time.
-INSERT INTO t_channel_quality_review_risk_case_governance_milestone (
-    id,
-    case_id,
-    batch_id,
-    domain,
-    milestone_code,
-    occurred_at,
-    source_type,
-    source_id,
-    owner_uid,
-    responsibility_scope,
-    responsibility_epoch,
-    case_status_after,
-    required_action,
-    retrospective_id,
-    contract_version,
-    fact_version
-)
 WITH valid_v40_governance_events AS (
     SELECT
         e.id,
@@ -670,6 +652,24 @@ ordered_v40_governance_events AS (
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS responsibility_epoch
     FROM valid_v40_governance_events e
+)
+INSERT INTO t_channel_quality_review_risk_case_governance_milestone (
+    id,
+    case_id,
+    batch_id,
+    domain,
+    milestone_code,
+    occurred_at,
+    source_type,
+    source_id,
+    owner_uid,
+    responsibility_scope,
+    responsibility_epoch,
+    case_status_after,
+    required_action,
+    retrospective_id,
+    contract_version,
+    fact_version
 )
 SELECT
     e.id,
