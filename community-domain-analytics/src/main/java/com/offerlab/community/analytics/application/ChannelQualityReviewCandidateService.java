@@ -177,6 +177,11 @@ public class ChannelQualityReviewCandidateService {
         return List.copyOf(resolved);
     }
 
+    public void acquireDispatchGates(List<ContentMaintenanceTaskRevisionKey> keys) {
+        List<ContentMaintenanceTaskRevisionKey> requestedKeys = requireDispatchKeys(keys);
+        candidateDispositionService.acquireRevisionGates(requestedKeys);
+    }
+
     private Map<Long, PostBriefDTO> dispatchablePublicPosts(List<Long> postIds, int domain) {
         Map<Long, PostBriefDTO> queried;
         try {

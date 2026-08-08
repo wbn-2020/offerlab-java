@@ -8,7 +8,7 @@
                     "core":  {
                                  "location":  "classpath:db/flyway/core",
                                  "autoMigrate":  true,
-                                 "expectedMigrations":  80
+                                 "expectedMigrations":  87
                              },
                     "demo":  {
                                  "location":  "classpath:db/flyway/demo",
@@ -763,7 +763,7 @@
                            "source":  "db/migration/20260805_channel_quality_candidate_disposition.sql",
                            "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260805.01__channel_quality_candidate_disposition.sql",
                            "sha256":  "e043fad731050ab3b93db1576051b5bd15c74964d636374bf585b467d711de72",
-                           "flywayChecksum":  -1203041014
+                           "flywayChecksum":  2134627089
                        },
                        {
                            "version":  "20260805.02",
@@ -773,6 +773,69 @@
                            "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260805.02__channel_quality_review_dispatch_batch.sql",
                             "sha256":  "45eb7447b0b006dceb63e83900f01235dee53ae052359772a90441eacb530821",
                             "flywayChecksum":  1534485412
+                       },
+                       {
+                           "version":  "20260807.01",
+                           "description":  "channel_quality_review_batch_coordination",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_review_batch_coordination.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.01__channel_quality_review_batch_coordination.sql",
+                           "sha256":  "5869cf788c76b4e5f09fe72cf7587b43896f7720338352581a339b1f881d6122",
+                           "flywayChecksum":  -1401400560
+                       },
+                       {
+                           "version":  "20260807.02",
+                           "description":  "channel_quality_review_risk_case",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_review_risk_case.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.02__channel_quality_review_risk_case.sql",
+                           "sha256":  "c0f293978b7b81ec2785955279312a3642643b3d2f0141fae5f96ab6218a8031",
+                           "flywayChecksum":  -1096361644
+                       },
+                       {
+                           "version":  "20260807.03",
+                           "description":  "channel_quality_review_risk_case_evidence_retrospective",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_review_risk_case_evidence_retrospective.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.03__channel_quality_review_risk_case_evidence_retrospective.sql",
+                           "sha256":  "f4fa5948c8fdafeabf7050d96343d6ae90c510617dda3df53735f5c830e7d9f2",
+                           "flywayChecksum":  -972465973
+                       },
+                       {
+                           "version":  "20260807.04",
+                           "description":  "channel_quality_governance_todo",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_governance_todo.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.04__channel_quality_governance_todo.sql",
+                           "sha256":  "f7898f22a243b0a84b74408cd3b85206f802b20dbf07a867f96d2c7bbf6ad180",
+                           "flywayChecksum":  -1825250898
+                       },
+                       {
+                           "version":  "20260807.05",
+                           "description":  "channel_quality_governance_analytics",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_governance_analytics.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.05__channel_quality_governance_analytics.sql",
+                           "sha256":  "a932caf75424450367893ff930a44b87364dffdec3f5e0a567131284ce9fa8b0",
+                           "flywayChecksum":  -1605682148
+                       },
+                       {
+                           "version":  "20260807.06",
+                           "description":  "channel_quality_governance_playbook",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_governance_playbook.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.06__channel_quality_governance_playbook.sql",
+                           "sha256":  "16b4144ba4650e84ca4acb181235b10d0b79adb6279daac2073c4e6a1e12e32a",
+                           "flywayChecksum":  1753381564
+                       },
+                       {
+                           "version":  "20260807.07",
+                           "description":  "channel_quality_governance_v45_action_safety",
+                           "stream":  "core",
+                           "source":  "db/migration/20260807_channel_quality_governance_v45_action_safety.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.07__channel_quality_governance_v45_action_safety.sql",
+                           "sha256":  "17ae4fa01e159d048db25af9ddd59ca5e6959ff5d3e69d033873152f71a4d11b",
+                           "flywayChecksum":  -722343981
                        }
                    ]
 }

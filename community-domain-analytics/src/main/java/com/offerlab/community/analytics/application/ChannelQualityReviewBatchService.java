@@ -82,6 +82,7 @@ public class ChannelQualityReviewBatchService {
         int dueInDays = requireDueInDays(cmd.getDueInDays());
         List<ContentMaintenanceTaskRevisionKey> sourceKeys = sourceKeys(cmd.getCandidates());
 
+        candidateService.acquireDispatchGates(sourceKeys);
         List<ChannelQualityReviewCandidateService.DispatchableCandidate> candidates =
                 candidateService.resolveReadyForDispatch(domain, sourceKeys, operatorUid);
         if (!validResolvedCandidates(candidates, sourceKeys)) {
@@ -287,7 +288,6 @@ public class ChannelQualityReviewBatchService {
                 && row.getCreatedByUid() != null
                 && row.getCreatedByUid() > 0
                 && PRIORITIES.contains(row.getPriority())
-                && row.getDueAt() != null
                 && row.getCandidateCount() != null
                 && row.getCandidateCount() >= 1
                 && row.getCandidateCount() <= TASK_DETAIL_LIMIT

@@ -23,6 +23,7 @@ import com.offerlab.community.post.domain.model.Post;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -115,6 +116,7 @@ public class ChannelQualityReviewCandidateDispositionService {
         DispositionChange change = changeFor(action, cmd.getReasonCode(), cmd.getSnoozeDays());
         ContentMaintenanceTaskRevisionKey key = new ContentMaintenanceTaskRevisionKey(sourcePostId, sourceRefId);
 
+        acquireRevisionGates(List.of(key));
         requireCurrentPublicRevision(sourcePostId, sourceRefId, domain, operatorUid);
         Map<ContentMaintenanceTaskRevisionKey, String> taskStatuses =
                 maintenanceTaskReadFacade.findTaskStatusesBySourceRevision(SOURCE_TYPE, List.of(key));
@@ -158,6 +160,36 @@ public class ChannelQualityReviewCandidateDispositionService {
                 auditView(after),
                 "channel health candidate disposition");
         return toDto(after);
+    }
+
+    public void acquireRevisionGates(Collection<ContentMaintenanceTaskRevisionKey> keys) {
+        if (keys == null || keys.isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR);
+        }
+        List<ContentMaintenanceTaskRevisionKey> ordered = keys.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .sorted((left, right) -> {
+                    int postComparison = left.sourcePostId().compareTo(right.sourcePostId());
+                    return postComparison != 0
+                            ? postComparison
+                            : left.sourceRefId().compareTo(right.sourceRefId());
+                })
+                .toList();
+        if (ordered.isEmpty() || ordered.size() > MAX_REVISION_KEYS) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        try {
+            for (ContentMaintenanceTaskRevisionKey key : ordered) {
+                mapper.acquireSourceRevisionGate(
+                        SOURCE_TYPE, key.sourcePostId(), key.sourceRefId());
+            }
+        } catch (RuntimeException ignored) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR);
+        }
     }
 
     private void requireCurrentPublicRevision(long sourcePostId, long sourceRefId, int domain, Long operatorUid) {

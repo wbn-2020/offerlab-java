@@ -1,4 +1,4 @@
--- V38: channel-quality review dispatch batches and immutable maintenance delivery attempts for fresh schemas.
+-- V38: channel-quality review dispatch batches and immutable maintenance delivery attempts.
 CREATE TABLE IF NOT EXISTS t_collab_content_maintenance_dispatch_batch (
     id                  BIGINT        NOT NULL,
     domain              TINYINT       NOT NULL,

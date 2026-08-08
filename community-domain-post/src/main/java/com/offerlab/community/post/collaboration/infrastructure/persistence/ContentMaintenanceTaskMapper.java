@@ -460,6 +460,33 @@ public interface ContentMaintenanceTaskMapper extends ContentMaintenanceTaskAtte
                                                    @Param("cursor") long cursor,
                                                    @Param("limit") int limit);
 
+    @Select("""
+            SELECT COALESCE(SUM(task_status = 'OPEN'), 0) AS openTaskCount,
+                   COALESCE(SUM(task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')), 0) AS activeTaskCount
+            FROM t_collab_content_maintenance_task
+            WHERE dispatch_batch_id = #{batchId}
+              AND domain = #{domain}
+              AND source_type = 'CHANNEL_HEALTH'
+            """)
+    ContentMaintenanceBatchTaskCountsRow batchTaskCounts(
+            @Param("batchId") Long batchId,
+            @Param("domain") Integer domain);
+
+    @Select("""
+            SELECT id,
+                   task_status AS status,
+                   assignee_uid AS assigneeUid
+            FROM t_collab_content_maintenance_task
+            WHERE dispatch_batch_id = #{batchId}
+              AND domain = #{domain}
+              AND source_type = 'CHANNEL_HEALTH'
+            ORDER BY id ASC
+            FOR UPDATE
+            """)
+    List<ContentMaintenanceBatchTaskCoordinationTaskRow> lockBatchTasksForCoordination(
+            @Param("batchId") Long batchId,
+            @Param("domain") Integer domain);
+
     @Update("""
             UPDATE t_collab_content_maintenance_task
             SET assignee_uid = #{uid},
@@ -482,6 +509,51 @@ public interface ContentMaintenanceTaskMapper extends ContentMaintenanceTaskAtte
             """)
     int reassign(@Param("id") Long id,
                  @Param("replacementUid") Long replacementUid);
+
+    @Update("""
+            UPDATE t_collab_content_maintenance_task
+            SET due_at = #{effectiveDueAt},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE dispatch_batch_id = #{batchId}
+              AND domain = #{domain}
+              AND source_type = 'CHANNEL_HEALTH'
+              AND task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
+            """)
+    int extendBatchActiveDueAt(@Param("batchId") Long batchId,
+                               @Param("domain") Integer domain,
+                               @Param("effectiveDueAt") LocalDateTime effectiveDueAt);
+
+    @Update("""
+            UPDATE t_collab_content_maintenance_task
+            SET assignee_uid = #{replacementUid},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE dispatch_batch_id = #{batchId}
+              AND domain = #{domain}
+              AND source_type = 'CHANNEL_HEALTH'
+              AND task_status IN ('OPEN', 'CLAIMED')
+              AND (assignee_uid IS NULL OR assignee_uid <> #{replacementUid})
+            """)
+    int reassignBatchActiveTasks(@Param("batchId") Long batchId,
+                                 @Param("domain") Integer domain,
+                                 @Param("replacementUid") Long replacementUid);
+
+    @Update("""
+            UPDATE t_collab_content_maintenance_task
+            SET task_status = 'CLOSED',
+                review_note = #{note},
+                close_reason_code = 'BATCH_WITHDRAWN',
+                closed_by_uid = #{operatorUid},
+                closed_at = CURRENT_TIMESTAMP(3),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE dispatch_batch_id = #{batchId}
+              AND domain = #{domain}
+              AND source_type = 'CHANNEL_HEALTH'
+              AND task_status = 'OPEN'
+            """)
+    int withdrawBatchOpenTasks(@Param("batchId") Long batchId,
+                               @Param("domain") Integer domain,
+                               @Param("operatorUid") Long operatorUid,
+                               @Param("note") String note);
 
     @Update("""
             UPDATE t_collab_content_maintenance_task

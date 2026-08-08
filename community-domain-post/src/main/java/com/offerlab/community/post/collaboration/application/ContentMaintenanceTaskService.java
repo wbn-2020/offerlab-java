@@ -7,6 +7,7 @@ import com.offerlab.community.infra.audit.AdminAuditService;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.security.CommunityRoleAccessService;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.ContentMaintenanceBatchTaskCoordinationResult;
 import com.offerlab.community.post.api.ContentMaintenanceTaskBatchDispatchCmd;
 import com.offerlab.community.post.api.ContentMaintenanceTaskCommandFacade;
 import com.offerlab.community.post.api.dto.PostDTO;
@@ -31,6 +32,8 @@ import com.offerlab.community.post.collaboration.infrastructure.persistence.Coll
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationRows.SeriesRow;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskMapper;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskAttemptRow;
+import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceBatchTaskCountsRow;
+import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceBatchTaskCoordinationTaskRow;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskRow;
 import com.offerlab.community.post.domain.model.Post;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +56,7 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
     private static final String MIGRATION =
             "db/migration/20260805_channel_quality_review_dispatch_batch.sql";
     private static final int MAX_PAGE_SIZE = 50;
+    private static final int MAX_BATCH_TASKS = 20;
     private static final int PUBLIC_UPDATE_QUERY_LIMIT = 20;
     private static final int PUBLIC_UPDATE_RESPONSE_LIMIT = 3;
     private static final String AVAILABLE = "AVAILABLE";
@@ -151,6 +155,110 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
                 operatorUid);
     }
 
+    @Override
+    @Transactional
+    public ContentMaintenanceBatchTaskCoordinationResult extendBatchActiveTaskDueAt(
+            Long batchId,
+            Integer domain,
+            LocalDateTime effectiveDueAt,
+            Long operatorUid) {
+        requireTable();
+        int safeDomain = requireDomain(domain);
+        long safeBatchId = requireId(batchId);
+        requireModerate(operatorUid, safeDomain);
+        if (effectiveDueAt == null) throw new BizException(ErrorCode.PARAM_ERROR);
+        if (mapper.dispatchBatchExists(safeBatchId, safeDomain) <= 0) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        ContentMaintenanceBatchTaskCountsRow counts = lockBatchTaskCounts(safeBatchId, safeDomain);
+        int active = counts.getActiveTaskCount();
+        if (active <= 0) throw new BizException(ErrorCode.INVALID_STATUS);
+        int affected = mapper.extendBatchActiveDueAt(safeBatchId, safeDomain, effectiveDueAt);
+        if (affected != active) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+        return new ContentMaintenanceBatchTaskCoordinationResult(
+                counts.getOpenTaskCount(), active, affected, null);
+    }
+
+    @Override
+    @Transactional
+    public ContentMaintenanceBatchTaskCoordinationResult reassignBatchActiveTasks(
+            Long batchId,
+            Integer domain,
+            Long replacementUid,
+            Long operatorUid) {
+        requireTable();
+        int safeDomain = requireDomain(domain);
+        long safeBatchId = requireId(batchId);
+        long safeReplacementUid = requireId(replacementUid);
+        requireModerate(operatorUid, safeDomain);
+        if (mapper.dispatchBatchExists(safeBatchId, safeDomain) <= 0) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        if (mapper.userExists(safeReplacementUid) <= 0) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND);
+        }
+        requireMaintenanceRole(safeReplacementUid, safeDomain);
+        BatchTaskCoordinationSnapshot snapshot =
+                lockBatchTaskCoordinationSnapshot(safeBatchId, safeDomain);
+        ContentMaintenanceBatchTaskCountsRow counts = snapshot.counts();
+        if (counts.getReassignableTaskCount() <= 0) {
+            throw new BizException(ErrorCode.INVALID_STATUS);
+        }
+        List<Long> previousAssignees = snapshot.rows().stream()
+                .filter(row -> Set.of("OPEN", "CLAIMED").contains(row.getStatus()))
+                .filter(row -> !Long.valueOf(safeReplacementUid).equals(row.getAssigneeUid()))
+                .map(ContentMaintenanceBatchTaskCoordinationTaskRow::getAssigneeUid)
+                .distinct()
+                .toList();
+        int expectedAffected = (int) snapshot.rows().stream()
+                .filter(row -> Set.of("OPEN", "CLAIMED").contains(row.getStatus()))
+                .filter(row -> !Long.valueOf(safeReplacementUid).equals(row.getAssigneeUid()))
+                .count();
+        if (expectedAffected <= 0) {
+            throw new BizException(ErrorCode.DUPLICATE_OPERATION);
+        }
+        int affected = mapper.reassignBatchActiveTasks(safeBatchId, safeDomain, safeReplacementUid);
+        if (affected != expectedAffected) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+        return new ContentMaintenanceBatchTaskCoordinationResult(
+                counts.getOpenTaskCount(), counts.getActiveTaskCount(), affected,
+                previousAssignees.size() == 1 ? previousAssignees.get(0) : null);
+    }
+
+    @Override
+    @Transactional
+    public ContentMaintenanceBatchTaskCoordinationResult withdrawBatchOpenTasks(
+            Long batchId,
+            Integer domain,
+            Integer expectedOpenTaskCount,
+            Integer expectedActiveTaskCount,
+            Long operatorUid,
+            String note) {
+        requireTable();
+        int safeDomain = requireDomain(domain);
+        long safeBatchId = requireId(batchId);
+        requireModerate(operatorUid, safeDomain);
+        if (expectedOpenTaskCount == null || expectedOpenTaskCount < 0
+                || expectedActiveTaskCount == null || expectedActiveTaskCount < 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        if (mapper.dispatchBatchExists(safeBatchId, safeDomain) <= 0) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        ContentMaintenanceBatchTaskCountsRow counts = lockBatchTaskCounts(safeBatchId, safeDomain);
+        if (!expectedOpenTaskCount.equals(counts.getOpenTaskCount())
+                || !expectedActiveTaskCount.equals(counts.getActiveTaskCount())) {
+            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+        }
+        if (counts.getOpenTaskCount() <= 0) throw new BizException(ErrorCode.INVALID_STATUS);
+        String safeNote = required(note, 500);
+        int affected = mapper.withdrawBatchOpenTasks(safeBatchId, safeDomain, operatorUid, safeNote);
+        if (affected != counts.getOpenTaskCount()) {
+            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+        }
+        return new ContentMaintenanceBatchTaskCoordinationResult(
+                counts.getOpenTaskCount(), counts.getActiveTaskCount(), affected, null);
+    }
+
     private ContentMaintenanceTaskDTO createTask(
             int domain,
             String sourceType,
@@ -180,6 +288,39 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
                 "CONTENT_MAINTENANCE_TASK", id, null, created,
                 dispatchBatchId == null ? "maintenance task created" : "channel-health batch task dispatched");
         return toDto(created, auditUid);
+    }
+
+    private ContentMaintenanceBatchTaskCountsRow lockBatchTaskCounts(long batchId, int domain) {
+        return lockBatchTaskCoordinationSnapshot(batchId, domain).counts();
+    }
+
+    private BatchTaskCoordinationSnapshot lockBatchTaskCoordinationSnapshot(long batchId, int domain) {
+        List<ContentMaintenanceBatchTaskCoordinationTaskRow> rows =
+                mapper.lockBatchTasksForCoordination(batchId, domain);
+        if (rows == null || rows.isEmpty() || rows.size() > MAX_BATCH_TASKS) {
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR);
+        }
+        ContentMaintenanceBatchTaskCountsRow counts = new ContentMaintenanceBatchTaskCountsRow();
+        counts.setOpenTaskCount(0);
+        counts.setActiveTaskCount(0);
+        counts.setReassignableTaskCount(0);
+        for (ContentMaintenanceBatchTaskCoordinationTaskRow row : rows) {
+            if (row == null || row.getId() == null || row.getId() <= 0
+                    || row.getAssigneeUid() == null || row.getAssigneeUid() <= 0
+                    || !STATUSES.contains(row.getStatus())) {
+                throw new BizException(ErrorCode.DEPENDENCY_ERROR);
+            }
+            if ("OPEN".equals(row.getStatus())) {
+                counts.setOpenTaskCount(counts.getOpenTaskCount() + 1);
+            }
+            if (Set.of("OPEN", "CLAIMED", "SUBMITTED").contains(row.getStatus())) {
+                counts.setActiveTaskCount(counts.getActiveTaskCount() + 1);
+            }
+            if (Set.of("OPEN", "CLAIMED").contains(row.getStatus())) {
+                counts.setReassignableTaskCount(counts.getReassignableTaskCount() + 1);
+            }
+        }
+        return new BatchTaskCoordinationSnapshot(counts, List.copyOf(rows));
     }
 
     public PageResult<ContentMaintenanceTaskDTO> listMine(Long uid, String requestedStatus, long cursor, int size) {
@@ -935,5 +1076,10 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
     }
 
     private record LinkedPostRead(ContentMaintenanceLinkedPublicPostDTO dto, boolean unavailable) {
+    }
+
+    private record BatchTaskCoordinationSnapshot(
+            ContentMaintenanceBatchTaskCountsRow counts,
+            List<ContentMaintenanceBatchTaskCoordinationTaskRow> rows) {
     }
 }

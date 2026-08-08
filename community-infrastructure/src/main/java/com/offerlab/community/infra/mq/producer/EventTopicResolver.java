@@ -205,6 +205,18 @@ public class EventTopicResolver {
                     "COLLABORATION_NEED_STATE_CHANGED");
         }
 
+        if ("GovernanceReminderRequestedEvent".equals(className)) {
+            Long reminderId = readLong(event, "getReminderId");
+            return new TopicMapping(
+                    "community.governance-reminder.requested",
+                    reminderId,
+                    "GOVERNANCE_REMINDER_REQUESTED",
+                    true,
+                    "CHANNEL_QUALITY_GOVERNANCE_REMINDER",
+                    String.valueOf(reminderId),
+                    null);
+        }
+
         if ("UserFollowedEvent".equals(className)) {
             return new TopicMapping("user.followed", readLong(event, "getFollowerId"), "USER_FOLLOWED");
         }

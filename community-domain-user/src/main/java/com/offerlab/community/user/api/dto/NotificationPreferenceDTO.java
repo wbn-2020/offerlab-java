@@ -17,4 +17,8 @@ public class NotificationPreferenceDTO {
     private Boolean followNotification;
     private Boolean favoriteNotification;
     private Boolean mentionNotification;
+    private Boolean governanceReminderNotification;
+    private Integer governanceReminderQuietStartMinute;
+    private Integer governanceReminderQuietEndMinute;
+    private String governanceReminderTimeZone;
 }

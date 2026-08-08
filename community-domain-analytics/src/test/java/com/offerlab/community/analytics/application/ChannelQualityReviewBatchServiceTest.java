@@ -26,6 +26,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -105,6 +106,7 @@ class ChannelQualityReviewBatchServiceTest {
         assertEquals("ON_TRACK", result.getDueState());
         assertEquals(1, result.getTasks().size());
         assertEquals("OPEN", result.getTasks().get(0).getMaintenancePhase());
+        verify(candidateService).acquireDispatchGates(any());
         verify(taskCommandFacade).dispatchChannelHealthTask(any(), eq(9L));
         verify(adminAuditService).recordRequired(
                 eq(9L),
@@ -134,6 +136,22 @@ class ChannelQualityReviewBatchServiceTest {
         assertEquals("DUE_SOON", result.getDueState());
         assertEquals("REWORK", result.getTasks().get(0).getMaintenancePhase());
         assertEquals("CLOSED", result.getTasks().get(1).getMaintenancePhase());
+    }
+
+    @Test
+    void detailAllowsLegacyBatchWithoutDeadline() {
+        ChannelQualityReviewBatchRow batch = batch(7003L, 1, 1);
+        batch.setDueAt(null);
+        when(mapper.selectById(7003L)).thenReturn(batch);
+        when(mapper.listTaskStatusCounts(List.of(7003L))).thenReturn(List.of(
+                count(7003L, "OPEN", 1)));
+        when(mapper.listTasksByBatchId(7003L, 21)).thenReturn(List.of(
+                task(8004L, 7003L, 1005L, 10L, "OPEN", null, null)));
+
+        var result = service.get(7003L, 9L);
+
+        assertNull(result.getDueAt());
+        assertEquals("NOT_APPLICABLE", result.getDueState());
     }
 
     @Test

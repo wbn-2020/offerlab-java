@@ -100,4 +100,17 @@ public interface ChannelQualityReviewCandidateDispositionMapper {
                @Param("reasonCode") String reasonCode,
                @Param("snoozedUntil") LocalDateTime snoozedUntil,
                @Param("updatedByUid") Long updatedByUid);
+
+    @Insert("""
+            INSERT INTO t_collab_content_maintenance_revision_gate (
+                source_type, source_post_id, source_ref_id
+            ) VALUES (
+                #{sourceType}, #{sourcePostId}, #{sourceRefId}
+            )
+            ON DUPLICATE KEY UPDATE
+                update_time = CURRENT_TIMESTAMP(3)
+            """)
+    int acquireSourceRevisionGate(@Param("sourceType") String sourceType,
+                                  @Param("sourcePostId") Long sourcePostId,
+                                  @Param("sourceRefId") Long sourceRefId);
 }

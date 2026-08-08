@@ -225,6 +225,18 @@ $initMirrorMappings = @(
     Source = Join-Path $sourceDir "20260804_creator_content_revision_boundary.sql"
     Destination = Join-Path $repoRoot "db\init\39_creator_content_revision_boundary.sql"
   }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260807_channel_quality_review_batch_coordination.sql"
+    Destination = Join-Path $repoRoot "db\init\42_channel_quality_review_batch_coordination.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260807_channel_quality_review_risk_case.sql"
+    Destination = Join-Path $repoRoot "db\init\43_channel_quality_review_risk_case.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260807_channel_quality_review_risk_case_evidence_retrospective.sql"
+    Destination = Join-Path $repoRoot "db\init\44_channel_quality_review_risk_case_evidence_retrospective.sql"
+  }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"
 $generatedSeedEnd = "-- END GENERATED FROM db/migration/20260712_demo_community_seed.sql"
