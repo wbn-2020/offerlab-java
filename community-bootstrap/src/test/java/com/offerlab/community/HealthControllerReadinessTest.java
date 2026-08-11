@@ -92,7 +92,7 @@ class HealthControllerReadinessTest {
         when(dbConnection.createStatement()).thenReturn(dbStatement);
         when(dbStatement.executeQuery(org.mockito.ArgumentMatchers.anyString())).thenReturn(dbResultSet);
         when(dbResultSet.next()).thenReturn(true);
-        when(dbResultSet.getInt("present_count")).thenReturn(8);
+        when(dbResultSet.getInt("present_count")).thenReturn(9);
         when(redis.getConnectionFactory()).thenReturn(redisConnectionFactory);
         when(redisConnectionFactory.getConnection()).thenReturn(redisConnection);
         when(redisConnection.ping()).thenReturn("PONG");
@@ -474,7 +474,7 @@ class HealthControllerReadinessTest {
     @Test
     void missingCoreSchemaBlocksPublicReadinessWithSafeDiagnosticCode() throws Exception {
         configureDisabledOptionalDependencies();
-        when(dbResultSet.getInt("present_count")).thenReturn(7);
+        when(dbResultSet.getInt("present_count")).thenReturn(8);
 
         ResponseEntity<Map<String, Object>> response = controller().readiness();
 
@@ -485,6 +485,24 @@ class HealthControllerReadinessTest {
         assertEquals("coreSchema", issues.get(0).get("component"));
         assertEquals("CORE_SCHEMA_INCOMPLETE", issues.get(0).get("code"));
         assertFalse(response.getBody().containsKey("components"));
+    }
+
+    @Test
+    void coreSchemaHealthUsesTheCurrentNineTableContract() throws Exception {
+        String source = Files.readString(
+                Path.of("src/main/java/com/offerlab/community/HealthController.java"),
+                StandardCharsets.UTF_8
+        );
+
+        assertTrue(source.contains("'t_user_account'"));
+        assertTrue(source.contains("'t_user_profile'"));
+        assertTrue(source.contains("'t_post_main'"));
+        assertTrue(source.contains("'t_post_tag_ref'"));
+        assertTrue(source.contains("'t_int_comment'"));
+        assertTrue(source.contains("'t_operation_slot'"));
+        assertTrue(source.contains("if (present == 9)"));
+        assertFalse(source.contains("'t_user', 't_post'"));
+        assertFalse(source.contains("'t_post_tag'"));
     }
 
     @Test

@@ -1,7 +1,7 @@
 -- Acceptance/demo data must not advertise comments that do not exist.
 -- Recalculate only the known demo post range from real visible comment rows.
 UPDATE t_post_counter pc
-JOIN t_post p ON p.id = pc.post_id
+JOIN t_post_main p ON p.id = pc.post_id
 SET pc.comment_count = (
         SELECT COUNT(*)
         FROM t_int_comment c

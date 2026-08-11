@@ -208,15 +208,16 @@ public class HealthController {
                 FROM information_schema.tables
                 WHERE table_schema = DATABASE()
                   AND table_name IN (
-                    't_user', 't_post', 't_post_counter', 't_post_extension',
-                    't_tag', 't_post_tag', 't_int_comment', 't_operation_slot'
+                    't_user_account', 't_user_profile', 't_post_main',
+                    't_post_counter', 't_post_extension', 't_tag',
+                    't_post_tag_ref', 't_int_comment', 't_operation_slot'
                   )
                 """;
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             int present = resultSet.next() ? resultSet.getInt("present_count") : 0;
-            if (present == 8) {
+            if (present == 9) {
                 return Map.of("status", "UP", "ready", true);
             }
             return Map.of(
