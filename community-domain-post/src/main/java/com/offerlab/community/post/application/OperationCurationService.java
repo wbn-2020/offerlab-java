@@ -268,21 +268,51 @@ public class OperationCurationService implements CreatorCurationFeedbackFacade {
     }
 
     public OperationSlotDTO getPublicSlot(String slotCode, int limit, Long viewerUid) {
-        OperationSlotPO slot = slotMapper.selectByCode(requireCode(slotCode, 64));
-        requireSupportedOperationSlot(slot == null ? slotCode : slot.getSlotCode());
-        if (slot == null || !STATUS_PUBLISHED.equals(slot.getSlotStatus()) || !inWindow(slot.getStartsAt(), slot.getEndsAt())) {
-            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        String code = requireSupportedOperationSlot(requireCode(slotCode, 64));
+        OperationSlotPO slot = slotMapper.selectByCode(code);
+        if (slot == null) {
+            return emptyPublicSlot(code, null, "NOT_CONFIGURED");
+        }
+        if (!STATUS_PUBLISHED.equals(slot.getSlotStatus())) {
+            return emptyPublicSlot(code, slot, "NOT_PUBLISHED");
+        }
+        if (!inWindow(slot.getStartsAt(), slot.getEndsAt())) {
+            return emptyPublicSlot(code, slot, "OUT_OF_WINDOW");
         }
         int displayLimit = slotLimit(limit <= 0 ? slot.getDefaultLimit() : limit);
         OperationSlotDTO snapshot = readSlotSnapshot(slot.getPublishedSnapshotJson());
         OperationSlotDTO dto = snapshot == null
                 ? null
                 : filterSlotSnapshot(copySlotSnapshot(snapshot), distributionControls(viewerUid));
-        if (dto == null || dto.getItems() == null || dto.getItems().isEmpty()) {
-            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        if (dto == null) {
+            return emptyPublicSlot(code, slot, "NO_PUBLISHED_SNAPSHOT");
         }
-        dto.setItems(dto.getItems().stream().limit(displayLimit).toList());
+        List<OperationSlotItemDTO> visibleItems = (dto.getItems() == null ? List.<OperationSlotItemDTO>of() : dto.getItems())
+                .stream()
+                .limit(displayLimit)
+                .toList();
+        if (visibleItems.isEmpty()) {
+            return emptyPublicSlot(code, slot, "NO_VISIBLE_ITEMS");
+        }
+        dto.setItems(visibleItems);
         return dto;
+    }
+
+    private OperationSlotDTO emptyPublicSlot(String slotCode, OperationSlotPO slot, String reason) {
+        return OperationSlotDTO.builder()
+                .id(slot == null ? null : slot.getId())
+                .slotCode(slotCode)
+                .name(slot == null ? "社区运营整理" : slot.getSlotName())
+                .description(slot == null ? null : slot.getDescription())
+                .status("EMPTY")
+                .sortOrder(slot == null || slot.getSortOrder() == null ? 100 : slot.getSortOrder())
+                .defaultLimit(slotLimit(slot == null ? null : slot.getDefaultLimit()))
+                .source(OPERATION_SOURCE_REMOTE)
+                .degraded(false)
+                .fallbackReason(reason)
+                .items(List.of())
+                .updateTime(slot == null ? null : slot.getUpdateTime())
+                .build();
     }
 
     @Transactional

@@ -70,11 +70,15 @@ class ChannelQualityReviewBatchCoordinationServiceTest {
         when(mapper.coordinationEventColumnsExist()).thenReturn(15);
         when(mapper.coordinationEventConstraintsExist()).thenReturn(4);
         when(mapper.coordinationEventWithdrawnIndexExists()).thenReturn(1);
+    }
+
+    private void stubAdminOperator() {
         when(adminPermissionService.isAdmin(9L)).thenReturn(true);
     }
 
     @Test
     void reassignRecordsFacadeSourceAssigneeInsteadOfOriginalDispatchAssignee() {
+        stubAdminOperator();
         ChannelQualityReviewBatchCoordinationRow original = batch(7001L, 0, 11L);
         ChannelQualityReviewBatchCoordinationRow refreshed = batch(7001L, 1, 11L);
         ChannelQualityReviewBatchReassignActiveTasksCmd cmd =
@@ -114,6 +118,7 @@ class ChannelQualityReviewBatchCoordinationServiceTest {
 
     @Test
     void doesNotOfferDeadlineExtensionForLegacyBatchWithoutDeadline() {
+        stubAdminOperator();
         ChannelQualityReviewBatchCoordinationRow legacy = batch(7002L, 0, 11L);
         legacy.setDueAt(null);
         legacy.setEffectiveDueAt(null);

@@ -456,6 +456,75 @@ class OperationTopicScopeTest {
                 "each slot post should be loaded once before visibility filtering");
     }
 
+    @Test
+    void missingPublicSlotReturnsStableSuccessEmptyContract() {
+        OperationSlotMapper slotMapper = slotMapper(null);
+        OperationCurationService service = slotService(slotMapper);
+
+        OperationSlotDTO result = service.getPublicSlot("HOME_FEATURED", 5);
+
+        assertEquals("HOME_FEATURED", result.getSlotCode());
+        assertEquals("EMPTY", result.getStatus());
+        assertEquals("remote", result.getSource());
+        assertEquals(false, result.getDegraded());
+        assertEquals("NOT_CONFIGURED", result.getFallbackReason());
+        assertEquals(List.of(), result.getItems());
+    }
+
+    @Test
+    void publishedSlotWithNoVisibleItemsReturnsSuccessfulEmptyItems() throws Exception {
+        OperationSlotPO slot = new OperationSlotPO();
+        slot.setId(9L);
+        slot.setSlotCode("HOME_FEATURED");
+        slot.setSlotName("首页精选");
+        slot.setSlotStatus(OperationCurationService.STATUS_PUBLISHED);
+        slot.setDefaultLimit(4);
+        slot.setPublishedSnapshotJson(new ObjectMapper().writeValueAsString(OperationSlotDTO.builder()
+                .id(slot.getId())
+                .slotCode(slot.getSlotCode())
+                .name(slot.getSlotName())
+                .status(OperationCurationService.STATUS_PUBLISHED)
+                .defaultLimit(4)
+                .source("remote")
+                .items(List.of())
+                .build()));
+
+        OperationSlotDTO result = slotService(slotMapper(slot)).getPublicSlot("HOME_FEATURED", 4);
+
+        assertEquals("EMPTY", result.getStatus());
+        assertEquals("NO_VISIBLE_ITEMS", result.getFallbackReason());
+        assertEquals(List.of(), result.getItems());
+    }
+
+    private OperationCurationService slotService(OperationSlotMapper slotMapper) {
+        return new OperationCurationService(
+                unsupported(PostMapper.class),
+                unsupported(OperationCurationItemMapper.class),
+                slotMapper,
+                unsupported(OperationSlotItemMapper.class),
+                unsupported(OperationTopicMapper.class),
+                unsupported(OperationTopicSectionMapper.class),
+                unsupported(PostFacade.class),
+                auditService(),
+                new SnowflakeIdGenerator(),
+                new ObjectMapper(),
+                null,
+                ignored -> UserDistributionControlsSnapshot.emptyAvailable());
+    }
+
+    private OperationSlotMapper slotMapper(OperationSlotPO slot) {
+        return (OperationSlotMapper) Proxy.newProxyInstance(
+                OperationTopicScopeTest.class.getClassLoader(),
+                new Class<?>[] {OperationSlotMapper.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "selectByCode" -> slot;
+                    case "toString" -> "OperationSlotMapperStub";
+                    case "hashCode" -> 0;
+                    case "equals" -> proxy == args[0];
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
     private OperationCandidateDTO receiveHint(OperationTopicPO topic, PostBriefDTO post) {
         OperationCurationService service = service(topic, Map.of(post.getId(), post),
                 List.of(), new AtomicBoolean(), new AtomicBoolean());

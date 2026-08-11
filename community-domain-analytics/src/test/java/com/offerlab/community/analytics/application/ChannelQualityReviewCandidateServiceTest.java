@@ -87,19 +87,23 @@ class ChannelQualityReviewCandidateServiceTest {
                 .thenReturn(Map.of());
         lenient().when(candidateDispositionService.findActiveBySourceRevision(any()))
                 .thenReturn(Map.of());
-        when(postContentRevisionQuery.queryPublicRevisionBoundaryPage(any()))
-                .thenReturn(PostPublicRevisionBoundaryPageResult.available(
-                        List.of(projection(1002L, "r-1002")),
-                        null,
-                        1002L));
         when(qualitySignalQuery.findRevisionAwareActiveQualitySignals(any(), any(), any()))
                 .thenReturn(RevisionAwareQualitySignalQueryResult.available(List.of(
                         new RevisionAwareQualitySignalQueryResult.RevisionAwareQualitySignalSnapshot(
                                 1002L, "r-1002", 0L, 5L))));
     }
 
+    private void stubCandidatePage() {
+        when(postContentRevisionQuery.queryPublicRevisionBoundaryPage(any()))
+                .thenReturn(PostPublicRevisionBoundaryPageResult.available(
+                        List.of(projection(1002L, "r-1002")),
+                        null,
+                        1002L));
+    }
+
     @Test
     void returnsOnlyMinimumPublicCandidateFieldsForCurrentQualifiedRevision() {
+        stubCandidatePage();
         when(postContentRevisionQuery.query(any())).thenReturn(PostContentRevisionQueryResult.available(List.of(
                 snapshot(1002L, "r-1002", 7))));
         when(postFacade.batchGetPosts(List.of(1002L), null, false))
@@ -122,6 +126,7 @@ class ChannelQualityReviewCandidateServiceTest {
 
     @Test
     void revisionTokenDriftReturnsStaleCandidateWithoutRevisionReference() {
+        stubCandidatePage();
         when(postContentRevisionQuery.query(any())).thenReturn(PostContentRevisionQueryResult.available(List.of(
                 snapshot(1002L, "newer-r-1002", 8))));
         when(postFacade.batchGetPosts(List.of(1002L), null, false))
@@ -141,6 +146,7 @@ class ChannelQualityReviewCandidateServiceTest {
 
     @Test
     void missingPublicMetadataIsSuppressedWithoutReturningDetails() {
+        stubCandidatePage();
         when(postContentRevisionQuery.query(any())).thenReturn(PostContentRevisionQueryResult.available(List.of(
                 snapshot(1002L, "r-1002", 7))));
         when(postFacade.batchGetPosts(List.of(1002L), null, false)).thenReturn(Map.of());
@@ -155,6 +161,7 @@ class ChannelQualityReviewCandidateServiceTest {
 
     @Test
     void existingTaskForCurrentRevisionIsNotActionable() {
+        stubCandidatePage();
         when(postContentRevisionQuery.query(any())).thenReturn(PostContentRevisionQueryResult.available(List.of(
                 snapshot(1002L, "r-1002", 7))));
         when(postFacade.batchGetPosts(List.of(1002L), null, false))

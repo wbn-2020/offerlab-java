@@ -32,7 +32,7 @@ class GlobalExceptionHandlerApiTest {
         mvc.perform(get("/broken-schema"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DATABASE_ERROR.getCode()))
-                .andExpect(jsonPath("$.message").value("Request could not be completed."))
+                .andExpect(jsonPath("$.message").value("当前请求暂时无法完成，请稍后重试。"))
                 .andExpect(jsonPath("$.traceId").isNotEmpty())
                 .andExpect(jsonPath("$.data").doesNotExist());
     }
@@ -47,7 +47,7 @@ class GlobalExceptionHandlerApiTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DATABASE_ERROR.getCode()))
                 .andExpect(jsonPath("$.message")
-                        .value("Database is temporarily unavailable. Please try again later."))
+                        .value("服务暂时无法完成请求，请稍后重试。"))
                 .andExpect(jsonPath("$.traceId").isNotEmpty())
                 .andExpect(jsonPath("$.data").doesNotExist());
     }
@@ -61,7 +61,7 @@ class GlobalExceptionHandlerApiTest {
         mvc.perform(get("/integrity-failure"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value(ErrorCode.DATABASE_ERROR.getCode()))
-                .andExpect(jsonPath("$.message").value("Request could not be completed."))
+                .andExpect(jsonPath("$.message").value("当前请求暂时无法完成，请稍后重试。"))
                 .andExpect(jsonPath("$.traceId").isNotEmpty())
                 .andExpect(jsonPath("$.data").doesNotExist());
     }

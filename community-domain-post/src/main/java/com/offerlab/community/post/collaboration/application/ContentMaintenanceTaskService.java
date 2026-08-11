@@ -101,10 +101,6 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
         int domain = requireDomain(cmd.getDomain());
         requireModerate(operatorUid, domain);
         String normalizedSourceType = sourceType(cmd.getSourceType());
-        if ("CHANNEL_HEALTH".equals(normalizedSourceType)) {
-            throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
-                    "CHANNEL_HEALTH tasks must be dispatched from a quality review batch");
-        }
         return createTask(
                 domain,
                 normalizedSourceType,
@@ -519,10 +515,10 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
         String decision = enumValue(cmd.getDecision(), Set.of("APPROVED", "REJECTED"));
         String reasonCode = reviewReasonCode(decision, cmd.getReasonCode());
         ContentMaintenanceTaskAttemptRow attempt = ensureReviewAttempt(before);
-        if (attempt == null || attempt.getId() == null) {
+        if (attempt != null && attempt.getId() == null) {
             throw new BizException(ErrorCode.DEPENDENCY_ERROR);
         }
-        if (mapper.decideAttempt(attempt.getId(), before.getId(), decision,
+        if (attempt != null && mapper.decideAttempt(attempt.getId(), before.getId(), decision,
                 reasonCode, operatorUid, note) != 1) {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
@@ -546,9 +542,9 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
         String note = required(cmd.getNote(), 1000);
         if ("SUBMITTED".equals(before.getStatus())) {
             ContentMaintenanceTaskAttemptRow attempt = ensureReviewAttempt(before);
-            if (attempt == null || attempt.getId() == null
+            if (attempt != null && (attempt.getId() == null
                     || mapper.decideAttempt(attempt.getId(), before.getId(), "CLOSED",
-                    reasonCode, operatorUid, note) != 1) {
+                    reasonCode, operatorUid, note) != 1)) {
                 throw new BizException(ErrorCode.INVALID_STATUS);
             }
         }
@@ -587,10 +583,10 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
             if (existing == null) {
                 Long submittedByUid = task.getAssigneeUid() != null
                         ? task.getAssigneeUid() : task.getCreatedByUid();
-                if (submittedByUid == null
-                        || task.getSubmittedAt() == null
-                        || !hasValidDeliverySnapshot(task)
-                        || mapper.insertHistoricalAttempt(idGenerator.nextId(), task.getId(), legacyAttemptNo,
+                if (submittedByUid == null || !hasHistoricalAttemptSnapshot(task)) {
+                    return null;
+                }
+                if (mapper.insertHistoricalAttempt(idGenerator.nextId(), task.getId(), legacyAttemptNo,
                         task.getDeliveryType(), task.getDeliveryRefId(), task.getDeliveryPostId(),
                         task.getDeliveryNote(), submittedByUid, task.getSubmittedAt()) != 1) {
                     throw new BizException(ErrorCode.DEPENDENCY_ERROR);
@@ -723,24 +719,28 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
     private static boolean hasSubmittedDelivery(ContentMaintenanceTaskRow task) {
         return task != null
                 && Set.of("SUBMITTED", "COMPLETED", "CLOSED").contains(task.getStatus())
-                && task.getSubmittedAt() != null
-                && hasValidDeliverySnapshot(task);
+                && hasLinkedDeliverySnapshot(task);
     }
 
-    private static boolean hasValidDeliverySnapshot(ContentMaintenanceTaskRow task) {
+    private static boolean hasLinkedDeliverySnapshot(ContentMaintenanceTaskRow task) {
         if (task == null
                 || !StringUtils.hasText(task.getDeliveryType())
                 || task.getDeliveryRefId() == null
-                || task.getDeliveryRefId() <= 0
-                || !StringUtils.hasText(task.getDeliveryNote())) {
+                || task.getDeliveryRefId() <= 0) {
             return false;
         }
         return switch (task.getDeliveryType()) {
             case "POST", "QUESTION" -> task.getDeliveryPostId() != null
-                    && task.getDeliveryRefId().equals(task.getDeliveryPostId());
+                    && task.getDeliveryPostId() > 0;
             case "SERIES" -> task.getDeliveryPostId() == null;
             default -> false;
         };
+    }
+
+    private static boolean hasHistoricalAttemptSnapshot(ContentMaintenanceTaskRow task) {
+        return hasLinkedDeliverySnapshot(task)
+                && StringUtils.hasText(task.getDeliveryNote())
+                && task.getSubmittedAt() != null;
     }
 
     private void requireReviewContextAccess(ContentMaintenanceTaskRow task, Long viewerUid) {

@@ -44,6 +44,15 @@ public interface CommentMapper extends BaseMapper<CommentPO> {
             """)
     long countAvailableRootComments(@Param("postId") Long postId);
 
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_int_comment c
+            WHERE c.post_id = #{postId}
+              AND c.comment_status = 1
+              AND c.is_deleted = 0
+            """)
+    long countVisibleComments(@Param("postId") Long postId);
+
     @Update("UPDATE t_int_comment SET like_count = GREATEST(0, like_count + #{delta}) WHERE id = #{id} AND comment_status = 1 AND is_deleted = 0")
     int incrLikeCount(@Param("id") Long id, @Param("delta") int delta);
 

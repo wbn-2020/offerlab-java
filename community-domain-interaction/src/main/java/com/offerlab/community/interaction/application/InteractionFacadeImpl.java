@@ -395,6 +395,8 @@ public class InteractionFacadeImpl implements InteractionFacade {
         requirePostVisible(postId, viewerUid);
         int limit = clampPageSize(size);
         boolean qualitySort = SORT_QUALITY.equalsIgnoreCase(sort == null ? "" : sort.trim());
+        boolean firstPage = cursor == null || cursor.isBlank() || "0".equals(cursor.trim());
+        long total = commentMapper.countVisibleComments(postId);
         Cursor parsedCursor = qualitySort ? Cursor.empty() : parseCursor(cursor);
         List<CommentPO> roots;
         if (qualitySort) {
@@ -426,7 +428,14 @@ public class InteractionFacadeImpl implements InteractionFacade {
             }
             roots = commentMapper.selectList(q);
         }
-        if (roots.isEmpty()) return PageResult.empty();
+        if (roots.isEmpty()) {
+            if (firstPage && total > 0) {
+                throw new BizException(ErrorCode.SYSTEM_ERROR.getCode(), "评论数据暂时无法读取，请稍后重试");
+            }
+            PageResult<CommentDTO> empty = PageResult.empty();
+            empty.setTotal(total);
+            return empty;
+        }
         boolean hasMore = roots.size() > limit;
         if (hasMore) {
             roots = roots.subList(0, limit);
@@ -469,6 +478,7 @@ public class InteractionFacadeImpl implements InteractionFacade {
                 ? qualitySort ? qualityCursor(roots.get(roots.size() - 1)) : commentCursor(roots.get(roots.size() - 1))
                 : null;
         PageResult<CommentDTO> page = PageResult.of(items, next, hasMore);
+        page.setTotal(total);
         if (qualitySort) {
             page.withDiagnostic("qualityCursorMode", "mutable_keyset_best_effort");
         }

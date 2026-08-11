@@ -120,6 +120,46 @@ class InteractionFacadeVisibilityTest {
     }
 
     @Test
+    void listCommentsReturnsSuccessfulZeroStateWhenNoVisibleCommentsExist() {
+        when(postFacade.getPost(100L, null)).thenReturn(PostDTO.builder().id(100L).build());
+        when(commentMapper.countVisibleComments(100L)).thenReturn(0L);
+        when(commentMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<CommentDTO> page = facade.listComments(100L, null, "0", 20, "latest");
+
+        assertEquals(List.of(), page.getItems());
+        assertEquals(0L, page.getTotal());
+        assertFalse(page.getHasMore());
+    }
+
+    @Test
+    void listCommentsRejectsNonzeroTotalWithEmptyFirstPageAsDataFailure() {
+        when(postFacade.getPost(100L, null)).thenReturn(PostDTO.builder().id(100L).build());
+        when(commentMapper.countVisibleComments(100L)).thenReturn(21L);
+        when(commentMapper.selectList(any())).thenReturn(List.of());
+
+        BizException error = assertThrows(
+                BizException.class,
+                () -> facade.listComments(100L, null, "0", 20, "latest"));
+
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), error.getCode());
+        assertEquals("评论数据暂时无法读取，请稍后重试", error.getMessage());
+    }
+
+    @Test
+    void listCommentsKeepsRealTotalWhenAnLaterPageHasNoRows() {
+        when(postFacade.getPost(100L, null)).thenReturn(PostDTO.builder().id(100L).build());
+        when(commentMapper.countVisibleComments(100L)).thenReturn(21L);
+        when(commentMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<CommentDTO> page = facade.listComments(100L, null, "1710000000000:99", 20, "latest");
+
+        assertEquals(List.of(), page.getItems());
+        assertEquals(21L, page.getTotal());
+        assertFalse(page.getHasMore());
+    }
+
+    @Test
     void authorCanReadVisibleOwnPostComments() {
         CommentPO root = new CommentPO();
         root.setId(1L);
@@ -174,6 +214,7 @@ class InteractionFacadeVisibilityTest {
 
         List<CommentPO> qualityRankedRoots = List.of(root, newestRegularRoot, middleRegularRoot);
         when(postFacade.getPost(100L, 10L)).thenReturn(PostDTO.builder().id(100L).authorId(10L).build());
+        when(commentMapper.countVisibleComments(100L)).thenReturn(2L);
         when(commentMapper.selectList(any())).thenReturn(List.of(root), List.of());
         when(commentMapper.selectQualityRoots(eq(100L), any(), any(), any(), any(), any(), any(), any(), eq(3)))
                 .thenReturn(qualityRankedRoots, List.of(middleRegularRoot));
@@ -193,6 +234,7 @@ class InteractionFacadeVisibilityTest {
                 100L, 10L, firstQualityPage.getNextCursor(), 2, "quality");
 
         assertEquals(1, page.getItems().size());
+        assertEquals(2L, page.getTotal());
         assertEquals(1L, page.getItems().get(0).getId());
         assertEquals("hello", page.getItems().get(0).getContent());
         assertFalse(page.getItems().get(0).getMyLiked());

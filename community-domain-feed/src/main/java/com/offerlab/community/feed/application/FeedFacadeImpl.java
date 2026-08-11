@@ -1038,13 +1038,19 @@ public class FeedFacadeImpl implements FeedFacade, UserDistributionControlsQuery
         String content = searchableText(post, ext);
         String matchedInterest = intent == null ? "" : firstMatchedInterest(content, interestCandidates(intent));
         if (!matchedInterest.isBlank()) {
-            reasons.add("匹配你关注的兴趣方向");
+            reasons.add("匹配你关注的兴趣方向：" + matchedInterest);
         }
-        if (intent != null && matchesAny(engineeringArea, intent.getTargetCompanies())) {
-            reasons.add("关联你关注的工程场景");
+        String matchedEngineeringArea = intent == null
+                ? ""
+                : firstMatchedInterest(engineeringArea, intent.getTargetCompanies());
+        if (!matchedEngineeringArea.isBlank()) {
+            reasons.add("覆盖你关注的工程场景：" + matchedEngineeringArea);
         }
-        if (intent != null && matchesAny(technicalScenario, intent.getTargetPositions())) {
-            reasons.add("关联你关注的技术主题");
+        String matchedTechnicalScenario = intent == null
+                ? ""
+                : firstMatchedInterest(technicalScenario, intent.getTargetPositions());
+        if (!matchedTechnicalScenario.isBlank()) {
+            reasons.add("关联你关注的技术主题：" + matchedTechnicalScenario);
         }
         if (intent != null && matchesAny(content, intent.getTechStack())) {
             reasons.add("包含你关注的技术栈");

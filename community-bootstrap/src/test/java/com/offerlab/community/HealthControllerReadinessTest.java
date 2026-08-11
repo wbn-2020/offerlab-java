@@ -33,6 +33,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +54,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class HealthControllerReadinessTest {
     private DataSource dataSource;
     private Connection dbConnection;
+    private Statement dbStatement;
+    private ResultSet dbResultSet;
     private StringRedisTemplate redis;
     private RedisConnection redisConnection;
     private ElasticsearchHttpClient elasticsearch;
@@ -68,6 +72,8 @@ class HealthControllerReadinessTest {
     void setUp() throws Exception {
         dataSource = mock(DataSource.class);
         dbConnection = mock(Connection.class);
+        dbStatement = mock(Statement.class);
+        dbResultSet = mock(ResultSet.class);
         redis = mock(StringRedisTemplate.class);
         RedisConnectionFactory redisConnectionFactory = mock(RedisConnectionFactory.class);
         redisConnection = mock(RedisConnection.class);
@@ -83,6 +89,10 @@ class HealthControllerReadinessTest {
 
         when(dataSource.getConnection()).thenReturn(dbConnection);
         when(dbConnection.isValid(2)).thenReturn(true);
+        when(dbConnection.createStatement()).thenReturn(dbStatement);
+        when(dbStatement.executeQuery(org.mockito.ArgumentMatchers.anyString())).thenReturn(dbResultSet);
+        when(dbResultSet.next()).thenReturn(true);
+        when(dbResultSet.getInt("present_count")).thenReturn(8);
         when(redis.getConnectionFactory()).thenReturn(redisConnectionFactory);
         when(redisConnectionFactory.getConnection()).thenReturn(redisConnection);
         when(redisConnection.ping()).thenReturn("PONG");
@@ -202,7 +212,9 @@ class HealthControllerReadinessTest {
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> schema = (Map<?, ?>) components.get("schema");
 
-        assertEquals("DEGRADED", readiness.get("status"));
+        assertEquals("UP", readiness.get("status"));
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
         assertEquals("BLOCKED_BY_SCHEMA", schema.get("status"));
         assertEquals(false, schema.get("ready"));
         assertEquals("db/migration/20260608_tag_governance.sql", schema.get("migration"));
@@ -348,10 +360,14 @@ class HealthControllerReadinessTest {
         Map<?, ?> kafka = (Map<?, ?>) components.get("kafka");
         Map<?, ?> es = (Map<?, ?>) components.get("elasticsearch");
 
-        assertEquals("DEGRADED", readiness.get("status"));
+        assertEquals("UP", readiness.get("status"));
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
+        assertEquals(true, readiness.get("operationalAttentionRequired"));
         assertEquals("DOWN", outbox.get("status"));
         assertEquals("DISABLED_BY_CONFIG", kafka.get("status"));
         assertEquals("DISABLED_BY_CONFIG", es.get("status"));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, controller().strictReadiness().getStatusCode());
     }
 
     @Test
@@ -383,8 +399,12 @@ class HealthControllerReadinessTest {
         Map<?, ?> components = (Map<?, ?>) readiness.get("components");
         Map<?, ?> searchRetry = (Map<?, ?>) components.get("searchIndexRetry");
 
-        assertEquals("DEGRADED", readiness.get("status"));
+        assertEquals("UP", readiness.get("status"));
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
+        assertEquals(true, readiness.get("operationalAttentionRequired"));
         assertEquals("UNKNOWN", searchRetry.get("status"));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, controller().strictReadiness().getStatusCode());
     }
 
     @Test
@@ -405,7 +425,10 @@ class HealthControllerReadinessTest {
         Map<?, ?> questionRetry = (Map<?, ?>) components.get("questionIndexRetry");
         Map<?, ?> notificationRetry = (Map<?, ?>) components.get("notificationRetry");
 
-        assertEquals("DEGRADED", readiness.get("status"));
+        assertEquals("UP", readiness.get("status"));
+        assertEquals(true, readiness.get("serviceReady"));
+        assertEquals(false, readiness.get("releaseReady"));
+        assertEquals(true, readiness.get("operationalAttentionRequired"));
         assertEquals("DOWN", searchRetry.get("status"));
         assertEquals(false, searchRetry.get("available"));
         assertEquals(0L, searchRetry.get("duePending"));
@@ -415,6 +438,7 @@ class HealthControllerReadinessTest {
         assertEquals("DOWN", notificationRetry.get("status"));
         assertEquals(false, notificationRetry.get("available"));
         assertEquals(0L, notificationRetry.get("duePending"));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, controller().strictReadiness().getStatusCode());
     }
 
     @Test
@@ -442,7 +466,25 @@ class HealthControllerReadinessTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.status").value("DEGRADED"))
                 .andExpect(jsonPath("$.ready").value(false))
+                .andExpect(jsonPath("$.issues[0].component").value("kafka"))
+                .andExpect(jsonPath("$.issues[0].code").value("KAFKA_BOOTSTRAP_NOT_CONFIGURED"))
                 .andExpect(jsonPath("$.components").doesNotExist());
+    }
+
+    @Test
+    void missingCoreSchemaBlocksPublicReadinessWithSafeDiagnosticCode() throws Exception {
+        configureDisabledOptionalDependencies();
+        when(dbResultSet.getInt("present_count")).thenReturn(7);
+
+        ResponseEntity<Map<String, Object>> response = controller().readiness();
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertEquals(false, response.getBody().get("ready"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> issues = (List<Map<String, Object>>) response.getBody().get("issues");
+        assertEquals("coreSchema", issues.get(0).get("component"));
+        assertEquals("CORE_SCHEMA_INCOMPLETE", issues.get(0).get("code"));
+        assertFalse(response.getBody().containsKey("components"));
     }
 
     @Test

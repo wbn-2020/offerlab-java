@@ -44,6 +44,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -133,12 +134,12 @@ public class ChannelQualityReviewRiskCaseService {
         requireCoordinationVersion(cmd.getExpectedCoordinationVersion(), batch);
         String note = required(cmd.getNote());
 
-        Trigger trigger = createTrigger(batch, cmd.getRiskEventId());
         ChannelQualityReviewRiskCaseRow active = riskCaseMapper.selectActiveByBatchId(safeBatchId);
         if (active != null) {
             requireCase(active);
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
+        Trigger trigger = createTrigger(batch, cmd.getRiskEventId());
         if (trigger.riskEventId() != null && riskCaseMapper.selectByRiskEventId(trigger.riskEventId()) != null) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
@@ -381,8 +382,8 @@ public class ChannelQualityReviewRiskCaseService {
             long safeRiskEventId = requireId(riskEventId);
             ChannelQualityReviewRiskCaseRiskNoteEventRow riskEvent =
                     riskCaseMapper.selectRiskNoteEvent(batch.getId(), safeRiskEventId);
-            if (riskEvent == null || riskEvent.getId() == null || riskEvent.getId() != safeRiskEventId
-                    || riskEvent.getBatchId() == null || riskEvent.getBatchId() != batch.getId()
+            if (riskEvent == null || !Objects.equals(riskEvent.getId(), safeRiskEventId)
+                    || !Objects.equals(riskEvent.getBatchId(), batch.getId())
                     || !"RISK_NOTE_ADDED".equals(riskEvent.getEventType())
                     || !RISK_CODES.contains(riskEvent.getRiskCode())
                     || riskEvent.getCoordinationVersion() == null || riskEvent.getCoordinationVersion() < 0
@@ -575,7 +576,7 @@ public class ChannelQualityReviewRiskCaseService {
         Map<String, Integer> counts = new LinkedHashMap<>();
         TASK_STATUSES.forEach(status -> counts.put(status, 0));
         for (ChannelQualityReviewBatchTaskStatusRow row : rows) {
-            if (row == null || row.getBatchId() == null || row.getBatchId() != batch.getId()
+            if (row == null || !Objects.equals(row.getBatchId(), batch.getId())
                     || row.getTaskCount() == null || row.getTaskCount() < 0
                     || !TASK_STATUSES.contains(row.getStatus())) {
                 throw new BizException(ErrorCode.DEPENDENCY_ERROR);

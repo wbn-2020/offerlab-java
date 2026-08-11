@@ -80,6 +80,9 @@ class ChannelQualityReviewRiskCaseServiceTest {
                 domainModeratorService,
                 governanceService,
                 Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private void stubRequiredTablesAndAdmin() {
         when(riskCaseMapper.caseTableExists()).thenReturn(1);
         when(riskCaseMapper.eventTableExists()).thenReturn(1);
         when(riskCaseMapper.caseColumnsExist()).thenReturn(17);
@@ -97,6 +100,7 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void createWritesCaseOpenedEventAndRequiredAudit() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewBatchCoordinationRow batch = batch(2, NOW.plusSeconds(3 * 24 * 60 * 60L));
         ChannelQualityReviewRiskCaseCreateCmd cmd = createCmd(2, RISK_EVENT_ID);
 
@@ -131,10 +135,9 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void createRejectsSecondActiveCaseForBatch() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewBatchCoordinationRow batch = batch(2, NOW.plusSeconds(3 * 24 * 60 * 60L));
         when(batchMapper.lockCoordinationById(BATCH_ID)).thenReturn(batch);
-        when(riskCaseMapper.selectRiskNoteEvent(BATCH_ID, RISK_EVENT_ID))
-                .thenReturn(riskNote(RISK_EVENT_ID, BATCH_ID, 2));
         when(riskCaseMapper.selectActiveByBatchId(BATCH_ID))
                 .thenReturn(openRiskCase(9101L, "RISK_EVENT", "OPEN", null, 1, 2));
 
@@ -151,6 +154,7 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void createRejectsRiskEventOutsideCurrentBatch() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewBatchCoordinationRow batch = batch(2, NOW.plusSeconds(3 * 24 * 60 * 60L));
         when(batchMapper.lockCoordinationById(BATCH_ID)).thenReturn(batch);
         when(riskCaseMapper.selectRiskNoteEvent(BATCH_ID, RISK_EVENT_ID))
@@ -167,6 +171,7 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void assignOwnerRejectsModeratorIneligibleForBatchDomain() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewRiskCaseRow riskCase =
                 openRiskCase(CASE_ID, "RISK_EVENT", "OPEN", null, 1, 2);
         ChannelQualityReviewRiskCaseAssignOwnerCmd cmd = new ChannelQualityReviewRiskCaseAssignOwnerCmd();
@@ -190,6 +195,7 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void acknowledgeRejectsStaleCaseVersion() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewRiskCaseRow riskCase =
                 openRiskCase(CASE_ID, "RISK_EVENT", "OPEN", 11L, 3, 2);
         ChannelQualityReviewRiskCaseAcknowledgeCmd cmd = new ChannelQualityReviewRiskCaseAcknowledgeCmd();
@@ -209,6 +215,7 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void acknowledgeRejectsInvalidStateTransition() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewRiskCaseRow riskCase =
                 openRiskCase(CASE_ID, "RISK_EVENT", "ACKNOWLEDGED", 11L, 3, 2);
         ChannelQualityReviewRiskCaseAcknowledgeCmd cmd = new ChannelQualityReviewRiskCaseAcknowledgeCmd();
@@ -230,6 +237,7 @@ class ChannelQualityReviewRiskCaseServiceTest {
 
     @Test
     void acknowledgeRejectsOpenCaseWithoutAssignedOwner() {
+        stubRequiredTablesAndAdmin();
         ChannelQualityReviewRiskCaseRow riskCase =
                 openRiskCase(CASE_ID, "RISK_EVENT", "OPEN", null, 1, 2);
         ChannelQualityReviewRiskCaseAcknowledgeCmd cmd = new ChannelQualityReviewRiskCaseAcknowledgeCmd();
