@@ -1010,11 +1010,7 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     private static String toSlug(Long id, String name) {
-        if (name == null || name.isBlank()) {
-            return String.valueOf(id);
-        }
-        String slug = name.trim().toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
-        return slug.isBlank() ? String.valueOf(id) : slug;
+        return "tag-" + id;
     }
 
     private static Long asLong(Object value) {

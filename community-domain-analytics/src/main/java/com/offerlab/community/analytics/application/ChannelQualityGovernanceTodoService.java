@@ -101,7 +101,7 @@ public class ChannelQualityGovernanceTodoService {
         return ChannelQualityGovernanceTodoPageDTO.builder()
                 .dependencyStatus("READY")
                 .evaluationTime(query.evaluationTime().atZone(ZoneOffset.UTC).toInstant())
-                .freshThrough(null)
+                .freshThrough(query.evaluationTime().atZone(ZoneOffset.UTC).toInstant())
                 .nextCursor(nextCursor)
                 .items(items)
                 .build();
@@ -113,7 +113,7 @@ public class ChannelQualityGovernanceTodoService {
         String actionability = !"OPEN".equals(row.getStatus())
                 ? "SOURCE_TERMINAL"
                 : actionable ? "ACTIONABLE" : "ASSIGNEE_INELIGIBLE";
-        String dueState = "OPEN".equals(row.getStatus()) ? dueState(row, evaluationTime) : null;
+        String dueState = "OPEN".equals(row.getStatus()) ? dueState(row, evaluationTime) : "NOT_APPLICABLE";
         return ChannelQualityGovernanceTodoItemDTO.builder()
                 .todoId(row.getId())
                 .caseId(row.getCaseId())

@@ -229,7 +229,7 @@ public class GrowthInsightService {
                                           Map<Integer, Long> seriesCountByDomain,
                                           LocalDateTime since) {
         if (currentRows == null || currentRows.isEmpty()) {
-            return List.of("Publish one structured post first so the radar and report can accumulate useful signals.");
+            return List.of("先发布一篇结构化内容，让成长雷达和报告积累可用信号。");
         }
         List<String> actions = new ArrayList<>();
         Map<String, Object> strongest = currentRows.stream()
