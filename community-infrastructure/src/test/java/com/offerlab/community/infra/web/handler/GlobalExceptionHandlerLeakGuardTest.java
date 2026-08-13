@@ -1,5 +1,7 @@
 package com.offerlab.community.infra.web.handler;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.exception.SystemException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.trace.TraceContext;
@@ -89,6 +91,46 @@ class GlobalExceptionHandlerLeakGuardTest {
                 handler.handleDataAccess(new DataIntegrityViolationException(
                         "duplicate key violates user_email_key")),
                 HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @Test
+    void systemBizExceptionsMustNotExposeInternalMessagesOrData() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        TraceContext.set("trace-system-biz");
+
+        ResponseEntity<Result<?>> response = handler.handleBiz(new BizException(
+                ErrorCode.DEPENDENCY_ERROR.getCode(),
+                "internal migration/schema detail",
+                "sensitive diagnostic payload"));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        Result<?> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(ErrorCode.DEPENDENCY_ERROR.getCode(), body.getCode());
+        assertEquals("服务暂时不可用，请稍后重试。", body.getMessage());
+        assertEquals("trace-system-biz", body.getTraceId());
+        assertNull(body.getData());
+        assertFalse(body.getMessage().contains("migration"));
+        assertFalse(body.getMessage().contains("schema"));
+    }
+
+    @Test
+    void systemExceptionsMustNotExposeInternalMessages() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        TraceContext.set("trace-system-exception");
+
+        ResponseEntity<Result<?>> response = handler.handleSystem(new SystemException(
+                ErrorCode.SYSTEM_ERROR.getCode(),
+                "database connection secret_schema is unavailable"));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        Result<?> body = response.getBody();
+        assertNotNull(body);
+        assertEquals(ErrorCode.SYSTEM_ERROR.getCode(), body.getCode());
+        assertEquals("系统暂时无法完成请求，请稍后重试。", body.getMessage());
+        assertEquals("trace-system-exception", body.getTraceId());
+        assertFalse(body.getMessage().contains("database"));
+        assertFalse(body.getMessage().contains("schema"));
     }
 
     private static void assertGenericDatabaseResponse(ResponseEntity<Result<?>> response,

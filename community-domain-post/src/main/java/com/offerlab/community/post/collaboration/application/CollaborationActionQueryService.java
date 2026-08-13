@@ -83,8 +83,8 @@ public class CollaborationActionQueryService {
             return PageResult.of(items, nextCursor, hasMore)
                     .withMetadata("collaboration-actions", false, null, pageSize + 1);
         } catch (RuntimeException ex) {
-            return PageResult.<CollaborationActionItemDTO>empty()
-                    .withMetadata("collaboration-actions", true, "ACTION_READ_UNAVAILABLE", pageSize + 1);
+            throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
+                    "collaboration actions are temporarily unavailable");
         }
     }
 

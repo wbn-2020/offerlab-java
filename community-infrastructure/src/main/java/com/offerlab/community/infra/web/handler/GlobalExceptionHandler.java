@@ -34,12 +34,25 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BizException.class)
     public ResponseEntity<Result<?>> handleBiz(BizException e) {
         log.warn("[biz] code={} msg={}", e.getCode(), e.getMessage());
-        Result<?> r = e.getData() == null
-                ? Result.fail(e.getCode(), e.getMessage())
-                : Result.builder().code(e.getCode()).message(e.getMessage()).data(e.getData()).build();
+        boolean systemCode = isSystemCode(e.getCode());
+        String message = systemCode ? safeSystemMessage(e.getCode()) : e.getMessage();
+        Result<?> r = systemCode || e.getData() == null
+                ? Result.fail(e.getCode(), message)
+                : Result.builder().code(e.getCode()).message(message).data(e.getData()).build();
         r.setTraceId(TraceContext.get());
         HttpStatus status = bizStatus(e.getCode());
         return ResponseEntity.status(status).body(r);
+    }
+
+    private boolean isSystemCode(Integer code) {
+        return code != null && code >= 20000 && code < 30000;
+    }
+
+    private String safeSystemMessage(Integer code) {
+        if (ErrorCode.SYSTEM_ERROR.getCode().equals(code)) {
+            return "系统暂时无法完成请求，请稍后重试。";
+        }
+        return "服务暂时不可用，请稍后重试。";
     }
 
     private HttpStatus bizStatus(Integer code) {
@@ -87,7 +100,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(SystemException.class)
     public ResponseEntity<Result<?>> handleSystem(SystemException e) {
         log.error("[sys] code={}", e.getCode(), e);
-        Result<?> r = Result.fail(e.getCode(), e.getMessage());
+        Result<?> r = Result.fail(e.getCode(), safeSystemMessage(e.getCode()));
         r.setTraceId(TraceContext.get());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(r);
     }

@@ -1,5 +1,7 @@
 package com.offerlab.community.post.collaboration.application;
 
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.result.PageResult;
 import com.offerlab.community.post.collaboration.api.CollaborationActionItemDTO;
 import com.offerlab.community.post.collaboration.api.CollaborationActionSummaryDTO;
@@ -12,6 +14,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CollaborationActionQueryServiceTest {
@@ -48,6 +51,18 @@ class CollaborationActionQueryServiceTest {
         assertEquals("NEED_SUBMIT", mapper.lastActionType);
     }
 
+    @Test
+    void listDoesNotTurnReadFailuresIntoAnEmptyActionQueue() {
+        FakeActionMapper mapper = new FakeActionMapper();
+        mapper.listFailure = new IllegalStateException("database unavailable");
+        CollaborationActionQueryService service = new CollaborationActionQueryService(mapper);
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.list(42L, null, "0", 20));
+
+        assertEquals(ErrorCode.DEPENDENCY_ERROR.getCode(), error.getCode());
+    }
+
     private static CollaborationActionQueryRows.ActionRow action(Long id, String type) {
         CollaborationActionQueryRows.ActionRow row = new CollaborationActionQueryRows.ActionRow();
         row.setActionType(type);
@@ -65,11 +80,15 @@ class CollaborationActionQueryServiceTest {
     private static final class FakeActionMapper implements CollaborationActionQueryMapper {
         private List<CollaborationActionQueryRows.ActionRow> rows = List.of();
         private String lastActionType;
+        private RuntimeException listFailure;
 
         @Override
         public List<CollaborationActionQueryRows.ActionRow> listActions(
                 Long uid, String actionType, LocalDateTime cursorTime, Long cursorId,
                 String cursorActionType, int limit) {
+            if (listFailure != null) {
+                throw listFailure;
+            }
             this.lastActionType = actionType;
             return rows;
         }
