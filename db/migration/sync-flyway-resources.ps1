@@ -375,7 +375,16 @@ $migrations = foreach ($sourceFile in $sourceFiles) {
     $nextSequenceByDate[$date] = $sequence - 1
     [void] $usedVersions.Add($version)
   }
-  $stream = if ($description.StartsWith("demo_")) { "demo" } else { "core" }
+  $stream = if ($existingMigrationsBySource.ContainsKey($sourceRelative)) {
+    [string] $existingMigrationsBySource[$sourceRelative].stream
+  } elseif ($description.StartsWith("demo_")) {
+    "demo"
+  } else {
+    "core"
+  }
+  if ($stream -notin @("core", "demo")) {
+    throw "Existing Flyway manifest contains an invalid stream: $sourceRelative -> $stream"
+  }
   $flywayName = "V${version}__${description}.sql"
   $resourceRelative = "community-bootstrap/src/main/resources/db/flyway/$stream/$flywayName"
   $resourcePath = Join-Path $repoRoot ($resourceRelative.Replace("/", "\"))

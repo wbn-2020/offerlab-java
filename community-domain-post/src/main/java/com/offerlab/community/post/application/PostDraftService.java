@@ -135,12 +135,20 @@ public class PostDraftService {
         po.setUid(cmd.getUid());
         po.setSourcePostId(cmd.getSourcePostId());
         po.setPostType(cmd.getPostType() == null ? 1 : cmd.getPostType());
-        po.setTitle(limit(cmd.getTitle(), 255));
-        po.setContent(limit(cmd.getContent(), PostContentLimits.MAX_CONTENT_LEN));
+        po.setTitle(requireLimit(
+                cmd.getTitle(), PostContentLimits.MAX_TITLE_LEN, "title",
+                "标题最多 " + PostContentLimits.MAX_TITLE_LEN + " 个字符"));
+        po.setContent(requireLimit(
+                cmd.getContent(), PostContentLimits.MAX_CONTENT_LEN, "content",
+                "正文最多 " + PostContentLimits.MAX_CONTENT_LEN + " 个字符"));
         po.setCoverUrl(normalizeCoverUrl(cmd.getCoverUrl()));
         po.setVisibility(cmd.getVisibility() == null ? 1 : cmd.getVisibility());
-        po.setExtJson(limit(normalizeDraftExtJson(baseExtJson, domain, anonymous), PostContentLimits.MAX_EXT_JSON_LEN));
-        po.setTagIdsJson(writeJson(cmd.getTagIds()));
+        po.setExtJson(requireLimit(
+                normalizeDraftExtJson(baseExtJson, domain, anonymous),
+                PostContentLimits.MAX_EXT_JSON_LEN,
+                "extension",
+                "扩展信息过长，请精简后再保存草稿"));
+        po.setTagIdsJson(writeJson(normalizeTagIds(cmd.getTagIds())));
         po.setTagNamesJson(writeJson(normalizeTagNames(cmd.getTagNames())));
         return po;
     }
@@ -171,12 +179,38 @@ public class PostDraftService {
         if (values == null) {
             return List.of();
         }
-        return values.stream()
+        List<String> normalized = values.stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .distinct()
-                .limit(20)
                 .toList();
+        if (normalized.size() > PostContentLimits.MAX_TAG_COUNT) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
+        }
+        if (normalized.stream().anyMatch(name -> name.length() > PostContentLimits.MAX_TAG_NAME_LEN)) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "标签名称不能超过 " + PostContentLimits.MAX_TAG_NAME_LEN + " 个字符");
+        }
+        return normalized;
+    }
+
+    private List<Long> normalizeTagIds(List<Long> values) {
+        if (values == null) {
+            return List.of();
+        }
+        List<Long> normalized = values.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (normalized.stream().anyMatch(id -> id <= 0)) {
+            throw PostPublishQualityValidator.fieldError("tags", "标签 ID 无效");
+        }
+        if (normalized.size() > PostContentLimits.MAX_TAG_COUNT) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
+        }
+        return normalized;
     }
 
     private <T> List<T> readJson(String json, TypeReference<List<T>> type) {
@@ -199,24 +233,34 @@ public class PostDraftService {
         }
     }
 
-    private String limit(String value, int max) {
+    private String requireLimit(String value, int max, String field, String message) {
         if (value == null) {
             return null;
         }
         String normalized = value.trim();
-        return normalized.length() <= max ? normalized : normalized.substring(0, max);
+        if (normalized.length() > max) {
+            throw PostPublishQualityValidator.fieldError(field, message);
+        }
+        return normalized;
     }
 
     private String normalizeCoverUrl(String value) {
         if (!StringUtils.hasText(value)) {
             return null;
         }
-        return ExternalUrlSafety.requireSafeHttpUrl(value, "coverUrl", 512);
+        return ExternalUrlSafety.requireSafeHttpUrl(
+                value, "coverUrl", PostContentLimits.MAX_COVER_URL_LEN);
     }
 
     private String normalizeDraftExtJson(String extJson, Integer domain, Boolean anonymous) {
         try {
             ObjectNode object = readObjectExtJson(extJson);
+            JsonNode summary = object.get("summary");
+            if (summary != null && !summary.isNull()
+                    && summary.asText("").trim().length() > PostContentLimits.MAX_SUMMARY_LEN) {
+                throw PostPublishQualityValidator.fieldError(
+                        "summary", "摘要最多 " + PostContentLimits.MAX_SUMMARY_LEN + " 个字符");
+            }
             Integer resolvedDomain = draftDomain(domain, extJson);
             if (resolvedDomain == null) {
                 object.remove("domain");
@@ -226,6 +270,8 @@ public class PostDraftService {
             object.put("anonymous", Boolean.TRUE.equals(anonymous)
                     && Objects.equals(resolvedDomain, Post.DOMAIN_CAREER));
             return objectMapper.writeValueAsString(object);
+        } catch (BizException e) {
+            throw e;
         } catch (Exception e) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }

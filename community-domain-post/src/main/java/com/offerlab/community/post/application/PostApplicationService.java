@@ -15,6 +15,7 @@ import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueueReopenRequestedEvent;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
+import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.event.PostDeletedEvent;
@@ -38,6 +39,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -422,7 +424,6 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         if (tagIds != null) {
             List<Long> requestedIds = tagIds.stream()
                     .filter(id -> id != null && id > 0)
-                    .limit(20)
                     .toList();
             if (!requestedIds.isEmpty()) {
                 Set<Long> existingIds = selectTagsByIds(requestedIds).stream()
@@ -442,19 +443,25 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
                     .filter(name -> name != null && !name.isBlank())
                     .map(String::trim)
                     .distinct()
-                    .limit(20)
                     .toList();
             if (!names.isEmpty()) {
-                Set<String> existingNames = selectTagsByNames(names).stream()
+                List<TagPO> existingTags = selectTagsByNames(names);
+                Set<String> existingNames = existingTags.stream()
                         .map(TagPO::getTagName)
-                        .map(String::toLowerCase)
+                        .map(name -> name.toLowerCase(Locale.ROOT))
                         .collect(Collectors.toSet());
-                for (String name : names) {
-                    if (!existingNames.contains(name.toLowerCase())) {
-                        insertIgnoreName(idGen.nextId(), name, 4);
-                    }
+                existingTags.stream().map(TagPO::getId).forEach(ids::add);
+                List<String> missingNames = names.stream()
+                        .filter(name -> !existingNames.contains(name.toLowerCase(Locale.ROOT)))
+                        .toList();
+                if (ids.size() + missingNames.size() > PostContentLimits.MAX_TAG_COUNT) {
+                    throw PostPublishQualityValidator.fieldError(
+                            "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
                 }
-                selectTagsByNames(names).stream()
+                for (String name : missingNames) {
+                        insertIgnoreName(idGen.nextId(), name, 4);
+                }
+                selectTagsByNames(missingNames).stream()
                         .map(TagPO::getId)
                         .forEach(ids::add);
             }
@@ -462,7 +469,11 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         if (tagIds == null && tagNames == null) {
             return null;
         }
-        return ids.stream().limit(20).toList();
+        if (ids.size() > PostContentLimits.MAX_TAG_COUNT) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
+        }
+        return List.copyOf(ids);
     }
 
     private void requireResolvedTagCount(Integer postType, List<Long> tagIds) {
@@ -471,6 +482,10 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
             throw PostPublishQualityValidator.fieldError("tags", Post.isInterviewType(postType)
                     ? "历史经验至少需要 2 个有效技术标签"
                     : "至少需要 1 个有效标签");
+        }
+        if (tagIds.size() > PostContentLimits.MAX_TAG_COUNT) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
         }
     }
 

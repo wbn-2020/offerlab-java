@@ -11,8 +11,8 @@ in `db/init/99_seed.sql` content-aligned with
 checksums, and source-to-resource mappings. Existing mappings are immutable:
 adding another file on the same date receives the next free sequence instead of
 renumbering published migrations. The application automatically scans the
-production-safe migrations from `classpath:db/flyway/core`. The four `demo_*`
-data seeds are tracked in
+production-safe migrations from `classpath:db/flyway/core`. The seven demo migrations
+are tracked in
 `classpath:db/flyway/demo`, but are deliberately excluded from application
 startup. A startup guard rejects demo locations and the demo history table in
 the `prod`, `production`, and `acceptance` profiles, and requires the core

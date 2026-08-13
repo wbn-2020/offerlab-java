@@ -8,12 +8,12 @@
                     "core":  {
                                  "location":  "classpath:db/flyway/core",
                                  "autoMigrate":  true,
-                                 "expectedMigrations":  87
+                                 "expectedMigrations":  88
                              },
                     "demo":  {
                                  "location":  "classpath:db/flyway/demo",
                                  "autoMigrate":  false,
-                                 "expectedMigrations":  4,
+                                 "expectedMigrations":  7,
                                  "historyTable":  "flyway_demo_schema_history"
                              }
                 },
@@ -836,6 +836,42 @@
                            "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260807.07__channel_quality_governance_v45_action_safety.sql",
                            "sha256":  "17ae4fa01e159d048db25af9ddd59ca5e6959ff5d3e69d033873152f71a4d11b",
                            "flywayChecksum":  -722343981
+                       },
+                       {
+                           "version":  "20260811.01",
+                           "description":  "demo_collaboration_seed",
+                           "stream":  "demo",
+                           "source":  "db/migration/20260811_demo_collaboration_seed.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/demo/V20260811.01__demo_collaboration_seed.sql",
+                           "sha256":  "187692098ddf1bbbdf582993029fcd455c3103271f474a75a84e486286bd6867",
+                           "flywayChecksum":  573991194
+                       },
+                       {
+                           "version":  "20260811.02",
+                           "description":  "align_public_domain_names",
+                           "stream":  "core",
+                           "source":  "db/migration/20260811_align_public_domain_names.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/core/V20260811.02__align_public_domain_names.sql",
+                           "sha256":  "5105067b434cefad95017eee268a6e544c6088c9c8817beacc683ebd3ad6af85",
+                           "flywayChecksum":  -1851555067
+                       },
+                       {
+                           "version":  "20260811.03",
+                           "description":  "reconcile_demo_comment_counters",
+                           "stream":  "demo",
+                           "source":  "db/migration/20260811_reconcile_demo_comment_counters.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/demo/V20260811.03__reconcile_demo_comment_counters.sql",
+                           "sha256":  "17bb042ed4c55768ee3f5a08bd0eec8f2e6d0df64dfe084a1ef6ac0d2332956e",
+                           "flywayChecksum":  1026672876
+                       },
+                       {
+                           "version":  "20260812.01",
+                           "description":  "demo_acceptance_comment_seed",
+                           "stream":  "demo",
+                           "source":  "db/migration/20260812_demo_acceptance_comment_seed.sql",
+                           "resource":  "community-bootstrap/src/main/resources/db/flyway/demo/V20260812.01__demo_acceptance_comment_seed.sql",
+                           "sha256":  "6b7e7d3d2ffcf0200fb5572eb3d64e9d795ee2c1022fbc15995c2ee4392e8e0d",
+                           "flywayChecksum":  1337653020
                        }
                    ]
 }

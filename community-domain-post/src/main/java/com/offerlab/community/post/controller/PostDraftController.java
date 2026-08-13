@@ -96,23 +96,23 @@ public class PostDraftController {
         private Long id;
         private Long sourcePostId;
         private Integer postType;
-        @Size(max = 255)
+        @Size(max = PostContentLimits.MAX_TITLE_LEN)
         private String title;
         @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
-        @Size(max = 512)
+        @Size(max = PostContentLimits.MAX_COVER_URL_LEN)
         private String coverUrl;
         private Integer visibility;
         private Integer domain;
         private Boolean anonymous;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
-        @Size(max = 20)
-        private List<@Size(max = 32) String> tagNames;
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
+        private List<@Size(max = PostContentLimits.MAX_TAG_NAME_LEN) String> tagNames;
     }
 
     private static Integer requireOptionalDomain(Integer domain) {
