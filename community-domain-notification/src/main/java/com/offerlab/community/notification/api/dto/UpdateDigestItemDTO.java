@@ -20,11 +20,16 @@ public class UpdateDigestItemDTO {
     private String eventType;
     private String sourceType;
     private String sourceId;
+    private String subscriptionSourceType;
+    private String subscriptionSourceId;
+    private String resourceType;
+    private String resourceId;
     private String title;
     private String summary;
     private String targetPath;
     private LocalDateTime occurredAt;
     private int occurrenceCount;
+    private List<Long> digestIds;
     private List<Long> notificationIds;
     private boolean notificationUnread;
     private RevisitStateDTO revisit;

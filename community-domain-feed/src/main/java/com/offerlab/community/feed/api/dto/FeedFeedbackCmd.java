@@ -16,4 +16,8 @@ public class FeedFeedbackCmd {
     private String action;
     @Size(max = 200)
     private String reason;
+    @Pattern(
+            regexp = "(?i)\\s*(?:NOT_RELEVANT|TOO_FREQUENT|ALREADY_KNOWN|QUALITY_NOT_EXPECTED|OTHER)?\\s*",
+            message = "unsupported feedback reason code")
+    private String reasonCode;
 }

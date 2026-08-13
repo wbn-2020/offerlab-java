@@ -45,22 +45,16 @@ public interface UserFollowMapper extends BaseMapper<UserFollowPO> {
             SELECT f.id AS relationId,
                    f.to_uid AS uid,
                    p.nickname AS nickname,
-                   p.bio AS bio,
-                   f.create_time AS relationTime,
-                   p.update_time AS lastPublicUpdateAt,
-                   COALESCE(pref.delivery_mode, 'IMMEDIATE') AS deliveryMode,
-                   pref.expires_at AS expiresAt
-            FROM t_user_follow f
-            JOIN t_user_profile p ON p.id = f.to_uid
-                                AND p.is_deleted = 0
-            LEFT JOIN t_user_privacy_setting ps ON ps.user_id = p.id
-            LEFT JOIN t_user_subscription_preference pref
-                   ON pref.uid = f.from_uid
-                  AND pref.source_type = 'USER'
-                  AND pref.source_id = f.to_uid
-                  AND pref.is_deleted = 0
-                  AND (pref.expires_at IS NULL OR pref.expires_at > CURRENT_TIMESTAMP(3))
-            WHERE f.from_uid = #{fromUid}
+                    p.bio AS bio,
+                    f.create_time AS relationTime,
+                    p.update_time AS lastPublicUpdateAt,
+                    'IMMEDIATE' AS deliveryMode,
+                    NULL AS expiresAt
+             FROM t_user_follow f
+             JOIN t_user_profile p ON p.id = f.to_uid
+                                 AND p.is_deleted = 0
+             LEFT JOIN t_user_privacy_setting ps ON ps.user_id = p.id
+             WHERE f.from_uid = #{fromUid}
               AND f.is_deleted = 0
               AND (
                     p.id = #{fromUid}
@@ -76,11 +70,8 @@ public interface UserFollowMapper extends BaseMapper<UserFollowPO> {
                         )
                     )
                   )
-              <if test="mode == 'ACTIVE'">
-                AND COALESCE(pref.delivery_mode, 'IMMEDIATE') != 'MUTED'
-              </if>
               <if test="mode == 'MUTED'">
-                AND COALESCE(pref.delivery_mode, 'IMMEDIATE') = 'MUTED'
+                AND 1 = 0
               </if>
               <if test="cursorTime != null">
               AND (
@@ -110,19 +101,13 @@ public interface UserFollowMapper extends BaseMapper<UserFollowPO> {
             @Param("limit") int limit);
 
     @Select("""
-            SELECT COALESCE(pref.delivery_mode, 'IMMEDIATE') AS deliveryMode,
+            SELECT 'IMMEDIATE' AS deliveryMode,
                    COUNT(*) AS count
-            FROM t_user_follow f
-            JOIN t_user_profile p ON p.id = f.to_uid
-                                AND p.is_deleted = 0
-            LEFT JOIN t_user_privacy_setting ps ON ps.user_id = p.id
-            LEFT JOIN t_user_subscription_preference pref
-                   ON pref.uid = f.from_uid
-                  AND pref.source_type = 'USER'
-                  AND pref.source_id = f.to_uid
-                  AND pref.is_deleted = 0
-                  AND (pref.expires_at IS NULL OR pref.expires_at > CURRENT_TIMESTAMP(3))
-            WHERE f.from_uid = #{fromUid}
+             FROM t_user_follow f
+             JOIN t_user_profile p ON p.id = f.to_uid
+                                 AND p.is_deleted = 0
+             LEFT JOIN t_user_privacy_setting ps ON ps.user_id = p.id
+             WHERE f.from_uid = #{fromUid}
               AND f.is_deleted = 0
               AND (
                     p.id = #{fromUid}
@@ -138,7 +123,7 @@ public interface UserFollowMapper extends BaseMapper<UserFollowPO> {
                         )
                     )
                   )
-            GROUP BY COALESCE(pref.delivery_mode, 'IMMEDIATE')
+            GROUP BY deliveryMode
             ORDER BY deliveryMode ASC
             """)
     List<UserRelationshipDeliveryCountView> countVisibleFollowingRelationshipsByDeliveryMode(

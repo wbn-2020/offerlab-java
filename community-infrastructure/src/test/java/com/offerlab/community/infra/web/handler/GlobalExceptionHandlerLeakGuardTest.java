@@ -103,5 +103,8 @@ class GlobalExceptionHandlerLeakGuardTest {
         assertFalse(body.getMessage().contains("column"));
         assertFalse(body.getMessage().contains("constraint"));
         assertFalse(body.getMessage().contains("schema"));
+        assertFalse(body.getMessage().contains("Database"));
+        assertFalse(body.getMessage().contains("database"));
+        assertFalse(body.getMessage().contains("数据库"));
     }
 }

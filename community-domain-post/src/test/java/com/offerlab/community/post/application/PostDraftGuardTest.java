@@ -51,11 +51,11 @@ class PostDraftGuardTest {
         assertTrue(controller.contains("UserContext.require()"), "draft APIs must be user-owned");
         assertTrue(controller.contains("private Integer domain"), "draft request must accept explicit domain");
         assertTrue(controller.contains("private Boolean anonymous"), "draft request must accept explicit anonymous");
-        assertTrue(controller.contains("@Size(max = 20)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;"),
+        assertTrue(controller.contains("@Size(max = PostContentLimits.MAX_TAG_COUNT)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;"),
                 "legacy draft tags field must keep the same DTO-level tag id cap and element guard");
-        assertTrue(controller.contains("@Size(max = 20)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;"),
+        assertTrue(controller.contains("@Size(max = PostContentLimits.MAX_TAG_COUNT)\n        private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;"),
                 "draft tagIds must cap selections and reject invalid ids at DTO level");
-        assertTrue(controller.contains("@Size(max = 20)\n        private List<@Size(max = 32) String> tagNames;"),
+        assertTrue(controller.contains("@Size(max = PostContentLimits.MAX_TAG_COUNT)\n        private List<@Size(max = PostContentLimits.MAX_TAG_NAME_LEN) String> tagNames;"),
                 "draft tagNames must cap selections and bound each tag name at DTO level");
         assertTrue(controller.contains("requireOptionalDomain(req.getDomain())"), "draft request domain must use the shared domain validator");
         assertTrue(controller.contains("draftService.save"), "draft save endpoints must call the service");
@@ -82,6 +82,11 @@ class PostDraftGuardTest {
         assertTrue(postController.contains("draftService.deleteIfOwned(uid, req.getDraftId())"), "publishing must clear only the caller's draft");
         assertTrue(limits.contains("MAX_CONTENT_LEN = 50000"), "post body limit must match the frontend editor");
         assertTrue(limits.contains("MAX_EXT_JSON_LEN = 20000"), "extension JSON limit must remain bounded separately");
+        assertTrue(limits.contains("MAX_TAG_COUNT = 5"), "post and draft APIs must match the five-tag editor contract");
+        assertTrue(service.contains("requireLimit("),
+                "draft persistence must reject over-limit content instead of silently truncating it");
+        assertFalse(service.contains("normalized.substring(0, max)"),
+                "draft persistence must never silently truncate user content");
         assertTrue(cmd.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "draft command must use the shared body limit");
         assertTrue(createCmd.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "publish command must use the shared body limit");
         assertTrue(controller.contains("@Size(max = PostContentLimits.MAX_CONTENT_LEN)"), "draft request must use the shared body limit");

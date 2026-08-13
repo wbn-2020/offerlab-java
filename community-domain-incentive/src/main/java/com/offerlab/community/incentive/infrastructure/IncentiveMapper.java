@@ -1001,6 +1001,13 @@ public interface IncentiveMapper {
     @Select("SELECT COUNT(*) FROM t_virtual_benefit_entitlement WHERE user_id = #{userId}")
     long countUserEntitlements(@Param("userId") Long userId);
 
+    @Select("""
+            SELECT COALESCE(SUM(quantity_remaining), 0) FROM t_virtual_benefit_entitlement
+            WHERE user_id = #{userId} AND benefit_code = #{benefitCode}
+              AND entitlement_status IN ('ACTIVE', 'CONSUMED')
+            """)
+    long sumUserEntitlementQuantity(@Param("userId") Long userId, @Param("benefitCode") String benefitCode);
+
     @Update("""
             UPDATE t_virtual_benefit_entitlement
             SET entitlement_status = 'REVOKED', revoked_by = #{operatorUid},
@@ -1010,31 +1017,118 @@ public interface IncentiveMapper {
               AND NOT EXISTS (
                   SELECT 1 FROM t_virtual_benefit_entitlement_usage u
                   WHERE u.entitlement_id = t_virtual_benefit_entitlement.id
+                    AND u.usage_status IN ('RESERVED', 'CONFIRMED')
               )
             """)
     int revokeEntitlementByOrder(@Param("orderId") Long orderId, @Param("operatorUid") Long operatorUid,
                                  @Param("reason") String reason);
 
     @Insert("""
-            INSERT IGNORE INTO t_virtual_benefit_entitlement_usage(
-                id, entitlement_id, user_id, amount, idempotency_key, request_fingerprint, action_reason
-            ) VALUES (#{id}, #{entitlementId}, #{userId}, #{amount}, #{key}, #{fingerprint}, #{reason})
+            INSERT INTO t_virtual_benefit_entitlement_usage(
+                id, entitlement_id, user_id, benefit_code, consumer_code, amount, idempotency_key,
+                request_fingerprint, usage_status, source_type, source_ref, expires_at, action_reason
+            ) VALUES (
+                #{id}, #{entitlementId}, #{userId}, #{benefitCode}, #{consumerCode}, #{amount}, #{key},
+                #{fingerprint}, 'RESERVED', #{sourceType}, #{sourceRef}, #{expiresAt}, #{reason}
+            )
             """)
-    int insertEntitlementUsage(@Param("id") Long id, @Param("entitlementId") Long entitlementId,
-                               @Param("userId") Long userId, @Param("amount") long amount,
-                               @Param("key") String key, @Param("fingerprint") String fingerprint,
-                               @Param("reason") String reason);
+    int insertEntitlementReservation(@Param("id") Long id, @Param("entitlementId") Long entitlementId,
+                                     @Param("userId") Long userId, @Param("benefitCode") String benefitCode,
+                                     @Param("consumerCode") String consumerCode, @Param("amount") long amount,
+                                     @Param("key") String key, @Param("fingerprint") String fingerprint,
+                                     @Param("sourceType") String sourceType, @Param("sourceRef") String sourceRef,
+                                     @Param("expiresAt") LocalDateTime expiresAt, @Param("reason") String reason);
 
     @Select("""
             SELECT * FROM t_virtual_benefit_entitlement_usage
-            WHERE entitlement_id = #{entitlementId} AND idempotency_key = #{key}
+            WHERE user_id = #{userId} AND consumer_code = #{consumerCode} AND idempotency_key = #{key}
             LIMIT 1
             """)
-    BenefitEntitlementUsagePO selectEntitlementUsage(@Param("entitlementId") Long entitlementId,
-                                                      @Param("key") String key);
+    BenefitEntitlementUsagePO selectEntitlementUsageByRequest(@Param("userId") Long userId,
+                                                               @Param("consumerCode") String consumerCode,
+                                                               @Param("key") String key);
+
+    @Select("""
+            SELECT * FROM t_virtual_benefit_entitlement_usage
+            WHERE user_id = #{userId} AND consumer_code = #{consumerCode} AND idempotency_key = #{key}
+            LIMIT 1 FOR UPDATE
+            """)
+    BenefitEntitlementUsagePO lockEntitlementUsageByRequest(@Param("userId") Long userId,
+                                                             @Param("consumerCode") String consumerCode,
+                                                             @Param("key") String key);
+
+    @Select("SELECT * FROM t_virtual_benefit_entitlement_usage WHERE id = #{id} LIMIT 1 FOR UPDATE")
+    BenefitEntitlementUsagePO lockEntitlementUsage(@Param("id") Long id);
+
+    @Select("""
+            SELECT * FROM t_virtual_benefit_entitlement
+            WHERE user_id = #{userId} AND benefit_code = #{benefitCode} AND entitlement_status = 'ACTIVE'
+              AND quantity_remaining >= #{amount}
+            ORDER BY granted_at ASC, id ASC
+            LIMIT 1 FOR UPDATE
+            """)
+    BenefitEntitlementPO lockFirstActiveEntitlement(@Param("userId") Long userId,
+                                                     @Param("benefitCode") String benefitCode,
+                                                     @Param("amount") long amount);
+
+    @Update("""
+            UPDATE t_virtual_benefit_entitlement_usage
+            SET usage_status = 'CONFIRMED', confirmed_at = CURRENT_TIMESTAMP(3), expires_at = NULL
+            WHERE id = #{usageId} AND user_id = #{userId} AND consumer_code = #{consumerCode}
+              AND usage_status = 'RESERVED'
+              AND expires_at > CURRENT_TIMESTAMP(3)
+            """)
+    int confirmEntitlementUsage(@Param("usageId") Long usageId, @Param("userId") Long userId,
+                                @Param("consumerCode") String consumerCode);
+
+    @Update("""
+            UPDATE t_virtual_benefit_entitlement_usage
+            SET usage_status = 'RELEASED', released_at = CURRENT_TIMESTAMP(3), expires_at = NULL,
+                failure_code = #{failureCode}
+            WHERE id = #{usageId} AND user_id = #{userId} AND consumer_code = #{consumerCode}
+              AND usage_status = 'RESERVED'
+            """)
+    int releaseEntitlementUsage(@Param("usageId") Long usageId, @Param("userId") Long userId,
+                                @Param("consumerCode") String consumerCode,
+                                @Param("failureCode") String failureCode);
+
+    @Update("""
+            UPDATE t_virtual_benefit_entitlement
+            SET quantity_remaining = quantity_remaining + #{amount},
+                entitlement_status = 'ACTIVE'
+            WHERE id = #{entitlementId} AND user_id = #{userId}
+            """)
+    int restoreEntitlementQuota(@Param("entitlementId") Long entitlementId, @Param("userId") Long userId,
+                                @Param("amount") long amount);
+
+    @Select("""
+            SELECT * FROM t_virtual_benefit_entitlement_usage
+            WHERE usage_status = 'RESERVED' AND expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP(3)
+            ORDER BY expires_at ASC, id ASC
+            LIMIT #{limit}
+            """)
+    List<BenefitEntitlementUsagePO> selectExpiredEntitlementReservations(@Param("limit") int limit);
+
+    @Select("""
+            SELECT * FROM t_virtual_benefit_entitlement_usage
+            WHERE user_id = #{userId}
+            ORDER BY create_time DESC, id DESC LIMIT #{offset}, #{limit}
+            """)
+    List<BenefitEntitlementUsagePO> selectUserEntitlementUsages(@Param("userId") Long userId,
+                                                                 @Param("offset") int offset,
+                                                                 @Param("limit") int limit);
+
+    @Select("SELECT COUNT(*) FROM t_virtual_benefit_entitlement_usage WHERE user_id = #{userId}")
+    long countUserEntitlementUsages(@Param("userId") Long userId);
 
     @Select("SELECT COUNT(*) FROM t_virtual_benefit_entitlement_usage WHERE entitlement_id = #{entitlementId}")
     long countAnyEntitlementUsage(@Param("entitlementId") Long entitlementId);
+
+    @Select("""
+            SELECT COUNT(*) FROM t_virtual_benefit_entitlement_usage
+            WHERE entitlement_id = #{entitlementId} AND usage_status IN ('RESERVED', 'CONFIRMED')
+            """)
+    long countRefundBlockingEntitlementUsage(@Param("entitlementId") Long entitlementId);
 
     @Update("""
             UPDATE t_virtual_benefit_entitlement

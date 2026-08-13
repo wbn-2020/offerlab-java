@@ -347,24 +347,24 @@ public class PostController {
         /** 频道编码，1-科技数码 2-职场经验 3-学习成长 4-生活方式 5-投资理财。发布时必须显式选择有效频道。 */
         private Integer domain;
         @NotBlank
-        @Size(max = 255)
+        @Size(max = PostContentLimits.MAX_TITLE_LEN)
         private String title;
         @NotBlank
         @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
-        @Size(max = 512)
+        @Size(max = PostContentLimits.MAX_COVER_URL_LEN)
         private String coverUrl;
         private Integer visibility;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private Boolean anonymous;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         // Legacy request contract: private List<String> tagNames
-        private List<@Size(max = 32) String> tagNames;
+        private List<@Size(max = PostContentLimits.MAX_TAG_NAME_LEN) String> tagNames;
         private Long draftId;
 
         private List<Long> effectiveTagIds() {
@@ -375,23 +375,23 @@ public class PostController {
 
     @Data
     public static class UpdateReq {
-        @Size(max = 255)
+        @Size(max = PostContentLimits.MAX_TITLE_LEN)
         private String title;
         @Size(max = PostContentLimits.MAX_CONTENT_LEN)
         private String content;
-        @Size(max = 512)
+        @Size(max = PostContentLimits.MAX_COVER_URL_LEN)
         private String coverUrl;
         private Integer visibility;
         private Integer domain;
         @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
         private String extJson;
         private Boolean anonymous;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tags;
-        @Size(max = 20)
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
         private List<@jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive Long> tagIds;
-        @Size(max = 20)
-        private List<@Size(max = 32) String> tagNames;
+        @Size(max = PostContentLimits.MAX_TAG_COUNT)
+        private List<@Size(max = PostContentLimits.MAX_TAG_NAME_LEN) String> tagNames;
         @Size(max = 500)
         private String publicUpdateSummary;
         @Size(max = 255)

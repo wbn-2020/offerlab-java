@@ -10,6 +10,9 @@ public class ContentMaintenanceTaskReviewCmd {
     @Size(max = 24)
     private String decision;
     @NotBlank
+    @Size(max = 32)
+    private String reasonCode;
+    @NotBlank
     @Size(max = 1000)
     private String note;
 }

@@ -22,6 +22,13 @@ public class ContentMaintenanceTaskRow {
     private Long deliveryPostId;
     private String deliveryNote;
     private String reviewNote;
+    private Long dispatchBatchId;
+    private String priority;
+    private LocalDateTime dueAt;
+    private Integer currentAttemptNo;
+    private String terminalOutcomeCode;
+    private String closeReasonCode;
+    private String latestAttemptDecision;
     private LocalDateTime claimedAt;
     private LocalDateTime submittedAt;
     private Long reviewedByUid;

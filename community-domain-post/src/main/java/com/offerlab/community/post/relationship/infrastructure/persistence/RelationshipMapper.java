@@ -106,12 +106,13 @@ public interface RelationshipMapper {
                  WHERE m.uid = #{uid}
                    AND m.member_status = 'ACTIVE'
             ) relationshipRows
-            LEFT JOIN t_user_subscription_preference pref
-                   ON pref.uid = #{uid}
-                  AND pref.source_type = relationshipRows.sourceType
-                  AND pref.source_id = relationshipRows.sourceId
-                  AND pref.is_deleted = 0
-                  AND (pref.expires_at IS NULL OR pref.expires_at > CURRENT_TIMESTAMP(3))
+             LEFT JOIN t_user_subscription_preference pref
+                    ON pref.uid = #{uid}
+                   AND pref.source_type = relationshipRows.sourceType
+                   AND pref.source_id = relationshipRows.sourceId
+                   AND relationshipRows.sourceType IN ('TOPIC', 'DISCUSSION', 'NEED')
+                   AND pref.is_deleted = 0
+                   AND (pref.expires_at IS NULL OR pref.expires_at > CURRENT_TIMESTAMP(3))
             <where>
               <if test="sourceType != null and sourceType != ''">
                 sourceType = #{sourceType}
@@ -211,12 +212,13 @@ public interface RelationshipMapper {
                  WHERE m.uid = #{uid}
                    AND m.member_status = 'ACTIVE'
             ) relationshipCounts
-            LEFT JOIN t_user_subscription_preference pref
-                   ON pref.uid = #{uid}
-                  AND pref.source_type = relationshipCounts.sourceType
-                  AND pref.source_id = relationshipCounts.sourceId
-                  AND pref.is_deleted = 0
-                  AND (pref.expires_at IS NULL OR pref.expires_at > CURRENT_TIMESTAMP(3))
+             LEFT JOIN t_user_subscription_preference pref
+                    ON pref.uid = #{uid}
+                   AND pref.source_type = relationshipCounts.sourceType
+                   AND pref.source_id = relationshipCounts.sourceId
+                   AND relationshipCounts.sourceType IN ('TOPIC', 'DISCUSSION', 'NEED')
+                   AND pref.is_deleted = 0
+                   AND (pref.expires_at IS NULL OR pref.expires_at > CURRENT_TIMESTAMP(3))
             GROUP BY relationshipCounts.sourceType, COALESCE(pref.delivery_mode, 'IMMEDIATE')
             ORDER BY relationshipCounts.sourceType ASC, deliveryMode ASC
             </script>

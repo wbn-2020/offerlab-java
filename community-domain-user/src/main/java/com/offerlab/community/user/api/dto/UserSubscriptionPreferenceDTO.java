@@ -17,4 +17,6 @@ public class UserSubscriptionPreferenceDTO {
     private Long sourceId;
     private String deliveryMode;
     private LocalDateTime expiresAt;
+    private boolean deliveryPreferenceSupported;
+    private String deliveryPreferenceUnsupportedReason;
 }

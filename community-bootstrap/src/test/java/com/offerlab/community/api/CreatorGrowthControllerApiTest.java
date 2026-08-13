@@ -1,9 +1,11 @@
 package com.offerlab.community.api;
 
 import com.offerlab.community.analytics.api.dto.CreatorCurationFeedbackDTO;
+import com.offerlab.community.analytics.api.dto.CreatorContentImprovementSignalsDTO;
 import com.offerlab.community.analytics.api.dto.CreatorGrowthWorkspaceDTO;
 import com.offerlab.community.analytics.api.dto.CreatorRepresentativePostCmd;
 import com.offerlab.community.analytics.application.CreatorCurationFeedbackService;
+import com.offerlab.community.analytics.application.CreatorContentImprovementService;
 import com.offerlab.community.analytics.application.CreatorGrowthService;
 import com.offerlab.community.analytics.controller.CreatorGrowthController;
 import com.offerlab.community.analytics.controller.TrustedContentDashboardController;
@@ -37,13 +39,18 @@ class CreatorGrowthControllerApiTest {
     @Mock
     private CreatorCurationFeedbackService creatorCurationFeedbackService;
     @Mock
+    private CreatorContentImprovementService creatorContentImprovementService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new CreatorGrowthController(creatorGrowthService, creatorCurationFeedbackService), jwtService);
+        mvc = ApiTestSupport.mvc(new CreatorGrowthController(
+                creatorGrowthService,
+                creatorCurationFeedbackService,
+                creatorContentImprovementService), jwtService);
     }
 
     @Test
@@ -201,6 +208,41 @@ class CreatorGrowthControllerApiTest {
                 .andExpect(jsonPath("$.data.items[0].status").value("PUBLISHED"));
 
         verify(creatorCurationFeedbackService).summary(18L);
+    }
+
+    @Test
+    void authenticatedCreatorCanReadOpaqueContentImprovementSignals() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(18L);
+        when(creatorContentImprovementService.list(eq(18L), eq(null), eq(5))).thenReturn(
+                CreatorContentImprovementSignalsDTO.builder()
+                        .periodDays(30)
+                        .degraded(false)
+                        .items(List.of(CreatorContentImprovementSignalsDTO.Item.builder()
+                                .postId(1001L)
+                                .postTitle("Spring cache fallback review")
+                                .domain(1)
+                                .domainName("科技数码")
+                                .state("REVIEW_RECOMMENDED")
+                                .headline("近 30 天出现了足够匿名的质量复核信号")
+                                .detail("建议检查标题、背景、过程和结论是否完整。")
+                                .postHref("/post/1001")
+                                .editHref("/editor/1001?source=creator_workbench")
+                                .build()))
+                        .build());
+
+        mvc.perform(get("/api/v1/creator-growth/content-improvement-signals")
+                        .header("Authorization", "Bearer token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.periodDays").value(30))
+                .andExpect(jsonPath("$.data.items[0].state").value("REVIEW_RECOMMENDED"))
+                .andExpect(jsonPath("$.data.items[0].postHref").value("/post/1001"))
+                .andExpect(jsonPath("$.data.items[0].editHref").value("/editor/1001?source=creator_workbench"))
+                .andExpect(jsonPath("$.data.items[0].distinctReaderCount").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].uid").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].reason").doesNotExist());
+
+        verify(creatorContentImprovementService).list(18L, null, 5);
     }
 
     @Test

@@ -331,10 +331,19 @@ public final class IncentivePersistence {
         private Long id;
         private Long entitlementId;
         private Long userId;
+        private String benefitCode;
+        private String consumerCode;
         private Long amount;
         private String idempotencyKey;
         private String requestFingerprint;
+        private String usageStatus;
+        private String sourceType;
+        private String sourceRef;
         private String actionReason;
+        private String failureCode;
+        private LocalDateTime expiresAt;
+        private LocalDateTime confirmedAt;
+        private LocalDateTime releasedAt;
         private LocalDateTime createTime;
     }
 

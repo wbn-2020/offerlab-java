@@ -237,4 +237,52 @@ class PostPublishQualityValidatorTest {
     private String repeatedContent(int length) {
         return "这是一段历史经验正文，包含问题、回答和复盘。".repeat(length / 20 + 1).substring(0, length);
     }
+
+    @Test
+    void titleBoundaryUsesTheSharedTwoHundredCharacterContract() {
+        String content = repeatedContent(60);
+        String title199 = "标".repeat(199);
+        String title200 = "标".repeat(200);
+        String title201 = "标".repeat(201);
+
+        assertEquals(title199, validator.validate(
+                Post.TYPE_TECH_ARTICLE, title199, content, null, null, List.of("Java")).title());
+        assertEquals(title200, validator.validate(
+                Post.TYPE_TECH_ARTICLE, title200, content, null, null, List.of("Java")).title());
+
+        BizException tooLong = assertThrows(BizException.class, () -> validator.validate(
+                Post.TYPE_TECH_ARTICLE, title201, content, null, null, List.of("Java")));
+        assertTrue(tooLong.getMessage().contains("8-200"));
+        assertTrue(tooLong.getData().toString().contains("title"));
+    }
+
+    @Test
+    void tagLimitsMatchTheFiveTagEditorContract() {
+        String content = repeatedContent(60);
+        assertEquals(5, validator.validate(
+                Post.TYPE_TECH_ARTICLE,
+                "五个标签仍然可以正常发布",
+                content,
+                null,
+                null,
+                List.of("Java", "Redis", "MySQL", "Spring", "Kafka")).tagNames().size());
+
+        BizException tooManyNames = assertThrows(BizException.class, () -> validator.validate(
+                Post.TYPE_TECH_ARTICLE,
+                "六个文本标签必须被拒绝",
+                content,
+                null,
+                null,
+                List.of("Java", "Redis", "MySQL", "Spring", "Kafka", "Docker")));
+        assertTrue(tooManyNames.getMessage().contains("5 个标签"));
+
+        BizException tooManyIds = assertThrows(BizException.class, () -> validator.validate(
+                Post.TYPE_TECH_ARTICLE,
+                "六个标签编号必须被拒绝",
+                content,
+                null,
+                List.of(1L, 2L, 3L, 4L, 5L, 6L),
+                null));
+        assertTrue(tooManyIds.getMessage().contains("5 个标签"));
+    }
 }

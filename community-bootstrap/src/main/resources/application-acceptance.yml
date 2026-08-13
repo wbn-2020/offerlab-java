@@ -5,6 +5,7 @@ spring:
     password: ${DB_PASSWORD}
   flyway:
     baseline-on-migrate: ${OFFERLAB_FLYWAY_BASELINE_ON_MIGRATE:false}
+    locations: ${OFFERLAB_FLYWAY_LOCATIONS:classpath:db/flyway/core,classpath:db/flyway/demo}
   data:
     redis:
       host: ${REDIS_HOST}
@@ -35,8 +36,8 @@ offerlab:
   kafka:
     enabled: ${OFFERLAB_KAFKA_ENABLED:false}
   elasticsearch:
-    enabled: ${ELASTICSEARCH_ENABLED:false}
-    url: ${ELASTICSEARCH_URL:__acceptance_elasticsearch_not_configured__}
+    enabled: ${ELASTICSEARCH_ENABLED:true}
+    url: ${ELASTICSEARCH_URL}
   realtime:
     websocket-enabled: ${OFFERLAB_REALTIME_WEBSOCKET_ENABLED:false}
   web:

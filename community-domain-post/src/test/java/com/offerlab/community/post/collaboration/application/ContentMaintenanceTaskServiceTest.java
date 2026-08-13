@@ -7,6 +7,10 @@ import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.security.CommunityRoleAccessService;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.quality.PostContentRevisionQuery;
+import com.offerlab.community.post.api.quality.PostContentRevisionQueryFacade;
+import com.offerlab.community.post.api.quality.PostContentRevisionQueryResult;
+import com.offerlab.community.post.api.quality.PostContentRevisionSnapshot;
 import com.offerlab.community.post.application.DomainModeratorService;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceCandidateDTO;
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskCreateCmd;
@@ -16,12 +20,15 @@ import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskRevie
 import com.offerlab.community.post.collaboration.api.ContentMaintenanceTaskSubmitCmd;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationMapper;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationRows.SeriesRow;
+import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskAttemptRow;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskMapper;
 import com.offerlab.community.post.collaboration.infrastructure.persistence.ContentMaintenanceTaskRow;
 import com.offerlab.community.post.domain.model.Post;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.lang.reflect.Proxy;
+import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -256,6 +263,97 @@ class ContentMaintenanceTaskServiceTest {
         assertFalse(items.get(0).toString().contains("updated public guidance"));
     }
 
+    @Test
+    void versionedChannelHealthTaskRequiresMatchingCurrentPublicRevision() {
+        MapperState state = new MapperState();
+        state.locked.add(row("OPEN", 22L, 1));
+        state.revisionResult = revisionResult(901L, 7);
+        ContentMaintenanceTaskService service = service(
+                state, Set.of(1), Set.of(1), Set.of(22L), publicPost(901L, 44L, 1));
+
+        ContentMaintenanceTaskDTO result = service.create(versionedChannelHealthTask(901L, 7L), 77L);
+
+        assertEquals("OPEN", result.getStatus());
+        assertEquals(1, state.insertCalls);
+        assertEquals(1, state.revisionQueryCalls);
+        assertEquals(List.of(901L), state.revisionQuery.postIds());
+        assertEquals(List.of(1), state.revisionQuery.authorizedChannelCodes());
+        assertEquals(77L, state.revisionQuery.subjectUid());
+    }
+
+    @Test
+    void versionedChannelHealthTaskRejectsStaleRevisionWithoutCreatingTask() {
+        MapperState state = new MapperState();
+        state.revisionResult = revisionResult(901L, 8);
+        ContentMaintenanceTaskService service = service(
+                state, Set.of(1), Set.of(1), Set.of(22L), publicPost(901L, 44L, 1));
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.create(versionedChannelHealthTask(901L, 7L), 77L));
+
+        assertEquals(ErrorCode.PARAM_ERROR.getCode(), error.getCode());
+        assertEquals(0, state.insertCalls);
+    }
+
+    @Test
+    void duplicateVersionedChannelHealthTaskMapsUniqueConflictToBusinessError() {
+        MapperState state = new MapperState();
+        state.revisionResult = revisionResult(901L, 7);
+        state.duplicateInsert = true;
+        ContentMaintenanceTaskService service = service(
+                state, Set.of(1), Set.of(1), Set.of(22L), publicPost(901L, 44L, 1));
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.create(versionedChannelHealthTask(901L, 7L), 77L));
+
+        assertEquals(ErrorCode.DUPLICATE_OPERATION.getCode(), error.getCode());
+        assertEquals(1, state.insertCalls);
+        assertEquals(0, state.auditCalls);
+    }
+
+    @Test
+    void channelHealthTaskRejectsPartialVersionAssociation() {
+        MapperState state = new MapperState();
+        ContentMaintenanceTaskService service = service(
+                state, Set.of(1), Set.of(1), Set.of(22L), publicPost(901L, 44L, 1));
+        ContentMaintenanceTaskCreateCmd cmd = versionedChannelHealthTask(901L, 7L);
+        cmd.setSourceRefId(null);
+
+        BizException error = assertThrows(BizException.class, () -> service.create(cmd, 77L));
+
+        assertEquals(ErrorCode.PARAM_ERROR.getCode(), error.getCode());
+        assertEquals(0, state.revisionQueryCalls);
+        assertEquals(0, state.insertCalls);
+    }
+
+    @Test
+    void legacyChannelHealthTaskWithoutAssociationRemainsSupported() {
+        MapperState state = new MapperState();
+        state.locked.add(row("OPEN", 22L, 1));
+        ContentMaintenanceTaskService service = service(state, Set.of(1), null);
+        ContentMaintenanceTaskCreateCmd cmd = versionedChannelHealthTask(null, null);
+
+        ContentMaintenanceTaskDTO result = service.create(cmd, 77L);
+
+        assertEquals("OPEN", result.getStatus());
+        assertEquals(0, state.revisionQueryCalls);
+        assertEquals(1, state.insertCalls);
+    }
+
+    @Test
+    void assigneeAuthorizationStillPrecedesVersionedChannelHealthRevisionQuery() {
+        MapperState state = new MapperState();
+        ContentMaintenanceTaskService service = service(
+                state, Set.of(1), Set.of(), Set.of(22L), publicPost(901L, 44L, 1));
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.create(versionedChannelHealthTask(901L, 7L), 77L));
+
+        assertEquals(ErrorCode.FORBIDDEN.getCode(), error.getCode());
+        assertEquals(0, state.revisionQueryCalls);
+        assertEquals(0, state.insertCalls);
+    }
+
     private static ContentMaintenanceTaskService service(MapperState state, Set<Integer> moderatedDomains,
                                                           PostDTO post) {
         return service(state, moderatedDomains, Set.of(1), post);
@@ -282,8 +380,34 @@ class ContentMaintenanceTaskServiceTest {
                 new RoleAccessStub(maintenanceDomains, maintenanceUids),
                 new AuditStub(state),
                 postFacade(post),
-                collaborationMapper(state)
+                collaborationMapper(state),
+                revisionQuery(state)
         );
+    }
+
+    private static ContentMaintenanceTaskCreateCmd versionedChannelHealthTask(
+            Long sourcePostId,
+            Long sourceRefId) {
+        ContentMaintenanceTaskCreateCmd cmd = new ContentMaintenanceTaskCreateCmd();
+        cmd.setDomain(1);
+        cmd.setSourceType("CHANNEL_HEALTH");
+        cmd.setSourcePostId(sourcePostId);
+        cmd.setSourceRefId(sourceRefId);
+        cmd.setAssigneeUid(22L);
+        cmd.setTitle("Review current channel guidance");
+        cmd.setDetail("Review the current public revision against the maintenance criteria.");
+        return cmd;
+    }
+
+    private static PostContentRevisionQueryResult revisionResult(Long postId, int version) {
+        return PostContentRevisionQueryResult.available(List.of(new PostContentRevisionSnapshot(
+                postId,
+                PostContentRevisionSnapshot.Status.FOUND,
+                LocalDateTime.of(1970, 1, 1, 0, 0),
+                true,
+                "test-token",
+                version,
+                LocalDateTime.of(2026, 8, 4, 0, 0))));
     }
 
     private static ContentMaintenanceTaskSubmitCmd submit(String type, Long id) {
@@ -305,6 +429,7 @@ class ContentMaintenanceTaskServiceTest {
     private static ContentMaintenanceTaskReviewCmd review(String decision) {
         ContentMaintenanceTaskReviewCmd cmd = new ContentMaintenanceTaskReviewCmd();
         cmd.setDecision(decision);
+        cmd.setReasonCode("APPROVED".equals(decision) ? "QUALITY_VERIFIED" : "CONTENT_INCOMPLETE");
         cmd.setNote("reviewed against acceptance criteria");
         return cmd;
     }
@@ -349,9 +474,14 @@ class ContentMaintenanceTaskServiceTest {
                 new Class<?>[]{ContentMaintenanceTaskMapper.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "tableExists" -> 1;
+                    case "attemptTableExists" -> 1;
                     case "userExists" -> 1;
+                    case "dispatchBatchExists" -> 1;
                     case "insert" -> {
                         state.insertCalls++;
+                        if (state.duplicateInsert) {
+                            throw new DuplicateKeyException("uk_maintenance_source");
+                        }
                         yield 1;
                     }
                     case "lockById" -> state.locked.removeFirst();
@@ -367,6 +497,34 @@ class ContentMaintenanceTaskServiceTest {
                     case "submit" -> {
                         state.submitCalls++;
                         yield state.submitResult;
+                    }
+                    case "insertAttempt" -> {
+                        state.attemptInsertCalls++;
+                        ContentMaintenanceTaskAttemptRow attempt = new ContentMaintenanceTaskAttemptRow();
+                        attempt.setId((Long) args[0]);
+                        attempt.setTaskId((Long) args[1]);
+                        attempt.setAttemptNo((Integer) args[2]);
+                        attempt.setDeliveryType((String) args[3]);
+                        attempt.setDeliveryRefId((Long) args[4]);
+                        attempt.setDeliveryPostId((Long) args[5]);
+                        attempt.setNote((String) args[6]);
+                        attempt.setSubmittedByUid((Long) args[7]);
+                        state.attempt = attempt;
+                        yield 1;
+                    }
+                    case "lockAttempt" -> state.attempt;
+                    case "setCurrentAttemptNo" -> {
+                        state.currentAttemptNoCalls++;
+                        yield 1;
+                    }
+                    case "decideAttempt" -> {
+                        state.attemptDecisionCalls++;
+                        if (state.attempt != null) {
+                            state.attempt.setDecision((String) args[2]);
+                            state.attempt.setReasonCode((String) args[3]);
+                            state.attempt.setReviewNote((String) args[5]);
+                        }
+                        yield 1;
                     }
                     case "approve" -> {
                         state.approveCalls++;
@@ -405,6 +563,21 @@ class ContentMaintenanceTaskServiceTest {
                 });
     }
 
+    private static PostContentRevisionQueryFacade revisionQuery(MapperState state) {
+        return (PostContentRevisionQueryFacade) Proxy.newProxyInstance(
+                PostContentRevisionQueryFacade.class.getClassLoader(),
+                new Class<?>[]{PostContentRevisionQueryFacade.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "query" -> {
+                        state.revisionQueryCalls++;
+                        state.revisionQuery = (PostContentRevisionQuery) args[0];
+                        yield state.revisionResult;
+                    }
+                    case "toString" -> "PostContentRevisionQueryFacadeStub";
+                    default -> throw new UnsupportedOperationException(method.toString());
+                });
+    }
+
     private static final class MapperState {
         private final Deque<ContentMaintenanceTaskRow> locked = new ArrayDeque<>();
         private final List<ContentMaintenanceTaskRow> queueRows = new ArrayList<>();
@@ -418,11 +591,19 @@ class ContentMaintenanceTaskServiceTest {
         private int reassignCalls;
         private int submitCalls;
         private int approveCalls;
+        private int attemptInsertCalls;
+        private int currentAttemptNoCalls;
+        private int attemptDecisionCalls;
         private int auditCalls;
         private int insertCalls;
+        private int revisionQueryCalls;
+        private boolean duplicateInsert;
         private Long replacementUid;
         private SeriesRow series;
+        private ContentMaintenanceTaskAttemptRow attempt;
         private int seriesContributor;
+        private PostContentRevisionQuery revisionQuery;
+        private PostContentRevisionQueryResult revisionResult;
     }
 
     private static final class ModeratorStub extends DomainModeratorService {

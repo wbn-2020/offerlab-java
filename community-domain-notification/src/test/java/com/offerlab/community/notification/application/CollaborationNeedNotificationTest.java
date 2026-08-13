@@ -7,6 +7,8 @@ import com.offerlab.community.notification.api.NotificationFacade;
 import com.offerlab.community.notification.controller.NotificationController;
 import com.offerlab.community.post.collaboration.api.CollaborationNeedFollowFacade;
 import com.offerlab.community.post.collaboration.api.CollaborationNeedStateChangedEvent;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.UserSubscriptionPreferenceFacade;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
@@ -402,7 +404,30 @@ class CollaborationNeedNotificationTest {
                 null,
                 null,
                 followers,
-                retry);
+                retry,
+                followerDeliveryService(recording.facade));
+    }
+
+    private static SubscriptionUpdateDeliveryService followerDeliveryService(
+            NotificationFacade notificationFacade) {
+        UserSubscriptionPreferenceFacade preferences =
+                (UserSubscriptionPreferenceFacade) Proxy.newProxyInstance(
+                        UserSubscriptionPreferenceFacade.class.getClassLoader(),
+                        new Class<?>[]{UserSubscriptionPreferenceFacade.class},
+                        (proxy, method, args) -> "findEffectiveForRecipients".equals(method.getName())
+                                ? Map.of()
+                                : defaultValue(method.getReturnType()));
+        UserFacade users = (UserFacade) Proxy.newProxyInstance(
+                UserFacade.class.getClassLoader(),
+                new Class<?>[]{UserFacade.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "allowsSystemNotification", "allowsCommentNotification" -> true;
+                    default -> defaultValue(method.getReturnType());
+                });
+        SubscriptionUpdateDeliveryService service = new SubscriptionUpdateDeliveryService(
+                preferences, users, notificationFacade, null);
+        service.setFeatureFlagsForTest(true, true, true, true);
+        return service;
     }
 
     private static CollaborationNeedFollowFacade emptyFollowers() {

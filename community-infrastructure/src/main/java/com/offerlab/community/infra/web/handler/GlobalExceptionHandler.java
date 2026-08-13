@@ -105,8 +105,8 @@ public class GlobalExceptionHandler {
         Result<?> r = Result.builder()
                 .code(ErrorCode.DATABASE_ERROR.getCode())
                 .message(retryable
-                        ? "Database is temporarily unavailable. Please try again later."
-                        : "Request could not be completed.")
+                        ? "服务暂时无法完成请求，请稍后重试。"
+                        : "当前请求暂时无法完成，请稍后重试。")
                 .traceId(traceId)
                 .build();
         return ResponseEntity.status(status).body(r);

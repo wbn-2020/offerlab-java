@@ -25,13 +25,19 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/v1/health")
 public class HealthController {
+    private static final List<String> SERVICE_COMPONENTS =
+            List.of("db", "redis", "coreSchema", "kafka", "elasticsearch", "search");
+
     private final DataSource dataSource;
     private final StringRedisTemplate redis;
     private final ElasticsearchHttpClient elasticsearch;
@@ -76,12 +82,34 @@ public class HealthController {
     public ResponseEntity<Map<String, Object>> readiness() {
         Map<String, Object> snapshot = readinessSnapshot();
         boolean ready = Boolean.TRUE.equals(snapshot.get("serviceReady"));
-        Map<String, Object> publicSnapshot = Map.of(
-                "status", snapshot.get("status"),
-                "ready", ready
-        );
+        Map<String, Object> publicSnapshot = new LinkedHashMap<>();
+        publicSnapshot.put("status", snapshot.get("status"));
+        publicSnapshot.put("ready", ready);
+        if (!ready) {
+            publicSnapshot.put("issues", publicReadinessIssues(snapshot.get("components")));
+        }
         return ResponseEntity.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE)
                 .body(publicSnapshot);
+    }
+
+    private List<Map<String, Object>> publicReadinessIssues(Object rawComponents) {
+        if (!(rawComponents instanceof Map<?, ?> components)) {
+            return List.of(Map.of("component", "service", "code", "READINESS_CHECK_FAILED"));
+        }
+        return SERVICE_COMPONENTS.stream()
+                .map(name -> Map.entry(name, components.get(name)))
+                .filter(entry -> !readyComponent(entry.getValue()))
+                .map(entry -> {
+                    Object value = entry.getValue();
+                    Object code = componentValue(value, "code");
+                    Object status = componentValue(value, "status");
+                    Map<String, Object> issue = new LinkedHashMap<>();
+                    issue.put("component", String.valueOf(entry.getKey()));
+                    issue.put("code", code == null ? "NOT_READY" : String.valueOf(code));
+                    issue.put("status", status == null ? "UNKNOWN" : String.valueOf(status));
+                    return issue;
+                })
+                .toList();
     }
 
     @GetMapping(value = "/readiness/strict", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -102,6 +130,7 @@ public class HealthController {
         Map<String, Object> components = new LinkedHashMap<>();
         components.put("db", dbHealth());
         components.put("redis", redisHealth());
+        components.put("coreSchema", coreSchemaHealth());
         components.put("kafka", kafkaHealth());
         components.put("elasticsearch", elasticsearchHealth());
         components.put("search", postSearchHealth());
@@ -110,11 +139,15 @@ public class HealthController {
         components.put("searchIndexRetry", searchIndexRetryService.status());
         components.put("questionIndexRetry", questionIndexRetryService.status());
         components.put("notificationRetry", notificationRetryService.status());
-        boolean ready = components.values().stream().allMatch(this::readyComponent);
+        boolean ready = SERVICE_COMPONENTS.stream()
+                .map(components::get)
+                .allMatch(this::readyComponent);
+        boolean allComponentsReady = components.values().stream().allMatch(this::readyComponent);
         boolean operationalAttentionRequired = components.values().stream().anyMatch(this::attentionRequiredComponent);
         boolean coreDependencyAttentionRequired = coreDependencyAttentionRequired(components);
         Map<String, Object> releaseGates = releaseGates(components);
         boolean releaseReady = ready
+                && allComponentsReady
                 && !operationalAttentionRequired
                 && releaseGates.values().stream().allMatch(this::readyReleaseGate);
         Map<String, Object> snapshot = new LinkedHashMap<>();
@@ -166,6 +199,40 @@ public class HealthController {
             return status;
         } catch (Exception e) {
             return coreDependencyIssue("DOWN", "REDIS_UNREACHABLE", nonBlankMessage(e, "Redis is not reachable"));
+        }
+    }
+
+    private Map<String, Object> coreSchemaHealth() {
+        String sql = """
+                SELECT COUNT(*) AS present_count
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE()
+                  AND table_name IN (
+                    't_user_account', 't_user_profile', 't_post_main',
+                    't_post_counter', 't_post_extension', 't_tag',
+                    't_post_tag_ref', 't_int_comment', 't_operation_slot'
+                  )
+                """;
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery(sql)) {
+            int present = resultSet.next() ? resultSet.getInt("present_count") : 0;
+            if (present == 9) {
+                return Map.of("status", "UP", "ready", true);
+            }
+            return Map.of(
+                    "status", "DOWN",
+                    "ready", false,
+                    "coreDependency", true,
+                    "attentionRequired", true,
+                    "code", "CORE_SCHEMA_INCOMPLETE"
+            );
+        } catch (Exception e) {
+            return coreDependencyIssue(
+                    "DOWN",
+                    "CORE_SCHEMA_CHECK_FAILED",
+                    nonBlankMessage(e, "Core schema readiness check failed")
+            );
         }
     }
 
@@ -378,7 +445,34 @@ public class HealthController {
         Map<String, Object> gates = new LinkedHashMap<>();
         gates.put("kafka", kafkaGate);
         gates.put("elasticsearch", elasticsearchGate);
+        gates.put("revisionAwareQualityProjection", revisionAwareQualityProjectionGate());
         return gates;
+    }
+
+    private Map<String, Object> revisionAwareQualityProjectionGate() {
+        try {
+            boolean ready = migrationCheckService.creatorQualityProjectionReleaseReady();
+            Map<String, Object> gate = new LinkedHashMap<>();
+            gate.put("ready", ready);
+            gate.put("status", ready ? "UP" : "BLOCKED");
+            gate.put("code", ready
+                    ? "CREATOR_QUALITY_PROJECTION_READY"
+                    : "CREATOR_QUALITY_PROJECTION_SCHEMA_MISSING");
+            gate.put("migrationVersion", "20260804.01");
+            if (!ready) {
+                gate.put("action",
+                        "Apply the reviewed migration set in an authorized environment, then rerun read-only preflight.");
+            }
+            return gate;
+        } catch (RuntimeException e) {
+            return Map.of(
+                    "ready", false,
+                    "status", "UNAVAILABLE",
+                    "code", "CREATOR_QUALITY_PROJECTION_CHECK_FAILED",
+                    "migrationVersion", "20260804.01",
+                    "action", "Rerun read-only preflight after database connectivity is restored."
+            );
+        }
     }
 
     private boolean readyReleaseGate(Object value) {
@@ -393,7 +487,10 @@ public class HealthController {
         if (!(value instanceof Map<?, ?> map)) {
             return false;
         }
-        return Boolean.TRUE.equals(map.get("attentionRequired"));
+        if (map.containsKey("attentionRequired")) {
+            return Boolean.TRUE.equals(map.get("attentionRequired"));
+        }
+        return !readyComponent(value);
     }
 
     private boolean coreDependencyAttentionRequired(Map<String, Object> components) {

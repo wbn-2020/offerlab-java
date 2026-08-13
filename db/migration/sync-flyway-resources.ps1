@@ -196,6 +196,46 @@ $initMirrorMappings = @(
   [pscustomobject]@{
     Source = Join-Path $sourceDir "20260730_disable_unfulfillable_benefits.sql"
     Destination = Join-Path $repoRoot "db\init\32_disable_unfulfillable_benefits.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260731_subscription_update_digest.sql"
+    Destination = Join-Path $repoRoot "db\init\33_subscription_update_digest.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260801_entitlement_ai_assist_fulfillment.sql"
+    Destination = Join-Path $repoRoot "db\init\34_entitlement_ai_assist_fulfillment.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260802_ai_entitlement_recovery_operations.sql"
+    Destination = Join-Path $repoRoot "db\init\35_ai_entitlement_recovery_operations.sql"
+  },
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260802_creator_growth_challenges_badges.sql"
+    Destination = Join-Path $repoRoot "db\init\36_creator_growth_challenges_badges.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260802_user_controls_trustworthy_distribution.sql"
+    Destination = Join-Path $repoRoot "db\init\37_user_controls_trustworthy_distribution.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260803_creator_quality_signal_query_index.sql"
+    Destination = Join-Path $repoRoot "db\init\38_creator_quality_signal_query_index.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260804_creator_content_revision_boundary.sql"
+    Destination = Join-Path $repoRoot "db\init\39_creator_content_revision_boundary.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260807_channel_quality_review_batch_coordination.sql"
+    Destination = Join-Path $repoRoot "db\init\42_channel_quality_review_batch_coordination.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260807_channel_quality_review_risk_case.sql"
+    Destination = Join-Path $repoRoot "db\init\43_channel_quality_review_risk_case.sql"
+  }
+  [pscustomobject]@{
+    Source = Join-Path $sourceDir "20260807_channel_quality_review_risk_case_evidence_retrospective.sql"
+    Destination = Join-Path $repoRoot "db\init\44_channel_quality_review_risk_case_evidence_retrospective.sql"
   }
 )
 $generatedSeedStart = "-- BEGIN GENERATED FROM db/migration/20260712_demo_community_seed.sql"
@@ -335,7 +375,16 @@ $migrations = foreach ($sourceFile in $sourceFiles) {
     $nextSequenceByDate[$date] = $sequence - 1
     [void] $usedVersions.Add($version)
   }
-  $stream = if ($description.StartsWith("demo_")) { "demo" } else { "core" }
+  $stream = if ($existingMigrationsBySource.ContainsKey($sourceRelative)) {
+    [string] $existingMigrationsBySource[$sourceRelative].stream
+  } elseif ($description.StartsWith("demo_")) {
+    "demo"
+  } else {
+    "core"
+  }
+  if ($stream -notin @("core", "demo")) {
+    throw "Existing Flyway manifest contains an invalid stream: $sourceRelative -> $stream"
+  }
   $flywayName = "V${version}__${description}.sql"
   $resourceRelative = "community-bootstrap/src/main/resources/db/flyway/$stream/$flywayName"
   $resourcePath = Join-Path $repoRoot ($resourceRelative.Replace("/", "\"))

@@ -21,6 +21,8 @@ import java.util.Map;
 class DeepseekContentAssistAiClient implements ContentAssistAiClient {
 
     static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 5000;
+    static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 15000;
+    static final int HARD_MAX_REQUEST_TIMEOUT_MILLIS = 60000;
     static final int DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
     static final int HARD_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
@@ -35,8 +37,8 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
     private String baseUrl = "https://api.deepseek.com";
     @Value("${offerlab.ai.content-assist.model:deepseek-chat}")
     private String model = "deepseek-chat";
-    @Value("${offerlab.ai.content-assist.timeout-millis:15000}")
-    private int timeoutMillis = 15000;
+    @Value("${offerlab.ai.content-assist.timeout-millis:" + DEFAULT_REQUEST_TIMEOUT_MILLIS + "}")
+    private int timeoutMillis = DEFAULT_REQUEST_TIMEOUT_MILLIS;
     @Value("${offerlab.ai.content-assist.connect-timeout-millis:" + DEFAULT_CONNECT_TIMEOUT_MILLIS + "}")
     private int connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MILLIS;
     @Value("${offerlab.ai.content-assist.max-response-bytes:" + DEFAULT_MAX_RESPONSE_BYTES + "}")
@@ -82,7 +84,7 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
         ));
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(ContentAssistSafety.chatCompletionsUri(baseUrl, allowedHosts))
-                .timeout(Duration.ofMillis(timeoutMillis))
+                .timeout(Duration.ofMillis(effectiveRequestTimeoutMillis(timeoutMillis)))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
@@ -106,6 +108,11 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
         String contentJson = root.path("choices").path(0).path("message").path("content").asText("");
         return new Completion("deepseek", contentJson, promptTokens, completionTokens,
                 estimateCostMicros(promptTokens, completionTokens));
+    }
+
+    @Override
+    public long maximumCompletionDurationMillis() {
+        return effectiveRequestTimeoutMillis(timeoutMillis);
     }
 
     HttpClient httpClient() {
@@ -137,6 +144,13 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
             return DEFAULT_MAX_RESPONSE_BYTES;
         }
         return Math.min(configuredMaxResponseBytes, HARD_MAX_RESPONSE_BYTES);
+    }
+
+    static int effectiveRequestTimeoutMillis(int configuredTimeoutMillis) {
+        if (configuredTimeoutMillis <= 0) {
+            return DEFAULT_REQUEST_TIMEOUT_MILLIS;
+        }
+        return Math.min(configuredTimeoutMillis, HARD_MAX_REQUEST_TIMEOUT_MILLIS);
     }
 
     static String readResponseBody(HttpResponse<InputStream> response, int maxBytes) throws IOException {
@@ -202,6 +216,16 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
             case TAG_TOPIC_SUGGESTIONS -> """
                     Return strict JSON only.
                     """;
+            case ENHANCED -> """
+                    You are an editorial copilot for a Chinese comprehensive content community.
+                    Return strict JSON only with keys:
+                    suggestedTitle, summary, writingSuggestions, qualityScore, qualitySummary,
+                    qualitySuggestions, tagNames, topicNames, riskHints.
+                    Every list key must be a string array with at most 6 items.
+                    qualityScore must be an integer between 0 and 100.
+                    This is advisory only. Never instruct automatic publishing or remove risk boundaries.
+                    Keep every string within 80 Chinese characters.
+                    """;
         };
     }
 
@@ -241,6 +265,20 @@ class DeepseekContentAssistAiClient implements ContentAssistAiClient {
                     """.formatted(prompt.domain(), prompt.postType(), assistTemplateCode, assistContext,
                     title, content, tags);
             case TAG_TOPIC_SUGGESTIONS -> content;
+            case ENHANCED -> """
+                    domain: %s
+                    postType: %s
+                    assistTemplateCode: %s
+                    assistContext:
+                    %s
+                    title:
+                    %s
+                    draft:
+                    %s
+                    tags:
+                    %s
+                    """.formatted(prompt.domain(), prompt.postType(), assistTemplateCode, assistContext,
+                    title, content, tags);
         };
     }
 

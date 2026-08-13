@@ -21,12 +21,12 @@ public class PostCreateCmd {
     @NotNull
     private Integer postType;
     @NotBlank
-    @Size(max = 255)
+    @Size(max = PostContentLimits.MAX_TITLE_LEN)
     private String title;
     @NotBlank
     @Size(max = PostContentLimits.MAX_CONTENT_LEN)
     private String content;
-    @Size(max = 512)
+    @Size(max = PostContentLimits.MAX_COVER_URL_LEN)
     private String coverUrl;
     private Integer visibility;
     /** 扩展字段 JSON：公司/岗位/年限/结果 等 */
@@ -35,8 +35,10 @@ public class PostCreateCmd {
     @NotNull(message = "请选择频道")
     private Integer domain;
     private Boolean anonymous;
+    @Size(max = PostContentLimits.MAX_TAG_COUNT)
     private List<Long> tagIds;
-    private List<String> tagNames;
+    @Size(max = PostContentLimits.MAX_TAG_COUNT)
+    private List<@Size(max = PostContentLimits.MAX_TAG_NAME_LEN) String> tagNames;
     private Boolean reviewRequired;
     private Boolean keywordReviewRequired;
 }

@@ -28,6 +28,7 @@ class RetentionRevisitNotificationSafetyGuardTest {
         assertContains(facade, "allowsFavoriteNotification");
         assertContains(facade, "allowsMentionNotification");
         assertContains(facade, "allowsSystemNotification");
+        assertContains(listener, "subscriptionUpdateDeliveryService");
 
         for (String action : List.of(
                 "\"like\"",
@@ -57,7 +58,6 @@ class RetentionRevisitNotificationSafetyGuardTest {
                 "externalPush",
                 "advertising",
                 "payment",
-                "subscription",
                 "retentionNotification")) {
             assertFalse(source.contains(forbidden), () -> "Retention revisit must not introduce source: " + forbidden);
         }

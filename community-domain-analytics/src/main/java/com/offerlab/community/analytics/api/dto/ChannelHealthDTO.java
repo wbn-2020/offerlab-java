@@ -21,6 +21,9 @@ public class ChannelHealthDTO {
     private Long pendingSuggestions;
     private Long unresolvedQuestions;
     private Long openContentNeeds;
+    private Long qualityReviewPostCount;
+    private Boolean qualitySignalAvailable;
+    private Integer qualitySignalPeriodDays;
     private String healthStatus;
     private List<String> attentionReasons;
 }

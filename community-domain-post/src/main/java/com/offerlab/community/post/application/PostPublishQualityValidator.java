@@ -21,8 +21,8 @@ import java.util.Set;
 @Component
 @RequiredArgsConstructor
 public class PostPublishQualityValidator {
-    private static final int MIN_TITLE_LEN = 8;
-    private static final int MAX_TITLE_LEN = 200;
+    private static final int MIN_TITLE_LEN = PostContentLimits.MIN_TITLE_LEN;
+    private static final int MAX_TITLE_LEN = PostContentLimits.MAX_TITLE_LEN;
     private static final int MIN_INTERVIEW_CONTENT_LEN = 120;
     private static final int MIN_GENERAL_CONTENT_LEN = 40;
     private static final int MIN_PROJECT_REVIEW_CONTENT_LEN = 80;
@@ -30,10 +30,10 @@ public class PostPublishQualityValidator {
     private static final int MIN_LIGHT_COMMUNITY_CONTENT_LEN = 30;
     private static final int MAX_CONTENT_LEN = PostContentLimits.MAX_CONTENT_LEN;
     private static final int MAX_EXT_JSON_LEN = PostContentLimits.MAX_EXT_JSON_LEN;
-    private static final int MAX_TAG_COUNT = 20;
-    private static final int MAX_TAG_NAME_LEN = 32;
+    private static final int MAX_TAG_COUNT = PostContentLimits.MAX_TAG_COUNT;
+    private static final int MAX_TAG_NAME_LEN = PostContentLimits.MAX_TAG_NAME_LEN;
     private static final int MAX_META_TEXT_LEN = 64;
-    private static final int MAX_SUMMARY_LEN = 240;
+    private static final int MAX_SUMMARY_LEN = PostContentLimits.MAX_SUMMARY_LEN;
     private static final int MAX_TECH_STACK_COUNT = 12;
 
     private final ObjectMapper objectMapper;
@@ -267,7 +267,7 @@ public class PostPublishQualityValidator {
             result.add(tagId);
         }
         if (result.size() > MAX_TAG_COUNT) {
-            fail("tags", "最多只能选择 20 个标签");
+            fail("tags", "最多只能选择 " + MAX_TAG_COUNT + " 个标签");
         }
         return List.copyOf(result);
     }
@@ -283,7 +283,7 @@ public class PostPublishQualityValidator {
                 continue;
             }
             if (name.length() > MAX_TAG_NAME_LEN) {
-                fail("tags", "标签名称不能超过 32 个字符");
+                fail("tags", "标签名称不能超过 " + MAX_TAG_NAME_LEN + " 个字符");
             }
             if (containsControlChar(name)) {
                 fail("tags", "标签名称包含无效字符");
@@ -291,20 +291,14 @@ public class PostPublishQualityValidator {
             result.putIfAbsent(name.toLowerCase(Locale.ROOT), name);
         }
         if (result.size() > MAX_TAG_COUNT) {
-            fail("tags", "最多只能选择 20 个标签");
+            fail("tags", "最多只能选择 " + MAX_TAG_COUNT + " 个标签");
         }
         return List.copyOf(result.values());
     }
 
     private void validateTagCount(int postType, List<Long> tagIds, List<String> tagNames) {
-        Set<String> unique = new LinkedHashSet<>();
-        tagIds.forEach(id -> unique.add("id:" + id));
-        tagNames.forEach(name -> unique.add("name:" + name.toLowerCase(Locale.ROOT)));
-        if (unique.size() > MAX_TAG_COUNT) {
-            fail("tags", "最多只能选择 20 个标签");
-        }
         int min = Post.isInterviewType(postType) ? 2 : 1;
-        if (unique.size() < min) {
+        if (tagIds.size() + tagNames.size() < min) {
             fail("tags", Post.isInterviewType(postType)
                     ? "历史经验至少需要 2 个技术标签，方便后续自动结构化和检索"
                     : "至少需要 1 个标签，方便内容检索");

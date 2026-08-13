@@ -43,11 +43,13 @@ them.
 Record separate test identities for anonymous, member, content moderator,
 question operator, and OPS flows. Do not use the local-open bootstrap mode.
 
-## Safe defaults
+## Required service profile
 
-- `application-acceptance.yml` disables Kafka, Elasticsearch, Redis pub/sub, and
-  WebSocket realtime by default unless the corresponding environment variables
-  explicitly enable them.
+- Full acceptance enables Elasticsearch and requires an explicit
+  `ELASTICSEARCH_URL`; the search index rebuild must finish successfully before
+  strict sign-off. A fallback-only environment can be used for degraded smoke
+  testing, but it is not a complete search acceptance environment.
+- Kafka, Redis pub/sub, and WebSocket realtime remain explicitly configurable.
 - Swagger and OpenAPI UI are disabled.
 - Admin local-open bootstrap is disabled.
 - JWT and CORS have no local fallback values.

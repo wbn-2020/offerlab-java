@@ -38,7 +38,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -324,6 +326,22 @@ public class UserApplicationService {
         po.setFollowNotification(toFlag(setting == null ? null : setting.getFollowNotification(), po.getFollowNotification()));
         po.setFavoriteNotification(toFlag(setting == null ? null : setting.getFavoriteNotification(), po.getFavoriteNotification()));
         po.setMentionNotification(toFlag(setting == null ? null : setting.getMentionNotification(), po.getMentionNotification()));
+        po.setGovernanceReminderNotification(toFlag(
+                setting == null ? null : setting.getGovernanceReminderNotification(),
+                po.getGovernanceReminderNotification()));
+        po.setGovernanceReminderQuietStartMinute(keepExisting(
+                setting == null ? null : setting.getGovernanceReminderQuietStartMinute(),
+                po.getGovernanceReminderQuietStartMinute()));
+        po.setGovernanceReminderQuietEndMinute(keepExisting(
+                setting == null ? null : setting.getGovernanceReminderQuietEndMinute(),
+                po.getGovernanceReminderQuietEndMinute()));
+        po.setGovernanceReminderTimeZone(keepExisting(
+                setting == null ? null : setting.getGovernanceReminderTimeZone(),
+                po.getGovernanceReminderTimeZone()));
+        if (po.getGovernanceReminderTimeZone() != null) {
+            po.setGovernanceReminderTimeZone(po.getGovernanceReminderTimeZone().trim());
+        }
+        validateGovernanceReminderQuietWindow(po);
         if (exists) {
             privacySettingMapper.updateById(po);
         } else {
@@ -409,6 +427,7 @@ public class UserApplicationService {
         po.setFollowNotification(1);
         po.setFavoriteNotification(1);
         po.setMentionNotification(1);
+        po.setGovernanceReminderNotification(1);
         po.setAcceptContactRequest(1);
         po.setContactRequestPolicy(ContactRequestSettingsService.DEFAULT_POLICY);
         return po;
@@ -448,7 +467,15 @@ public class UserApplicationService {
                 .followNotification(isEnabled(po.getFollowNotification()))
                 .favoriteNotification(isEnabled(po.getFavoriteNotification()))
                 .mentionNotification(isEnabled(po.getMentionNotification()))
+                .governanceReminderNotification(isGovernanceReminderEnabled(po))
+                .governanceReminderQuietStartMinute(po.getGovernanceReminderQuietStartMinute())
+                .governanceReminderQuietEndMinute(po.getGovernanceReminderQuietEndMinute())
+                .governanceReminderTimeZone(po.getGovernanceReminderTimeZone())
                 .build();
+    }
+
+    private static boolean isGovernanceReminderEnabled(UserPrivacySettingPO po) {
+        return isEnabled(po.getSystemNotification()) && isEnabled(po.getGovernanceReminderNotification());
     }
 
     private static boolean isEnabled(Integer value) {
@@ -461,6 +488,29 @@ public class UserApplicationService {
 
     private static int toFlag(Boolean value, Integer fallback) {
         return value == null ? (fallback == null ? 1 : fallback) : toFlag(value);
+    }
+
+    private static <T> T keepExisting(T value, T fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private static void validateGovernanceReminderQuietWindow(UserPrivacySettingPO po) {
+        Integer startMinute = po.getGovernanceReminderQuietStartMinute();
+        Integer endMinute = po.getGovernanceReminderQuietEndMinute();
+        String timeZone = po.getGovernanceReminderTimeZone();
+        boolean empty = startMinute == null && endMinute == null && timeZone == null;
+        if (empty) {
+            return;
+        }
+        if (startMinute == null || endMinute == null || !StringUtils.hasText(timeZone)
+                || startMinute < 0 || startMinute > 1439 || endMinute < 0 || endMinute > 1439) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        try {
+            ZoneId.of(timeZone.trim());
+        } catch (DateTimeException ex) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
     }
 
     private static String normalizeVisibility(String value, String fallback) {

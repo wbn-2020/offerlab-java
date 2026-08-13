@@ -74,8 +74,8 @@ class OperationCurationGuardTest {
                 "slot publish must retain a compare-and-set guard after acquiring the slot row lock");
         assertTrue(service.contains("getPublishedSnapshotJson()"),
                 "HOME_FEATURED public reads must use a published snapshot instead of mutable draft rows");
-        assertTrue(service.contains("isPublishablePublicSlotItem"),
-                "HOME_FEATURED publish must validate strong-exposure item eligibility");
+        assertTrue(service.contains("publicSlotItemForViewer"),
+                "HOME_FEATURED public reads must validate and hydrate each item in one controlled pass");
         assertTrue(service.contains("safeLoadPublicSlotPost"),
                 "HOME_FEATURED public snapshot filtering must drop deleted or unavailable posts instead of failing open or throwing");
         assertTrue(service.contains("String lifecycleStatus = existing == null ? STATUS_DRAFT : existing.getSlotStatus()"),

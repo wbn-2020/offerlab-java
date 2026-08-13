@@ -8,6 +8,10 @@ interface ContentAssistAiClient {
 
     Completion complete(ContentAssistScene scene, ContentAssistPrompt prompt) throws Exception;
 
+    default long maximumCompletionDurationMillis() {
+        return 15_000L;
+    }
+
     record Completion(String provider,
                       String contentJson,
                       int promptTokens,

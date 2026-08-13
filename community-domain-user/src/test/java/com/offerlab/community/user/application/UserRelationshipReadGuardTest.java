@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UserRelationshipReadGuardTest {
@@ -29,11 +30,10 @@ class UserRelationshipReadGuardTest {
         assertTrue(mapper.contains("f.create_time &lt; #{cursorTime}"));
         assertTrue(mapper.contains("f.id &lt; #{cursorId}"));
         assertTrue(mapper.contains("ORDER BY f.create_time DESC, f.id DESC"));
-        assertTrue(mapper.contains("t_user_subscription_preference"));
-        assertTrue(mapper.contains("pref.uid = f.from_uid"));
-        assertTrue(mapper.contains("COALESCE(pref.delivery_mode, 'IMMEDIATE')"));
-        assertTrue(mapper.contains("mode == 'ACTIVE'"));
+        assertFalse(mapper.contains("t_user_subscription_preference"));
+        assertTrue(mapper.contains("'IMMEDIATE' AS deliveryMode"));
         assertTrue(mapper.contains("mode == 'MUTED'"));
+        assertTrue(mapper.contains("AND 1 = 0"));
     }
 
     private static String read(String path) throws Exception {

@@ -22,6 +22,10 @@ public class UserPrivacySettingPO {
     private Integer followNotification;
     private Integer favoriteNotification;
     private Integer mentionNotification;
+    private Integer governanceReminderNotification;
+    private Integer governanceReminderQuietStartMinute;
+    private Integer governanceReminderQuietEndMinute;
+    private String governanceReminderTimeZone;
     private Integer acceptContactRequest;
     private String contactRequestPolicy;
     private Integer contactRequestDailyLimit;

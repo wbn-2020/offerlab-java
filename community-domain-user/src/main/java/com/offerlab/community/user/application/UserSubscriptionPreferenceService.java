@@ -3,6 +3,7 @@ package com.offerlab.community.user.application;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
+import com.offerlab.community.user.api.DeliveryPreferenceCapability;
 import com.offerlab.community.user.api.UserRelationshipSourceVerifier;
 import com.offerlab.community.user.api.UserSubscriptionPreferenceFacade;
 import com.offerlab.community.user.api.dto.UserSubscriptionPreferenceDTO;
@@ -29,7 +30,7 @@ import java.util.Set;
 public class UserSubscriptionPreferenceService implements UserSubscriptionPreferenceFacade {
 
     public static final String DEFAULT_DELIVERY_MODE = "IMMEDIATE";
-    private static final int MAX_BATCH_SIZE = 200;
+    private static final int MAX_SOURCE_KEY_BATCH_SIZE = 200;
     private static final List<String> SOURCE_TYPES =
             List.of("USER", "TOPIC", "DISCUSSION", "NEED", "SERIES");
     private static final List<String> DELIVERY_MODES =
@@ -74,7 +75,7 @@ public class UserSubscriptionPreferenceService implements UserSubscriptionPrefer
                             .sourceType(sourceType)
                             .sourceId(sourceId)
                             .build());
-            if (normalized.size() >= MAX_BATCH_SIZE) {
+            if (normalized.size() >= MAX_SOURCE_KEY_BATCH_SIZE) {
                 break;
             }
         }
@@ -101,6 +102,33 @@ public class UserSubscriptionPreferenceService implements UserSubscriptionPrefer
     }
 
     @Override
+    public Map<Long, UserSubscriptionPreferenceDTO> findEffectiveForRecipients(
+            Collection<Long> receiverUids, String sourceType, Long sourceId) {
+        String safeSourceType = normalizeSourceType(sourceType);
+        Long safeSourceId = requireSourceId(sourceId);
+        List<Long> normalizedRecipients = normalizeReceiverUids(receiverUids);
+        if (normalizedRecipients.isEmpty()) {
+            return Map.of();
+        }
+
+        List<UserSubscriptionPreferencePO> rows = preferenceMapper.findEffectiveForRecipients(
+                normalizedRecipients, safeSourceType, safeSourceId, LocalDateTime.now());
+        Set<Long> requestedUids = new LinkedHashSet<>(normalizedRecipients);
+        Map<Long, UserSubscriptionPreferenceDTO> result = new LinkedHashMap<>();
+        for (UserSubscriptionPreferencePO row
+                : rows == null ? List.<UserSubscriptionPreferencePO>of() : rows) {
+            if (row == null || row.getUid() == null || !requestedUids.contains(row.getUid())
+                    || !safeSourceType.equals(row.getSourceType())
+                    || !safeSourceId.equals(row.getSourceId())
+                    || !DELIVERY_MODES.contains(row.getDeliveryMode())) {
+                continue;
+            }
+            result.putIfAbsent(row.getUid(), toDto(row));
+        }
+        return Map.copyOf(result);
+    }
+
+    @Override
     @Transactional
     public UserSubscriptionPreferenceDTO upsert(Long uid,
                                                 String sourceType,
@@ -110,6 +138,7 @@ public class UserSubscriptionPreferenceService implements UserSubscriptionPrefer
         Long safeUid = requireUid(uid);
         String safeSourceType = normalizeSourceType(sourceType);
         Long safeSourceId = requireSourceId(sourceId);
+        requireDeliveryPreferenceSupported(safeSourceType);
         String safeDeliveryMode = normalizeDeliveryMode(deliveryMode);
         LocalDateTime now = LocalDateTime.now();
         if (expiresAt != null && !expiresAt.isAfter(now)) {
@@ -153,19 +182,29 @@ public class UserSubscriptionPreferenceService implements UserSubscriptionPrefer
     }
 
     private static UserSubscriptionPreferenceDTO defaultPreference(String sourceType, Long sourceId) {
+        DeliveryPreferenceCapability capability =
+                DeliveryPreferenceCapability.forSourceType(sourceType);
         return UserSubscriptionPreferenceDTO.builder()
                 .sourceType(sourceType)
                 .sourceId(sourceId)
                 .deliveryMode(DEFAULT_DELIVERY_MODE)
+                .deliveryPreferenceSupported(capability.deliveryPreferenceSupported())
+                .deliveryPreferenceUnsupportedReason(
+                        capability.deliveryPreferenceUnsupportedReason())
                 .build();
     }
 
     private static UserSubscriptionPreferenceDTO toDto(UserSubscriptionPreferencePO preference) {
+        DeliveryPreferenceCapability capability =
+                DeliveryPreferenceCapability.forSourceType(preference.getSourceType());
         return UserSubscriptionPreferenceDTO.builder()
                 .sourceType(preference.getSourceType())
                 .sourceId(preference.getSourceId())
                 .deliveryMode(preference.getDeliveryMode())
                 .expiresAt(preference.getExpiresAt())
+                .deliveryPreferenceSupported(capability.deliveryPreferenceSupported())
+                .deliveryPreferenceUnsupportedReason(
+                        capability.deliveryPreferenceUnsupportedReason())
                 .build();
     }
 
@@ -181,6 +220,31 @@ public class UserSubscriptionPreferenceService implements UserSubscriptionPrefer
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "sourceId is invalid");
         }
         return sourceId;
+    }
+
+    private static List<Long> normalizeReceiverUids(Collection<Long> receiverUids) {
+        if (receiverUids == null || receiverUids.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<Long> normalized = new LinkedHashSet<>();
+        for (Long receiverUid : receiverUids) {
+            if (receiverUid == null) {
+                continue;
+            }
+            normalized.add(requireUid(receiverUid));
+            if (normalized.size() > UserSubscriptionPreferenceFacade.MAX_RECIPIENT_BATCH_SIZE) {
+                throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                        "receiverUids exceeds max batch size");
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static void requireDeliveryPreferenceSupported(String sourceType) {
+        if (!DeliveryPreferenceCapability.isSupported(sourceType)) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
+                    "delivery preference is not supported for sourceType: " + sourceType);
+        }
     }
 
     private static String normalizeSourceType(String value) {

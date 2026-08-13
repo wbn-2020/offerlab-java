@@ -15,6 +15,7 @@ import com.offerlab.community.infra.review.ReviewQueueItemCommand;
 import com.offerlab.community.infra.review.ReviewQueueReopenRequestedEvent;
 import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
+import com.offerlab.community.post.api.dto.PostContentLimits;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
 import com.offerlab.community.post.api.event.PostDeletedEvent;
@@ -38,6 +39,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -139,6 +141,7 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         post.setPostStatus(nextStatus);
+        versionHistoryService.resolvePendingPublicRevision(post.getId(), post.getVersion(), approved);
         if (approved) {
             publishPostPublishedEvent(post, currentTagIds(post.getId()));
         }
@@ -190,12 +193,19 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
                 mergeDomainToExtJson(input.extJson(), nextDomain), nextDomain, cmd.getAnonymous());
         String nextCoverUrl = cmd.getCoverUrl() == null ? post.getCoverUrl() : cmd.getCoverUrl();
         Integer nextVisibility = cmd.getVisibility() == null ? post.getVisibility() : cmd.getVisibility();
+        boolean policyReviewRequired = domainConfigService.reviewRequiredForPublish(nextDomain);
+        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired()) || policyReviewRequired;
+        boolean keywordReviewRequired = Boolean.TRUE.equals(cmd.getKeywordReviewRequired());
         boolean forceVersionSnapshot = !respondedSuggestionIds.isEmpty()
                 || publicUpdateSummary != null
                 || impactScope != null;
-        versionHistoryService.snapshotBeforeUpdate(post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
+        boolean qualityRevisionCandidate = versionHistoryService.isEligiblePublicTextRevision(
+                post, input.title(), input.content(), nextVisibility);
+        PostVersionHistoryService.ContentRevisionCandidate contentRevisionCandidate =
+                versionHistoryService.snapshotBeforeUpdate(
+                post, cmd.getOperatorUid(), tagsByIds(existingTagIds), post.getVersion(),
                 input.title(), input.content(), nextCoverUrl, nextVisibility, enrichedExtJson, resolvedTagIds, tagsProvided,
-                publicUpdateSummary, impactScope, forceVersionSnapshot);
+                publicUpdateSummary, impactScope, forceVersionSnapshot, qualityRevisionCandidate);
 
         post.setVisibility(nextVisibility);
         post.setExtJson(enrichedExtJson);
@@ -203,9 +213,6 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         post.setTitle(input.title());
         post.setContent(input.content());
         post.setCoverUrl(nextCoverUrl);
-        boolean policyReviewRequired = domainConfigService.reviewRequiredForPublish(nextDomain);
-        boolean reviewRequired = Boolean.TRUE.equals(cmd.getReviewRequired()) || policyReviewRequired;
-        boolean keywordReviewRequired = Boolean.TRUE.equals(cmd.getKeywordReviewRequired());
         if (reviewRequired) {
             post.setPostStatus(Post.STATUS_REVIEWING);
         }
@@ -214,6 +221,9 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         }
         if (tagsProvided) {
             syncTags(post.getId(), resolvedTagIds);
+        }
+        if (contentRevisionCandidate != null && !reviewRequired) {
+            versionHistoryService.activateDirectPublicRevision(contentRevisionCandidate);
         }
         if (reviewRequired && !keywordReviewRequired) {
             enqueuePendingPostReview(post, pendingReviewReason(post, policyReviewRequired));
@@ -278,6 +288,7 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         post.setPostStatus(nextStatus);
+        versionHistoryService.resolvePendingPublicRevision(post.getId(), post.getVersion(), approved);
         if (approved) {
             publishPostPublishedEvent(post, currentTagIds(post.getId()));
         }
@@ -413,7 +424,6 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         if (tagIds != null) {
             List<Long> requestedIds = tagIds.stream()
                     .filter(id -> id != null && id > 0)
-                    .limit(20)
                     .toList();
             if (!requestedIds.isEmpty()) {
                 Set<Long> existingIds = selectTagsByIds(requestedIds).stream()
@@ -433,19 +443,25 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
                     .filter(name -> name != null && !name.isBlank())
                     .map(String::trim)
                     .distinct()
-                    .limit(20)
                     .toList();
             if (!names.isEmpty()) {
-                Set<String> existingNames = selectTagsByNames(names).stream()
+                List<TagPO> existingTags = selectTagsByNames(names);
+                Set<String> existingNames = existingTags.stream()
                         .map(TagPO::getTagName)
-                        .map(String::toLowerCase)
+                        .map(name -> name.toLowerCase(Locale.ROOT))
                         .collect(Collectors.toSet());
-                for (String name : names) {
-                    if (!existingNames.contains(name.toLowerCase())) {
-                        insertIgnoreName(idGen.nextId(), name, 4);
-                    }
+                existingTags.stream().map(TagPO::getId).forEach(ids::add);
+                List<String> missingNames = names.stream()
+                        .filter(name -> !existingNames.contains(name.toLowerCase(Locale.ROOT)))
+                        .toList();
+                if (ids.size() + missingNames.size() > PostContentLimits.MAX_TAG_COUNT) {
+                    throw PostPublishQualityValidator.fieldError(
+                            "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
                 }
-                selectTagsByNames(names).stream()
+                for (String name : missingNames) {
+                        insertIgnoreName(idGen.nextId(), name, 4);
+                }
+                selectTagsByNames(missingNames).stream()
                         .map(TagPO::getId)
                         .forEach(ids::add);
             }
@@ -453,7 +469,11 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
         if (tagIds == null && tagNames == null) {
             return null;
         }
-        return ids.stream().limit(20).toList();
+        if (ids.size() > PostContentLimits.MAX_TAG_COUNT) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
+        }
+        return List.copyOf(ids);
     }
 
     private void requireResolvedTagCount(Integer postType, List<Long> tagIds) {
@@ -462,6 +482,10 @@ public class PostApplicationService implements ContentModerationSourceAuthorizat
             throw PostPublishQualityValidator.fieldError("tags", Post.isInterviewType(postType)
                     ? "历史经验至少需要 2 个有效技术标签"
                     : "至少需要 1 个有效标签");
+        }
+        if (tagIds.size() > PostContentLimits.MAX_TAG_COUNT) {
+            throw PostPublishQualityValidator.fieldError(
+                    "tags", "最多只能选择 " + PostContentLimits.MAX_TAG_COUNT + " 个标签");
         }
     }
 

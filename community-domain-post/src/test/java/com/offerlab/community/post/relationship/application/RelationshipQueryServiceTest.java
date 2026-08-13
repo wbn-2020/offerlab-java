@@ -104,7 +104,47 @@ class RelationshipQueryServiceTest {
         assertEquals(3L, summary.getCounts().get("NEED"));
         assertFalse(summary.getCounts().containsKey("ACTIVITY"));
         assertEquals(0L, summary.getMutedCount());
-        assertEquals(9L, summary.getImmediate());
+        assertEquals(5L, summary.getImmediate());
+        assertEquals(0L, summary.getDigest());
+    }
+
+    @Test
+    void unsupportedSourcesExposeCapabilityButDoNotContributeDeliveryModeCounts() {
+        FakeRelationshipMapper mapper = new FakeRelationshipMapper();
+        mapper.rows = List.of(postRow("SERIES", 90L, BASE.minusMinutes(1), "MUTED"));
+        mapper.counts = List.of(
+                count("TOPIC", "DIGEST", 2),
+                count("SERIES", "MUTED", 5)
+        );
+        FakeUserFacade users = new FakeUserFacade();
+        users.rows = List.of(userRow(80L, BASE.minusMinutes(2), "MUTED"));
+        users.count = 3;
+        users.deliveryCounts = Map.of("IMMEDIATE", 0L, "DIGEST", 0L, "MUTED", 3L);
+        RelationshipQueryService service = new RelationshipQueryService(mapper, users);
+
+        PageResult<RelationshipItemDTO> list = service.list(42L, null, "all", "0", 20);
+        RelationshipItemDTO user = list.getItems().stream()
+                .filter(item -> "USER".equals(item.getSourceType()))
+                .findFirst()
+                .orElseThrow();
+        RelationshipItemDTO series = list.getItems().stream()
+                .filter(item -> "SERIES".equals(item.getSourceType()))
+                .findFirst()
+                .orElseThrow();
+        RelationshipSummaryDTO summary = service.summary(42L);
+
+        assertFalse(user.isDeliveryPreferenceSupported());
+        assertFalse(series.isDeliveryPreferenceSupported());
+        assertEquals("SOURCE_UPDATE_DELIVERY_NOT_AVAILABLE",
+                user.getDeliveryPreferenceUnsupportedReason());
+        assertEquals("SOURCE_UPDATE_DELIVERY_NOT_AVAILABLE",
+                series.getDeliveryPreferenceUnsupportedReason());
+        assertEquals(10L, summary.getTotal());
+        assertEquals(10L, summary.getActive());
+        assertEquals(0L, summary.getImmediate());
+        assertEquals(2L, summary.getDigest());
+        assertEquals(0L, summary.getMutedCount());
+        assertEquals(0, users.deliveryCountCalls);
     }
 
     @Test
@@ -121,6 +161,10 @@ class RelationshipQueryServiceTest {
     }
 
     private static UserRelationshipItemDTO userRow(long id, LocalDateTime time) {
+        return userRow(id, time, null);
+    }
+
+    private static UserRelationshipItemDTO userRow(long id, LocalDateTime time, String deliveryMode) {
         return UserRelationshipItemDTO.builder()
                 .relationId(id)
                 .uid(id + 1000)
@@ -128,10 +172,15 @@ class RelationshipQueryServiceTest {
                 .bio("Bio")
                 .relationTime(time)
                 .lastPublicUpdateAt(time)
+                .deliveryMode(deliveryMode)
                 .build();
     }
 
     private static RelationshipRow postRow(String sourceType, long id, LocalDateTime time) {
+        return postRow(sourceType, id, time, null);
+    }
+
+    private static RelationshipRow postRow(String sourceType, long id, LocalDateTime time, String deliveryMode) {
         RelationshipRow row = new RelationshipRow();
         row.setSourceType(sourceType);
         row.setSourceId(id + 1000);
@@ -143,13 +192,18 @@ class RelationshipQueryServiceTest {
         row.setSourceStatus("ACTIVE");
         row.setLastPublicUpdateAt(time);
         row.setRelationTime(time);
+        row.setDeliveryMode(deliveryMode);
         return row;
     }
 
     private static RelationshipCountRow count(String sourceType, long value) {
+        return count(sourceType, "IMMEDIATE", value);
+    }
+
+    private static RelationshipCountRow count(String sourceType, String deliveryMode, long value) {
         RelationshipCountRow row = new RelationshipCountRow();
         row.setSourceType(sourceType);
-        row.setDeliveryMode("IMMEDIATE");
+        row.setDeliveryMode(deliveryMode);
         row.setCount(value);
         return row;
     }
@@ -200,6 +254,8 @@ class RelationshipQueryServiceTest {
         private String lastMode;
         private int calls;
         private long count;
+        private Map<String, Long> deliveryCounts = Map.of("IMMEDIATE", 0L, "DIGEST", 0L, "MUTED", 0L);
+        private int deliveryCountCalls;
 
         @Override
         public List<UserRelationshipItemDTO> listFollowing(Long uid, LocalDateTime cursorTime,
@@ -223,7 +279,8 @@ class RelationshipQueryServiceTest {
         @Override
         public Map<String, Long> countFollowingByDeliveryMode(Long uid) {
             lastUid = uid;
-            return Map.of("IMMEDIATE", count, "DIGEST", 0L, "MUTED", 0L);
+            deliveryCountCalls++;
+            return deliveryCounts;
         }
     }
 }

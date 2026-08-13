@@ -17,17 +17,19 @@ public class PostDraftCmd {
     private Long uid;
     private Long sourcePostId;
     private Integer postType;
-    @Size(max = 255)
+    @Size(max = PostContentLimits.MAX_TITLE_LEN)
     private String title;
     @Size(max = PostContentLimits.MAX_CONTENT_LEN)
     private String content;
-    @Size(max = 512)
+    @Size(max = PostContentLimits.MAX_COVER_URL_LEN)
     private String coverUrl;
     private Integer visibility;
     private Integer domain;
     private Boolean anonymous;
     @Size(max = PostContentLimits.MAX_EXT_JSON_LEN)
     private String extJson;
+    @Size(max = PostContentLimits.MAX_TAG_COUNT)
     private List<Long> tagIds;
-    private List<String> tagNames;
+    @Size(max = PostContentLimits.MAX_TAG_COUNT)
+    private List<@Size(max = PostContentLimits.MAX_TAG_NAME_LEN) String> tagNames;
 }

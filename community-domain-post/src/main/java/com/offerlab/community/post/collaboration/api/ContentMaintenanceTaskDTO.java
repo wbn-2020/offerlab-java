@@ -27,6 +27,13 @@ public class ContentMaintenanceTaskDTO {
     private Long deliveryPostId;
     private String deliveryNote;
     private String reviewNote;
+    private Long dispatchBatchId;
+    private String priority;
+    private LocalDateTime dueAt;
+    private Integer currentAttemptNo;
+    private String maintenancePhase;
+    private String terminalOutcomeCode;
+    private String closeReasonCode;
     private Boolean canClaim;
     private Boolean canSubmit;
     private Boolean canReview;
