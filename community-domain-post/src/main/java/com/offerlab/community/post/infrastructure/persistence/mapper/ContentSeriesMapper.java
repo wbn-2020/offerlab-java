@@ -124,8 +124,16 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
     @Select("""
             <script>
             SELECT s.id AS seriesId,
-                   COALESCE(SUM(CASE WHEN p.id IS NOT NULL AND p.post_status = 1 AND p.visibility = 1 THEN 1 ELSE 0 END), 0) AS totalPostCount,
-                   COALESCE(SUM(CASE WHEN p.id IS NOT NULL AND p.post_status = 1 AND p.visibility = 1 THEN 1 ELSE 0 END), 0) AS publishedPostCount
+                   COALESCE(SUM(CASE WHEN p.id IS NOT NULL
+                                          AND p.post_status = 1
+                                          AND p.visibility = 1
+                                          AND p.content_environment = 'COMMUNITY'
+                                     THEN 1 ELSE 0 END), 0) AS totalPostCount,
+                   COALESCE(SUM(CASE WHEN p.id IS NOT NULL
+                                          AND p.post_status = 1
+                                          AND p.visibility = 1
+                                          AND p.content_environment = 'COMMUNITY'
+                                     THEN 1 ELSE 0 END), 0) AS publishedPostCount
             FROM t_content_series s
             LEFT JOIN t_content_series_post sp
                    ON sp.series_id = s.id
@@ -158,6 +166,12 @@ public interface ContentSeriesMapper extends BaseMapper<ContentSeriesPO> {
             JOIN t_content_series_post sp
               ON sp.series_id = s.id
              AND sp.is_deleted = 0
+            JOIN t_post_main p
+              ON p.id = sp.post_id
+             AND p.is_deleted = 0
+             AND p.post_status = 1
+             AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             WHERE s.is_deleted = 0
               AND s.visibility = 1
               AND sp.post_id IN

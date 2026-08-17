@@ -13,6 +13,7 @@ import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
+import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostExtensionMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostMapper;
 import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
@@ -96,6 +97,8 @@ public class SearchFacadeImpl implements SearchFacade {
                                                 Integer type, Integer domain, String sort, String cursor, int size,
                                                 boolean includeTestData, SearchTrustFilter trustFilter) {
         int limit = Math.min(size <= 0 ? 20 : size, 50);
+        SearchQuerySpec querySpec = SearchQuerySpec.from(keyword);
+        String normalizedKeyword = querySpec.normalized();
         String normalizedSort = normalizeSort(sort);
         SearchTrustFilter normalizedTrustFilter = trustFilter == null ? SearchTrustFilter.empty() : trustFilter;
         boolean trustedSort = "trusted".equals(normalizedSort);
@@ -112,58 +115,71 @@ public class SearchFacadeImpl implements SearchFacade {
                     "trusted_distribution_migration_pending",
                     0,
                     includeTestData,
-                    keyword,
+                    normalizedKeyword,
                     type,
                     domain,
                     normalizedTrustFilter,
                     normalizedSort
             );
-            searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, 0, firstPage);
+            searchAnalyticsService.recordSearch(normalizedKeyword, company, position, type, normalizedSort, 0, firstPage);
             return unavailable;
         }
         PageResult<PostBriefDTO> result;
         if (trustedSort) {
-            result = searchTrustedByMysql(keyword, company, position, type, domain, cursor, limit, includeTestData,
+            result = searchTrustedByMysql(querySpec, company, position, type, domain, cursor, limit, includeTestData,
                     normalizedTrustFilter);
             result = withSearchMetadata(result, "mysql", false, null, MYSQL_FALLBACK_MAX_SCAN,
-                    includeTestData, keyword, type, domain, normalizedTrustFilter, normalizedSort);
-            searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                    includeTestData, normalizedKeyword, type, domain, normalizedTrustFilter, normalizedSort);
+            searchAnalyticsService.recordSearch(normalizedKeyword, company, position, type, normalizedSort,
                     result.getItems().size(), firstPage);
             return result;
         }
         if (!trustConstrained && !"hot".equals(normalizedSort)) {
             if (searchCursor.requiresMysqlContinuation(normalizedSort)) {
-                result = searchByMysql(keyword, company, position, type, domain, normalizedSort, cursor, limit,
+                result = searchByMysql(querySpec, company, position, type, domain, normalizedSort, cursor, limit,
                         includeTestData, normalizedTrustFilter);
                 result = withSearchMetadata(result, "mysql", true, "mysql_fallback_continuation",
-                        fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                        fallbackScanLimit(limit), includeTestData, normalizedKeyword, type, domain,
                         normalizedTrustFilter, normalizedSort);
-                searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                searchAnalyticsService.recordSearch(normalizedKeyword, company, position, type, normalizedSort,
                         result.getItems().size(), false);
                 return result;
             }
             boolean elasticsearchReady = postSearchIndexer.ensurePostIndex();
             if (elasticsearchReady) {
                 Optional<ElasticsearchSearchPage> esResult = searchByElasticsearch(
-                        keyword, company, position, type, domain, normalizedSort, cursor, limit, includeTestData);
+                        querySpec, company, position, type, domain, normalizedSort, cursor, limit, includeTestData);
                 if (esResult.isPresent()) {
                     ElasticsearchSearchPage esPage = esResult.get();
-                    result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit(),
-                            includeTestData, keyword, type, domain, normalizedTrustFilter, normalizedSort);
-                    boolean emptyFirstPage = firstPage && isEmptyPage(result);
-                    boolean sparseAfterVisibilityFilter = isSparseAfterVisibilityFiltering(esPage, limit);
-                    boolean mysqlFallbackAllowed = !searchCursor.requiresElasticsearchContinuation(normalizedSort);
-                    if (mysqlFallbackAllowed && (emptyFirstPage || sparseAfterVisibilityFilter)) {
-                        PageResult<PostBriefDTO> mysqlFallback = searchByMysql(keyword, company, position, type, domain,
-                                normalizedSort, cursor, limit, includeTestData, normalizedTrustFilter);
-                        if (shouldUseMysqlFallback(result, mysqlFallback)) {
-                            result = withSearchMetadata(mysqlFallback, "mysql", true,
-                                    emptyFirstPage ? "elasticsearch_empty" : "elasticsearch_visibility_filtered",
-                                    fallbackScanLimit(limit), includeTestData, keyword, type, domain,
-                                    normalizedTrustFilter, normalizedSort);
+                    if (firstPage && querySpec.hasMeaningfulTerms() && isEmptyPage(esPage.page())) {
+                        PageResult<PostBriefDTO> consistencyFallback = searchByMysql(
+                                querySpec, company, position, type, domain, normalizedSort, null, limit,
+                                includeTestData, normalizedTrustFilter);
+                        if (!isEmptyPage(consistencyFallback)) {
+                            log.warn("search index returned no hits while public database fallback matched: keyword={}",
+                                    normalizedKeyword);
+                            result = withSearchMetadata(
+                                    consistencyFallback,
+                                    "mysql",
+                                    true,
+                                    "search_index_empty_consistency_fallback",
+                                    fallbackScanLimit(limit),
+                                    includeTestData,
+                                    normalizedKeyword,
+                                    type,
+                                    domain,
+                                    normalizedTrustFilter,
+                                    normalizedSort
+                            );
+                            searchAnalyticsService.recordSearch(
+                                    normalizedKeyword, company, position, type, normalizedSort,
+                                    result.getItems().size(), true);
+                            return result;
                         }
                     }
-                    searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort,
+                    result = withSearchMetadata(esPage.page(), "elasticsearch", false, null, esPage.scanLimit(),
+                            includeTestData, normalizedKeyword, type, domain, normalizedTrustFilter, normalizedSort);
+                    searchAnalyticsService.recordSearch(normalizedKeyword, company, position, type, normalizedSort,
                             result.getItems().size(), firstPage);
                     return result;
                 }
@@ -175,15 +191,16 @@ public class SearchFacadeImpl implements SearchFacade {
                 );
             }
         }
-        result = searchByMysql(keyword, company, position, type, domain, normalizedSort, cursor, limit,
+        result = searchByMysql(querySpec, company, position, type, domain, normalizedSort, cursor, limit,
                 includeTestData, normalizedTrustFilter);
         result = withSearchMetadata(result, "mysql", !("hot".equals(normalizedSort) || trustConstrained),
                 "hot".equals(normalizedSort) ? "hot_sort_mysql"
                         : trustConstrained ? "trust_filter_mysql"
                         : "elasticsearch_unavailable",
-                fallbackScanLimit(limit), includeTestData, keyword, type, domain,
+                fallbackScanLimit(limit), includeTestData, normalizedKeyword, type, domain,
                 normalizedTrustFilter, normalizedSort);
-        searchAnalyticsService.recordSearch(keyword, company, position, type, normalizedSort, result.getItems().size(), firstPage);
+        searchAnalyticsService.recordSearch(normalizedKeyword, company, position, type, normalizedSort,
+                result.getItems().size(), firstPage);
         return result;
     }
 
@@ -245,26 +262,6 @@ public class SearchFacadeImpl implements SearchFacade {
         return page == null || page.getItems() == null || page.getItems().isEmpty();
     }
 
-    private boolean isSparseAfterVisibilityFiltering(ElasticsearchSearchPage esPage, int limit) {
-        return esPage != null
-                && esPage.rawHitCount() >= esPage.scanLimit()
-                && itemCount(esPage.page()) < limit;
-    }
-
-    private boolean shouldUseMysqlFallback(PageResult<PostBriefDTO> esPage, PageResult<PostBriefDTO> mysqlFallback) {
-        if (isEmptyPage(mysqlFallback)) {
-            return false;
-        }
-        if (isEmptyPage(esPage)) {
-            return true;
-        }
-        return itemCount(mysqlFallback) > itemCount(esPage) || Boolean.TRUE.equals(mysqlFallback.getHasMore());
-    }
-
-    private int itemCount(PageResult<PostBriefDTO> page) {
-        return page == null || page.getItems() == null ? 0 : page.getItems().size();
-    }
-
     @Override
     public List<String> suggest(String prefix, int size) {
         int limit = Math.min(size <= 0 ? 10 : size, 20);
@@ -302,7 +299,7 @@ public class SearchFacadeImpl implements SearchFacade {
         return result.stream().limit(limit).toList();
     }
 
-    private Optional<ElasticsearchSearchPage> searchByElasticsearch(String keyword, String company, String position,
+    private Optional<ElasticsearchSearchPage> searchByElasticsearch(SearchQuerySpec querySpec, String company, String position,
                                                                     Integer type, Integer domain, String sort, String cursor, int limit,
                                                                     boolean includeTestData) {
         SearchCursor parsedCursor = parseSearchCursor(cursor, sort);
@@ -311,7 +308,7 @@ public class SearchFacadeImpl implements SearchFacade {
         }
         int scanLimit = elasticsearchScanLimit(limit);
         Map<String, Object> body = new HashMap<>();
-        body.put("query", buildEsQuery(keyword, company, position, type, domain));
+        body.put("query", buildEsQuery(querySpec, company, position, type, domain));
         body.put("sort", buildEsSort(sort));
         if (parsedCursor.present()) {
             body.put("search_after", parsedCursor.elasticsearchSortValues(sort));
@@ -343,31 +340,50 @@ public class SearchFacadeImpl implements SearchFacade {
         );
     }
 
-    private Map<String, Object> buildEsQuery(String keyword, String company, String position, Integer type,
+    private Map<String, Object> buildEsQuery(SearchQuerySpec querySpec, String company, String position, Integer type,
                                              Integer domain) {
         List<Object> must = new ArrayList<>();
+        List<Object> should = new ArrayList<>();
         List<Object> filter = new ArrayList<>();
-        String kw = clean(keyword);
-        if (kw.isBlank()) {
+        if (querySpec.emptyInput()) {
             must.add(Map.of("match_all", Map.of()));
+        } else if (querySpec.requiresNoMatches()) {
+            must.add(Map.of("match_none", Map.of()));
         } else {
-            List<Object> should = new ArrayList<>();
-            should.add(Map.of("multi_match", Map.of(
-                    "query", kw,
-                    "fields", List.of("title^3", "content", "summary^2", "company^2", "position", "scenario^2",
-                            "techStacks^2", "tagNames", "tagSynonyms^2", "tagSearchTerms^2"),
-                    "type", "best_fields",
-                    "operator", "or"
-            )));
-            should.add(Map.of("match_phrase", Map.of("title", kw)));
-            should.add(Map.of("match_phrase", Map.of("content", kw)));
-            should.add(Map.of("match_phrase", Map.of("summary", kw)));
-            should.add(Map.of("term", Map.of("id", kw)));
-            parsePostIdKeyword(kw).ifPresent(postId -> should.add(Map.of("term", Map.of("postId", postId))));
-            must.add(Map.of("bool", Map.of("should", should, "minimum_should_match", 1)));
+            List<Object> termClauses = querySpec.terms().stream()
+                    .map(term -> Map.of("multi_match", Map.of(
+                            "query", term,
+                            "fields", List.of("title^5", "summary^3", "company^3", "scenario^3",
+                                    "techStacks^3", "tagNames^2", "tagSynonyms^2", "tagSearchTerms^2",
+                                    "position^2", "content"),
+                            "type", "best_fields",
+                            "operator", "and"
+                    )))
+                    .map(clause -> (Object) clause)
+                    .toList();
+            if (!termClauses.isEmpty()) {
+                must.add(Map.of("bool", Map.of(
+                        "should", termClauses,
+                        "minimum_should_match", querySpec.minimumTermMatches()
+                )));
+                should.add(Map.of("match_phrase", Map.of("title", Map.of("query", querySpec.normalized(), "boost", 8))));
+                should.add(Map.of("match_phrase", Map.of("summary", Map.of("query", querySpec.normalized(), "boost", 5))));
+                should.add(Map.of("match_phrase", Map.of("content", Map.of("query", querySpec.normalized(), "boost", 2))));
+            }
+            parsePostIdKeyword(querySpec.normalized()).ifPresent(postId -> must.add(Map.of("bool", Map.of(
+                    "should", List.of(
+                            Map.of("term", Map.of("id", postId)),
+                            Map.of("term", Map.of("postId", postId))
+                    ),
+                    "minimum_should_match", 1
+            ))));
         }
         filter.add(Map.of("term", Map.of("status", "published")));
         filter.add(Map.of("term", Map.of("visibility", 1)));
+        filter.add(Map.of("term", Map.of(
+                "contentEnvironment",
+                Post.CONTENT_ENVIRONMENT_COMMUNITY
+        )));
         if (type != null) {
             filter.add(Map.of("term", Map.of("type", type)));
         }
@@ -390,7 +406,13 @@ public class SearchFacadeImpl implements SearchFacade {
                     Map.of("match_phrase", Map.of("tagSearchTerms", clean(position)))
             ), "minimum_should_match", 1)));
         }
-        return Map.of("bool", Map.of("must", must, "filter", filter));
+        Map<String, Object> bool = new HashMap<>();
+        bool.put("must", must);
+        bool.put("filter", filter);
+        if (!should.isEmpty()) {
+            bool.put("should", should);
+        }
+        return Map.of("bool", bool);
     }
 
     private ElasticsearchSearchPage toElasticsearchPage(JsonNode json, String sort, int limit, int scanLimit,
@@ -588,7 +610,11 @@ public class SearchFacadeImpl implements SearchFacade {
                 "query", Map.of("bool", Map.of(
                         "filter", List.of(
                                 Map.of("term", Map.of("status", "published")),
-                                Map.of("term", Map.of("visibility", 1))
+                                Map.of("term", Map.of("visibility", 1)),
+                                Map.of("term", Map.of(
+                                        "contentEnvironment",
+                                        Post.CONTENT_ENVIRONMENT_COMMUNITY
+                                ))
                         ),
                         "should", List.of(
                                 Map.of("match_phrase_prefix", Map.of("title", prefix)),
@@ -705,15 +731,18 @@ public class SearchFacadeImpl implements SearchFacade {
         return result.stream().limit(limit).toList();
     }
 
-    private PageResult<PostBriefDTO> searchByMysql(String keyword, String company, String position,
+    private PageResult<PostBriefDTO> searchByMysql(SearchQuerySpec querySpec, String company, String position,
                                                    Integer type, Integer domain, String sort, String cursor, int limit,
                                                    boolean includeTestData, SearchTrustFilter trustFilter) {
         SearchCursor parsedCursor = parseSearchCursor(cursor, sort);
-        String kw = clean(keyword);
-        Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
+        Long keywordPostId = parsePostIdKeyword(querySpec.normalized()).orElse(null);
+        if (querySpec.requiresNoMatches()) {
+            return PageResult.empty();
+        }
         if ("hot".equals(sort)) {
             return searchHotByMysql(
-                    blankToNull(kw),
+                    querySpec.terms(),
+                    querySpec.minimumTermMatches(),
                     keywordPostId,
                     blankToNull(clean(company)),
                     blankToNull(clean(position)),
@@ -728,7 +757,8 @@ public class SearchFacadeImpl implements SearchFacade {
         int scanLimit = fallbackScanLimit(limit);
         List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
                 ? postMapper.searchPublicPostsFallback(
-                        blankToNull(kw),
+                        querySpec.terms(),
+                        querySpec.minimumTermMatches(),
                         keywordPostId,
                         blankToNull(clean(company)),
                         blankToNull(clean(position)),
@@ -738,7 +768,8 @@ public class SearchFacadeImpl implements SearchFacade {
                         parsedCursor.id(),
                         scanLimit)
                 : postMapper.searchPublicPostsFallbackCompat(
-                        blankToNull(kw),
+                        querySpec.terms(),
+                        querySpec.minimumTermMatches(),
                         keywordPostId,
                         blankToNull(clean(company)),
                         blankToNull(clean(position)),
@@ -796,7 +827,8 @@ public class SearchFacadeImpl implements SearchFacade {
                 .withDiagnostic("scanWindowExhausted", scanWindowExhausted);
     }
 
-    private PageResult<PostBriefDTO> searchHotByMysql(String keyword, Long keywordPostId,
+    private PageResult<PostBriefDTO> searchHotByMysql(List<String> keywordTerms, int minimumKeywordMatches,
+                                                       Long keywordPostId,
                                                        String company, String position,
                                                        Integer type, Integer domain,
                                                        SearchCursor cursor, int limit,
@@ -809,7 +841,8 @@ public class SearchFacadeImpl implements SearchFacade {
         LocalDateTime rankingTime = LocalDateTime.ofInstant(
                 Instant.ofEpochMilli(rankingMillis), ZoneOffset.UTC);
         List<PostMapper.SearchHotRow> candidates = postMapper.searchPublicPostsHotFallback(
-                keyword,
+                keywordTerms,
+                minimumKeywordMatches,
                 keywordPostId,
                 company,
                 position,
@@ -867,15 +900,17 @@ public class SearchFacadeImpl implements SearchFacade {
                 .withDiagnostic("syntheticFiltered", syntheticFiltered);
     }
 
-    private PageResult<PostBriefDTO> searchTrustedByMysql(String keyword, String company, String position,
+    private PageResult<PostBriefDTO> searchTrustedByMysql(SearchQuerySpec querySpec, String company, String position,
                                                           Integer type, Integer domain, String cursor, int limit,
                                                           boolean includeTestData, SearchTrustFilter trustFilter) {
-        String kw = clean(keyword);
-        Long keywordPostId = parsePostIdKeyword(kw).orElse(null);
+        Long keywordPostId = parsePostIdKeyword(querySpec.normalized()).orElse(null);
+        if (querySpec.requiresNoMatches()) {
+            return PageResult.empty();
+        }
         List<PostPO> candidates = migrationCheckService.tagGovernanceReady()
-                ? postMapper.searchPublicPostsFallback(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
+                ? postMapper.searchPublicPostsFallback(querySpec.terms(), querySpec.minimumTermMatches(), keywordPostId, blankToNull(clean(company)),
                 blankToNull(clean(position)), type, domain, null, null, MYSQL_FALLBACK_MAX_SCAN)
-                : postMapper.searchPublicPostsFallbackCompat(blankToNull(kw), keywordPostId, blankToNull(clean(company)),
+                : postMapper.searchPublicPostsFallbackCompat(querySpec.terms(), querySpec.minimumTermMatches(), keywordPostId, blankToNull(clean(company)),
                 blankToNull(clean(position)), type, domain, null, null, MYSQL_FALLBACK_MAX_SCAN);
         if (candidates.isEmpty()) {
             return PageResult.empty();

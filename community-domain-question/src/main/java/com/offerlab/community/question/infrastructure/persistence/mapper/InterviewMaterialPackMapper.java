@@ -97,6 +97,7 @@ public interface InterviewMaterialPackMapper extends BaseMapper<InterviewMateria
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND (p.visibility = 1 OR p.author_id = #{uid})
+              AND p.content_environment = 'COMMUNITY'
               <if test="savedOnly">
                 AND m.saved_to_prep = 1
               </if>
@@ -170,6 +171,7 @@ public interface InterviewMaterialPackMapper extends BaseMapper<InterviewMateria
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND (p.visibility = 1 OR p.author_id = #{uid})
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND (
                   e.company LIKE CONCAT('%', #{company}, '%')
@@ -238,6 +240,7 @@ public interface InterviewMaterialPackMapper extends BaseMapper<InterviewMateria
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND (
                   e.company LIKE CONCAT('%', #{company}, '%')
@@ -306,6 +309,7 @@ public interface InterviewMaterialPackMapper extends BaseMapper<InterviewMateria
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND (
                   e.company LIKE CONCAT('%', #{company}, '%')
@@ -363,6 +367,7 @@ public interface InterviewMaterialPackMapper extends BaseMapper<InterviewMateria
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND (
                   q.company LIKE CONCAT('%', #{company}, '%')
@@ -434,6 +439,7 @@ public interface InterviewMaterialPackMapper extends BaseMapper<InterviewMateria
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND (
                   q.company LIKE CONCAT('%', #{company}, '%')

@@ -103,7 +103,8 @@ public class FeedFanoutService {
     private boolean isPublicPublished(PostPublishedEvent event) {
         return event != null
                 && Integer.valueOf(Post.VIS_PUBLIC).equals(event.getVisibility())
-                && Integer.valueOf(Post.STATUS_PUBLISHED).equals(event.getPostStatus());
+                && Integer.valueOf(Post.STATUS_PUBLISHED).equals(event.getPostStatus())
+                && Post.CONTENT_ENVIRONMENT_COMMUNITY.equals(event.getContentEnvironment());
     }
 
 }

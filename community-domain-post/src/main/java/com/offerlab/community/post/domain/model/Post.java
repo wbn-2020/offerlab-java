@@ -42,6 +42,11 @@ public class Post {
     public static final int STATUS_REVIEWING = 3;
     public static final int STATUS_TAKEN_DOWN = 4;
 
+    public static final String CONTENT_ENVIRONMENT_COMMUNITY = "COMMUNITY";
+    public static final String CONTENT_ENVIRONMENT_TEST = "TEST";
+    public static final String CONTENT_ENVIRONMENT_INTERNAL = "INTERNAL";
+    public static final String CONTENT_ENVIRONMENT_UNCLASSIFIED = "UNCLASSIFIED";
+
     private Long id;
     private Long authorId;
     private Integer postType;
@@ -50,6 +55,7 @@ public class Post {
     private String coverUrl;
     private Integer visibility;
     private Integer postStatus;
+    private String contentEnvironment;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
     /** 扩展字段 JSON（公司/岗位/年限/结果 等） */
@@ -80,11 +86,16 @@ public class Post {
     }
 
     public boolean isVisibleTo(Long viewerUid, boolean isFollowing) {
+        if (!isCommunityContent(contentEnvironment)) return false;
         if (postStatus == null || postStatus != STATUS_PUBLISHED) return false;
         if (visibility == null || visibility == VIS_PUBLIC) return true;
         if (viewerUid == null) return false;
         if (visibility == VIS_SELF) return authorId.equals(viewerUid);
         if (visibility == VIS_FOLLOWER) return authorId.equals(viewerUid) || isFollowing;
         return false;
+    }
+
+    public static boolean isCommunityContent(String contentEnvironment) {
+        return CONTENT_ENVIRONMENT_COMMUNITY.equals(contentEnvironment);
     }
 }

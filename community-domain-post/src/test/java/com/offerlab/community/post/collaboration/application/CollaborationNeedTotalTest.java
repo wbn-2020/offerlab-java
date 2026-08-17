@@ -153,7 +153,7 @@ class CollaborationNeedTotalTest {
     }
 
     private static CollaborationService service(CollaborationMapper mapper) {
-        return new CollaborationService(mapper, null, null, null, null, null, null, null);
+        return new CollaborationService(mapper, null, null, null, null, null, null, null, null);
     }
 
     private static NeedRow need(Long id, Long ownerUid) {

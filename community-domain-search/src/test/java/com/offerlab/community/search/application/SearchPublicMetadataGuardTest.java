@@ -6,14 +6,12 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SearchPublicMetadataGuardTest {
 
     @Test
-    void publicViewKeepsUserFacingFallbackMetadataButDropsInternalDiagnostics() {
+    void publicViewDropsAllInfrastructureMetadata() {
         PageResult<String> internal = PageResult.<String>builder()
                 .items(List.of("post"))
                 .nextCursor("12")
@@ -28,10 +26,10 @@ class SearchPublicMetadataGuardTest {
 
         PageResult<String> publicView = internal.publicView();
 
-        assertEquals("mysql", publicView.getSource());
-        assertTrue(publicView.getDegraded());
-        assertEquals("elasticsearch_unavailable", publicView.getFallbackReason());
-        assertEquals(200, publicView.getScanLimit());
+        assertNull(publicView.getSource());
+        assertNull(publicView.getDegraded());
+        assertNull(publicView.getFallbackReason());
+        assertNull(publicView.getScanLimit());
         assertNull(publicView.getDiagnostics());
     }
 }

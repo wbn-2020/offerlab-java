@@ -1,5 +1,6 @@
 package com.offerlab.community.common.result;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,6 +17,7 @@ import java.util.Map;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class PageResult<T> {
 
     private List<T> items;
@@ -78,10 +80,6 @@ public class PageResult<T> {
                 .nextCursor(nextCursor)
                 .hasMore(Boolean.TRUE.equals(hasMore))
                 .total(total == null ? 0L : total)
-                .source(source)
-                .degraded(degraded)
-                .fallbackReason(fallbackReason)
-                .scanLimit(scanLimit)
                 .build();
     }
 }

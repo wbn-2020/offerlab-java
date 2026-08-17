@@ -64,6 +64,7 @@ public interface RelationshipMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                  WHERE f.uid = #{uid}
                    AND f.follow_status = 1
                    AND f.is_deleted = 0
@@ -186,6 +187,7 @@ public interface RelationshipMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                  WHERE f.uid = #{uid}
                    AND f.follow_status = 1
                    AND f.is_deleted = 0
@@ -249,6 +251,7 @@ public interface RelationshipMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                  WHERE f.uid = #{uid}
                    AND f.follow_status = 1
                    AND f.is_deleted = 0

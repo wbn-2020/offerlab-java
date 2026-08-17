@@ -11,6 +11,7 @@ public class PostContentRevisionQueryRow {
     private Integer visibility;
     private Integer postStatus;
     private Integer isDeleted;
+    private String contentEnvironment;
     private Integer domain;
     private Boolean anonymous;
     private LocalDateTime latestEffectiveContentRevisionAt;

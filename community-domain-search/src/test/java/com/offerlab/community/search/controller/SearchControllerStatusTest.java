@@ -5,22 +5,25 @@ import com.offerlab.community.common.result.Result;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
+import com.offerlab.community.search.api.dto.PublicSearchStatusDTO;
 import com.offerlab.community.search.api.dto.SearchStatusDTO;
 import com.offerlab.community.search.application.PostSearchIndexer;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SearchControllerStatusTest {
 
     @Test
-    void statusReturnsTheCompletePublicIndexerContractWithoutRebuildingIt() {
+    void statusMapsIndexerStateToTheSafePublicContract() {
         SearchStatusDTO expected = SearchStatusDTO.builder()
                 .status("DEGRADED")
                 .enabled(true)
@@ -29,7 +32,7 @@ class SearchControllerStatusTest {
                 .indexExists(false)
                 .indexReady(false)
                 .publicSearchAvailable(true)
-                .publicSearchDegraded(true)
+                .publicSearchDegraded(false)
                 .publicSearchSource("mysql")
                 .dbFallbackAvailable(true)
                 .fallbackSource("mysql")
@@ -48,13 +51,26 @@ class SearchControllerStatusTest {
         };
         SearchController controller = new SearchController(null, null, null, indexer);
 
-        Result<SearchStatusDTO> result = controller.status(null);
+        Result<PublicSearchStatusDTO> result = controller.status(null);
 
-        assertSame(expected, result.getData());
+        assertTrue(result.getData().isAvailable());
+        assertFalse(result.getData().isDegraded());
+        assertEquals("搜索状态正常，只返回公开且符合当前条件的内容。", result.getData().getMessage());
+        assertEquals(null, result.getData().getAction());
+        for (String forbidden : List.of(
+                "status", "enabled", "indexName", "indexExists", "indexReady",
+                "publicSearchSource", "dbFallbackAvailable", "fallbackSource",
+                "fallbackMode", "fallbackScanLimit", "fallbackSchemaReady", "diagnosticMessage"
+        )) {
+            assertFalse(Arrays.stream(PublicSearchStatusDTO.class.getDeclaredFields())
+                    .map(Field::getName)
+                    .anyMatch(forbidden::equals),
+                    "public status must not expose " + forbidden);
+        }
     }
 
     @Test
-    void publishStatusCarriesPublicSearchFallbackDiagnostics() {
+    void publishStatusExposesOnlyPublicVisibilitySignals() {
         PostBriefDTO post = PostBriefDTO.builder().id(42L).title("Searchable post").build();
         Map<String, Object> diagnostics = Map.of(
                 "hitExplanation", "mysql_fallback_no_hit_explanation",
@@ -74,10 +90,10 @@ class SearchControllerStatusTest {
         assertEquals(42L, data.get("postId"));
         assertTrue(Boolean.TRUE.equals(data.get("ready")));
         assertEquals(true, search.get("visible"));
-        assertEquals("mysql", search.get("source"));
-        assertEquals(true, search.get("degraded"));
-        assertEquals("elasticsearch_unavailable", search.get("fallbackReason"));
-        assertEquals(diagnostics, search.get("diagnostics"));
+        assertTrue(!search.containsKey("source"));
+        assertTrue(!search.containsKey("degraded"));
+        assertTrue(!search.containsKey("fallbackReason"));
+        assertTrue(!search.containsKey("diagnostics"));
     }
 
     @SuppressWarnings("unchecked")

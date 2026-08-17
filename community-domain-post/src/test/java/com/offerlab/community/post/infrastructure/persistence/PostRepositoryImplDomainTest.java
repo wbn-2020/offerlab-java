@@ -19,9 +19,12 @@ class PostRepositoryImplDomainTest {
 
     @Test
     void keepsMissingDomainUnclassifiedForLegacyPosts() throws Exception {
-        Post post = mapToDomain(postPo(), null);
+        PostPO legacy = postPo();
+        legacy.setContentEnvironment(null);
+        Post post = mapToDomain(legacy, null);
 
         assertNull(post.getDomain());
+        assertNull(post.getContentEnvironment());
     }
 
     @Test
@@ -74,6 +77,7 @@ class PostRepositoryImplDomainTest {
         post.setContent("legacy content");
         post.setVisibility(Post.VIS_PUBLIC);
         post.setPostStatus(Post.STATUS_PUBLISHED);
+        post.setContentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY);
         post.setCreateTime(LocalDateTime.of(2026, 1, 1, 12, 0));
         post.setUpdateTime(LocalDateTime.of(2026, 1, 1, 12, 0));
         return post;

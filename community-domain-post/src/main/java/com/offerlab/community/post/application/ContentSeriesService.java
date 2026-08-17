@@ -411,9 +411,10 @@ public class ContentSeriesService {
     private static void requirePublicSeriesPost(PostPO post) {
         if (Objects.equals(post.getIsDeleted(), 1)
                 || !Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
-                || !Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)) {
+                || !Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)
+                || !Post.isCommunityContent(post.getContentEnvironment())) {
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
-                    "Only public published posts can be added to a content series");
+                    "Only public published COMMUNITY posts can be added to a content series");
         }
     }
 

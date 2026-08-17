@@ -322,8 +322,14 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
     public PageResult<ContentMaintenanceTaskDTO> listMine(Long uid, String requestedStatus, long cursor, int size) {
         requireTable();
         requireId(uid);
-        return page(mapper.listMine(uid, status(requestedStatus), safeCursor(cursor), pageSize(size) + 1),
-                pageSize(size), row -> toDto(row, uid));
+        String normalizedStatus = status(requestedStatus);
+        int safeSize = pageSize(size);
+        PageResult<ContentMaintenanceTaskDTO> result = page(
+                mapper.listMine(uid, normalizedStatus, safeCursor(cursor), safeSize + 1),
+                safeSize,
+                row -> toDto(row, uid));
+        result.setTotal(mapper.countMine(uid, normalizedStatus));
+        return result;
     }
 
     public PageResult<ContentMaintenanceTaskDTO> listQueue(Integer requestedDomain, String requestedStatus,
@@ -335,16 +341,23 @@ public class ContentMaintenanceTaskService implements ContentMaintenanceTaskComm
         int safeSize = pageSize(size);
         String normalizedStatus = status(requestedStatus);
         List<ContentMaintenanceTaskRow> rows;
+        long total;
         if (domain != null || moderatedDomains.size() == 5) {
             rows = mapper.listQueue(domain, normalizedStatus, safeCursor(cursor), safeSize + 1);
+            total = mapper.countQueue(domain, normalizedStatus);
         } else {
             rows = moderatedDomains.stream()
                     .flatMap(item -> mapper.listQueue(item, normalizedStatus, safeCursor(cursor), safeSize + 1).stream())
                     .sorted((left, right) -> Long.compare(right.getId(), left.getId()))
                     .limit(safeSize + 1L)
                     .toList();
+            total = moderatedDomains.stream()
+                    .mapToLong(item -> mapper.countQueue(item, normalizedStatus))
+                    .sum();
         }
-        return page(rows, safeSize, row -> toDto(row, operatorUid));
+        PageResult<ContentMaintenanceTaskDTO> result = page(rows, safeSize, row -> toDto(row, operatorUid));
+        result.setTotal(total);
+        return result;
     }
 
     public ContentMaintenanceTaskReviewContextDTO reviewContext(Long id, Long viewerUid) {

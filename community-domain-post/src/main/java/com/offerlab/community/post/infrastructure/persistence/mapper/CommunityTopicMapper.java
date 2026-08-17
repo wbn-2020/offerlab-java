@@ -102,6 +102,7 @@ public interface CommunityTopicMapper extends BaseMapper<CommunityTopicPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                     EXISTS (
                         SELECT 1
@@ -137,6 +138,7 @@ public interface CommunityTopicMapper extends BaseMapper<CommunityTopicPO> {
                        WHERE p.is_deleted = 0
                          AND p.post_status = 1
                          AND p.visibility = 1
+                         AND p.content_environment = 'COMMUNITY'
                          AND (
                                EXISTS (
                                    SELECT 1

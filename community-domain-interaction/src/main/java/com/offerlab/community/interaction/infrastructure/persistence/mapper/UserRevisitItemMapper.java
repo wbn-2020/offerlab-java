@@ -40,6 +40,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             ORDER BY f.update_time DESC, f.id DESC
             LIMIT #{limit}
             """)
@@ -60,6 +61,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= f.create_time
               AND NOT EXISTS (
                   SELECT 1
@@ -68,6 +70,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
                     AND newer.is_deleted = 0
                     AND newer.post_status = 1
                     AND newer.visibility = 1
+                    AND newer.content_environment = 'COMMUNITY'
                     AND newer.create_time >= f.create_time
                     AND (
                         newer.create_time > p.create_time
@@ -96,6 +99,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND c.is_deleted = 0
               AND c.comment_status = 1
               AND c.author_id <> f.uid
@@ -202,6 +206,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="status != null and status != ''">
               AND r.revisit_status = #{status}
               </if>
@@ -230,6 +235,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                     CONCAT(r.source_type, ':', r.source_id) IN
                     <foreach collection="resourceKeys" item="resourceKey" open="(" separator="," close=")">
@@ -268,6 +274,7 @@ public interface UserRevisitItemMapper extends BaseMapper<UserRevisitItemPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             LIMIT 1
             """)
     UserRevisitItemPO selectOwned(@Param("id") Long id, @Param("uid") Long uid);

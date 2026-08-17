@@ -74,7 +74,9 @@ class UserApplicationServiceGrowthEventTest {
                 profileMapper,
                 userCacheService,
                 contentModerationService,
-                afterCommit);
+                afterCommit,
+                null,
+                null);
     }
 
     @Test

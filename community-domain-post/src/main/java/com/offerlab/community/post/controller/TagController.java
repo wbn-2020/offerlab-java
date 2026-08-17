@@ -46,6 +46,13 @@ public class TagController {
         return Result.ok(postFacade.listTags());
     }
 
+    @PublicApi
+    @GetMapping("/{tagId}")
+    @RateLimit(key = "'public:tag:detail:' + #tagId + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<TagDTO> detail(@PathVariable Long tagId, HttpServletRequest request) {
+        return Result.ok(postFacade.getTag(tagId));
+    }
+
     @GetMapping("/admin")
     public Result<List<TagDTO>> adminList(@RequestParam(required = false) Integer status,
                                            @RequestParam(required = false) Boolean recommended,

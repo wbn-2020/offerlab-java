@@ -21,6 +21,7 @@ public class PostPublishedEvent {
     private String content;
     private Integer visibility;
     private Integer postStatus;
+    private String contentEnvironment;
     private Integer domain;
     private Long timestamp;
     private List<Long> tagIds;

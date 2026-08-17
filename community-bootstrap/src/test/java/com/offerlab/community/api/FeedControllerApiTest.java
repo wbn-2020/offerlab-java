@@ -50,6 +50,23 @@ class FeedControllerApiTest {
     }
 
     @Test
+    void publicFeedDoesNotSerializeInternalPaginationMetadata() throws Exception {
+        when(feedFacade.getRecommendFeed(null, null, 20, null))
+                .thenReturn(PageResult.<com.offerlab.community.feed.api.dto.FeedItemVO>empty()
+                        .withMetadata("mysql", true, "elasticsearch_unavailable", 200)
+                        .withDiagnostic("queryPlan", "private"));
+
+        mvc.perform(get("/api/v1/feeds/recommend"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isArray())
+                .andExpect(jsonPath("$.data.source").doesNotExist())
+                .andExpect(jsonPath("$.data.degraded").doesNotExist())
+                .andExpect(jsonPath("$.data.fallbackReason").doesNotExist())
+                .andExpect(jsonPath("$.data.scanLimit").doesNotExist())
+                .andExpect(jsonPath("$.data.diagnostics").doesNotExist());
+    }
+
+    @Test
     void authenticatedUserCanManagePrivateFeedControls() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(7L);
         FeedControlVO control = FeedControlVO.builder()

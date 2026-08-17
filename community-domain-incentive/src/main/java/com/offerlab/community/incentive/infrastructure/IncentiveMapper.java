@@ -1293,7 +1293,7 @@ public interface IncentiveMapper {
                 FROM t_post_main p
                 LEFT JOIN t_post_extension e ON e.post_id = p.id
                 WHERE p.id = #{targetId} AND p.visibility = 1 AND p.post_status = 1
-                  AND p.is_deleted = 0 AND p.author_id > 0
+                  AND p.is_deleted = 0 AND p.content_environment = 'COMMUNITY' AND p.author_id > 0
                   AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') = 'false'
                 LIMIT 1
               </when>
@@ -1304,6 +1304,7 @@ public interface IncentiveMapper {
                 LEFT JOIN t_post_extension e ON e.post_id = p.id
                 WHERE c.id = #{targetId} AND c.comment_status = 1 AND c.is_deleted = 0
                   AND c.author_id > 0 AND p.visibility = 1 AND p.post_status = 1 AND p.is_deleted = 0
+                  AND p.content_environment = 'COMMUNITY'
                   AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') = 'false'
                 LIMIT 1
               </when>
@@ -1318,7 +1319,7 @@ public interface IncentiveMapper {
             FROM t_post_main p
             LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.id = #{postId} AND p.visibility = 1 AND p.post_status = 1
-              AND p.is_deleted = 0 AND p.author_id > 0
+              AND p.is_deleted = 0 AND p.content_environment = 'COMMUNITY' AND p.author_id > 0
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') = 'false'
             LIMIT 1
             """)
@@ -1330,7 +1331,10 @@ public interface IncentiveMapper {
                 WHEN 4 THEN 'LIFESTYLE' WHEN 5 THEN 'INVESTMENT' ELSE NULL END
             FROM t_post_main p
             JOIN t_post_extension e ON e.post_id = p.id
-            WHERE p.id = #{postId} LIMIT 1
+            WHERE p.id = #{postId}
+              AND p.is_deleted = 0
+              AND p.content_environment = 'COMMUNITY'
+            LIMIT 1
             """)
     String selectPostDomainCode(@Param("postId") Long postId);
 
@@ -1342,6 +1346,7 @@ public interface IncentiveMapper {
               AND p.visibility = 1
               AND p.post_status = 1
               AND p.is_deleted = 0
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id > 0
               AND CHAR_LENGTH(TRIM(p.title)) >= 4
               AND CHAR_LENGTH(TRIM(p.content)) >= 200
@@ -1358,6 +1363,7 @@ public interface IncentiveMapper {
               AND p.visibility = 1
               AND p.post_status = 1
               AND p.is_deleted = 0
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id > 0
               AND CHAR_LENGTH(TRIM(p.title)) >= 4
               AND CHAR_LENGTH(TRIM(p.content)) >= 200
@@ -1373,6 +1379,7 @@ public interface IncentiveMapper {
               AND p.visibility = 1
               AND p.post_status = 1
               AND p.is_deleted = 0
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id > 0
               AND CHAR_LENGTH(TRIM(p.title)) >= 4
               AND CHAR_LENGTH(TRIM(p.content)) >= 200

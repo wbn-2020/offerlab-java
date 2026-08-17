@@ -86,9 +86,14 @@ class PostSearchConsistencyGuardTest {
         assertTrue(facade.contains("body.put(\"size\", scanLimit)"), "ES search request size must use the over-fetch limit");
         assertTrue(facade.contains("boolean hasMore = visibleItems.size() > limit"), "ES hasMore must be calculated after visibility filtering");
         assertTrue(facade.contains("visibleItems.subList(0, limit)"), "ES search must trim over-fetched visible results before returning the page");
-        assertTrue(facade.contains("isSparseAfterVisibilityFiltering"), "sparse ES pages must be detected after visibility filtering");
-        assertTrue(facade.contains("rawHitCount() >= esPage.scanLimit()"), "sparse detection must only trigger when ES exhausted the scan window");
-        assertTrue(facade.contains("shouldUseMysqlFallback"), "sparse ES pages must be eligible for MySQL compensation");
+        assertTrue(facade.contains("\"operator\", \"and\""),
+                "multi-term ES queries must require all analyzed terms unless an explicit phrase clause matches");
+        assertTrue(!facade.contains("elasticsearch_empty"),
+                "a successful empty ES response must remain a real zero result instead of triggering cross-engine recall");
+        assertTrue(!facade.contains("elasticsearch_visibility_filtered"),
+                "visibility-filtered ES pages must not be compensated by a semantically different MySQL query");
+        assertTrue(!facade.contains("shouldUseMysqlFallback"),
+                "successful ES responses must not be replaced by MySQL merely because the visible page is sparse");
         assertTrue(taskService.contains("taskMapper.insertPending"), "post index rebuild task must persist PENDING before execution");
         assertTrue(taskService.contains("taskMapper.markRunning"), "post index rebuild worker must atomically claim PENDING");
         assertTrue(taskService.contains("taskMapper.heartbeat"), "post index rebuild worker must persist checkpoint and heartbeat");

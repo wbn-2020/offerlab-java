@@ -180,6 +180,7 @@ class PostKnowledgeRelationThreadTest {
                 .domain(3)
                 .postStatus(Post.STATUS_PUBLISHED)
                 .visibility(Post.VIS_PUBLIC)
+                .contentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY)
                 .build();
     }
 
@@ -190,6 +191,7 @@ class PostKnowledgeRelationThreadTest {
                 .domain(3)
                 .postStatus(Post.STATUS_PUBLISHED)
                 .visibility(Post.VIS_SELF)
+                .contentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY)
                 .build();
     }
 

@@ -237,13 +237,29 @@ class ContentMaintenanceTaskServiceTest {
     void domainModeratorQueueIsScopedWithoutExplicitDomainFilter() {
         MapperState state = new MapperState();
         state.queueRows.add(row("OPEN", 22L, 3));
+        state.queueCount = 7L;
         ContentMaintenanceTaskService service = service(state, Set.of(3), null);
 
-        List<ContentMaintenanceTaskDTO> items = service.listQueue(null, null, 77L, 0, 20).getItems();
+        var page = service.listQueue(null, null, 77L, 0, 20);
+        List<ContentMaintenanceTaskDTO> items = page.getItems();
 
         assertEquals(1, items.size());
+        assertEquals(7L, page.getTotal());
         assertEquals(3, state.requestedDomains.get(0));
         assertFalse(state.requestedDomains.contains(1));
+    }
+
+    @Test
+    void assigneeTaskListUsesDatabaseTotalInsteadOfCurrentPageSize() {
+        MapperState state = new MapperState();
+        state.mineRows.add(row("OPEN", 22L, 1));
+        state.mineCount = 9L;
+        ContentMaintenanceTaskService service = service(state, Set.of(), null);
+
+        var page = service.listMine(22L, "OPEN", 0, 20);
+
+        assertEquals(1, page.getItems().size());
+        assertEquals(9L, page.getTotal());
     }
 
     @Test
@@ -534,6 +550,9 @@ class ContentMaintenanceTaskServiceTest {
                         state.requestedDomains.add((Integer) args[0]);
                         yield state.queueRows;
                     }
+                    case "countQueue" -> state.queueCount;
+                    case "listMine" -> state.mineRows;
+                    case "countMine" -> state.mineCount;
                     case "listCandidates" -> state.candidateRows;
                     case "toString" -> "ContentMaintenanceTaskMapperStub";
                     default -> throw new UnsupportedOperationException(method.toString());
@@ -580,6 +599,7 @@ class ContentMaintenanceTaskServiceTest {
 
     private static final class MapperState {
         private final Deque<ContentMaintenanceTaskRow> locked = new ArrayDeque<>();
+        private final List<ContentMaintenanceTaskRow> mineRows = new ArrayList<>();
         private final List<ContentMaintenanceTaskRow> queueRows = new ArrayList<>();
         private final List<ContentMaintenanceTaskRow> candidateRows = new ArrayList<>();
         private final List<Integer> requestedDomains = new ArrayList<>();
@@ -597,6 +617,8 @@ class ContentMaintenanceTaskServiceTest {
         private int auditCalls;
         private int insertCalls;
         private int revisionQueryCalls;
+        private long mineCount;
+        private long queueCount;
         private boolean duplicateInsert;
         private Long replacementUid;
         private SeriesRow series;

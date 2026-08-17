@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Map;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -16,6 +18,9 @@ public class TagDTO {
     private String category;
     private Integer tagType;
     private Long useCount;
+    private Long postCount;
+    private Map<String, Long> typeDistribution;
+    private Boolean statisticsAvailable;
     private Boolean official;
     private Integer status;
     private Boolean recommended;

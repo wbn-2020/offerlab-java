@@ -23,6 +23,7 @@ public class PostDTO {
     private String coverUrl;
     private Integer visibility;
     private Integer postStatus;
+    private String contentEnvironment;
     private String extJson;
     private Integer domain;
     private Boolean anonymous;

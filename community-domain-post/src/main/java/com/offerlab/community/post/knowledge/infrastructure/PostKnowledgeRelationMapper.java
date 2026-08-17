@@ -220,11 +220,13 @@ public interface PostKnowledgeRelationMapper {
               ON source_post.id = r.source_post_id
              AND source_post.post_status = 1
              AND source_post.visibility = 1
+             AND source_post.content_environment = 'COMMUNITY'
              AND source_post.is_deleted = 0
             JOIN t_post_main target_post
               ON target_post.id = r.target_post_id
              AND target_post.post_status = 1
              AND target_post.visibility = 1
+             AND target_post.content_environment = 'COMMUNITY'
              AND target_post.is_deleted = 0
             WHERE (r.source_post_id = #{postId} OR r.target_post_id = #{postId})
               AND r.review_status = 'APPROVED'
@@ -244,11 +246,13 @@ public interface PostKnowledgeRelationMapper {
               ON source_post.id = r.source_post_id
              AND source_post.post_status = 1
              AND source_post.visibility = 1
+             AND source_post.content_environment = 'COMMUNITY'
              AND source_post.is_deleted = 0
             JOIN t_post_main target_post
               ON target_post.id = r.target_post_id
              AND target_post.post_status = 1
              AND target_post.visibility = 1
+             AND target_post.content_environment = 'COMMUNITY'
              AND target_post.is_deleted = 0
             WHERE r.relation_type IN ('PREREQUISITE_OF', 'CONTINUES', 'SUPERSEDES')
               <choose>

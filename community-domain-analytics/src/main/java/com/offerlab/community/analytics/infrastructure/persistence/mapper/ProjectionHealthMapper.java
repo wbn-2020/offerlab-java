@@ -328,6 +328,7 @@ public interface ProjectionHealthMapper {
                           AND delivery_post.is_deleted = 0
                           AND delivery_post.post_status = 1
                           AND delivery_post.visibility = 1
+                          AND delivery_post.content_environment = 'COMMUNITY'
                       )
                       OR (
                           task.delivery_type = 'SERIES'
@@ -341,6 +342,7 @@ public interface ProjectionHealthMapper {
                                AND series_post.is_deleted = 0
                                AND series_post.post_status = 1
                                AND series_post.visibility = 1
+                               AND series_post.content_environment = 'COMMUNITY'
                               WHERE submission.series_id = delivery_series.id
                                 AND submission.review_status = 'APPROVED'
                           )
@@ -373,6 +375,7 @@ public interface ProjectionHealthMapper {
                       AND delivery_post.is_deleted = 0
                       AND delivery_post.post_status = 1
                       AND delivery_post.visibility = 1
+                      AND delivery_post.content_environment = 'COMMUNITY'
                   )
                   OR (
                       task.delivery_type = 'SERIES'
@@ -386,6 +389,7 @@ public interface ProjectionHealthMapper {
                            AND series_post.is_deleted = 0
                            AND series_post.post_status = 1
                            AND series_post.visibility = 1
+                           AND series_post.content_environment = 'COMMUNITY'
                           WHERE submission.series_id = delivery_series.id
                             AND submission.review_status = 'APPROVED'
                       )
@@ -647,6 +651,10 @@ public interface ProjectionHealthMapper {
                         AND host_post.is_deleted = 0
                         AND host_post.post_status = 1
                         AND host_post.visibility = 1
+                        AND host_post.content_environment = 'COMMUNITY'
+                        AND host_post.content_environment = 'COMMUNITY'
+                        AND host_post.content_environment = 'COMMUNITY'
+                        AND host_post.content_environment = 'COMMUNITY'
                            THEN t_int_content_suggestion.post_id
                    END AS relatedPostId,
                    ext.domain AS domain
@@ -696,6 +704,7 @@ public interface ProjectionHealthMapper {
                         AND host_post.is_deleted = 0
                         AND host_post.post_status = 1
                         AND host_post.visibility = 1
+                        AND host_post.content_environment = 'COMMUNITY'
                            THEN t_post_reference.post_id
                    END AS relatedPostId,
                    ext.domain AS domain
@@ -749,6 +758,7 @@ public interface ProjectionHealthMapper {
                         AND host_post.is_deleted = 0
                         AND host_post.post_status = 1
                         AND host_post.visibility = 1
+                        AND host_post.content_environment = 'COMMUNITY'
                            THEN t_post_knowledge_relation.source_post_id
                    END AS relatedPostId,
                    ext.domain AS domain
@@ -787,6 +797,7 @@ public interface ProjectionHealthMapper {
                       OR target_post.is_deleted <> 0
                       OR target_post.post_status <> 1
                       OR target_post.visibility <> 1
+                      OR COALESCE(target_post.content_environment, '') <> 'COMMUNITY'
                   )
                 ORDER BY issueAt, relation.id
                 LIMIT #{cap}
@@ -808,6 +819,7 @@ public interface ProjectionHealthMapper {
                         AND source_post.is_deleted = 0
                         AND source_post.post_status = 1
                         AND source_post.visibility = 1
+                        AND source_post.content_environment = 'COMMUNITY'
                            THEN relation.source_post_id
                    END AS relatedPostId,
                    ext.domain AS domain
@@ -826,6 +838,7 @@ public interface ProjectionHealthMapper {
                   OR target_post.is_deleted <> 0
                   OR target_post.post_status <> 1
                   OR target_post.visibility <> 1
+                  OR COALESCE(target_post.content_environment, '') <> 'COMMUNITY'
               )
               AND (
                     #{cursor} = 0
@@ -868,6 +881,7 @@ public interface ProjectionHealthMapper {
                         AND host_post.is_deleted = 0
                         AND host_post.post_status = 1
                         AND host_post.visibility = 1
+                        AND host_post.content_environment = 'COMMUNITY'
                            THEN t_int_post_outcome.post_id
                    END AS relatedPostId,
                    ext.domain AS domain
@@ -906,6 +920,7 @@ public interface ProjectionHealthMapper {
                   AND post.is_deleted = 0
                   AND post.post_status = 1
                   AND post.visibility = 1
+                  AND post.content_environment = 'COMMUNITY'
                 ORDER BY state.update_time, state.post_id
                 LIMIT #{cap}
             ) bounded
@@ -945,6 +960,7 @@ public interface ProjectionHealthMapper {
               AND post.is_deleted = 0
               AND post.post_status = 1
               AND post.visibility = 1
+              AND post.content_environment = 'COMMUNITY'
               AND (
                     #{cursor} = 0
                     OR state.post_id < #{cursor}

@@ -117,10 +117,10 @@ class AcceptanceCommentFixtureContractTest {
                 StandardCharsets.UTF_8);
 
         assertTrue(migration.contains("991100000000000010"));
-        assertTrue(manifest.contains("\"version\":  \"20260812.01\""));
-        assertTrue(manifest.contains("\"description\":  \"demo_acceptance_comment_seed\""));
-        assertTrue(manifest.contains("\"stream\":  \"demo\""));
-        assertTrue(manifest.contains("\"autoMigrate\":  false"));
+        assertTrue(Pattern.compile("\"version\"\\s*:\\s*\"20260812\\.01\"").matcher(manifest).find());
+        assertTrue(Pattern.compile("\"description\"\\s*:\\s*\"demo_acceptance_comment_seed\"").matcher(manifest).find());
+        assertTrue(Pattern.compile("\"stream\"\\s*:\\s*\"demo\"").matcher(manifest).find());
+        assertTrue(Pattern.compile("\"demo\"\\s*:\\s*\\{[^}]*\"autoMigrate\"\\s*:\\s*false", Pattern.DOTALL).matcher(manifest).find());
         assertTrue(manifest.contains("db/flyway/demo/V20260812.01__demo_acceptance_comment_seed.sql"));
         assertFalse(manifest.contains("db/flyway/core/V20260812.01__demo_acceptance_comment_seed.sql"));
         Matcher fixtureRows = Pattern.compile(

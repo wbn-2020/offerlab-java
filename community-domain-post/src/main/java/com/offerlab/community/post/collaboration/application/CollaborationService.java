@@ -19,13 +19,17 @@ import com.offerlab.community.post.collaboration.infrastructure.persistence.Coll
 import com.offerlab.community.post.collaboration.infrastructure.persistence.CollaborationRows.*;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.model.PostDomain;
+import com.offerlab.community.user.api.UserFacade;
+import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -36,6 +40,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CollaborationService implements CollaborationNeedFollowFacade {
 
     private static final int REQUIRED_TABLES = 18;
@@ -64,6 +69,7 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
     private final DomainModeratorService domainModeratorService;
     private final DomainConfigService domainConfigService;
     private final EventPublisher eventPublisher;
+    private final UserFacade userFacade;
 
     public PageResult<NeedDTO> listNeeds(Integer domain, String status, Long viewerUid, long cursor, int size) {
         requireSchema();
@@ -159,18 +165,38 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         return toNeed(requireNeed(mapper.selectNeed(requireId(id), viewerUid)), viewerUid);
     }
 
-    public PageResult<NeedEventDTO> listNeedEvents(Long id, Long viewerUid, long cursor, int size) {
+    public NeedEventTimelineDTO listNeedEvents(Long id, Long viewerUid, long cursor, int size) {
         requireSchema();
+        long activeCursor = requireNonNegativeCursor(cursor);
         NeedRow need = requireNeed(mapper.selectNeed(requireId(id), viewerUid));
         boolean canManage = Objects.equals(need.getCreatorUid(), viewerUid)
                 || canModerate(viewerUid, need.getDomain());
         int pageSize = pageSize(size);
+        int includeManagers = canManage ? 1 : 0;
         List<NeedEventRow> rows = mapper.listNeedEvents(
-                need.getId(), viewerUid, canManage ? 1 : 0,
-                safeCursor(cursor), pageSize + 1);
-        return page(rows, pageSize,
+                need.getId(), viewerUid, includeManagers,
+                activeCursor, pageSize + 1);
+        long databaseVisibleEventCount = mapper.countVisibleNeedEvents(
+                need.getId(), viewerUid, includeManagers);
+        long skippedEventCount = mapper.countInvalidVisibleNeedEvents(
+                need.getId(), viewerUid, includeManagers);
+        long validEventCount = Math.max(0, databaseVisibleEventCount - skippedEventCount);
+        PageResult<NeedEventDTO> page = page(rows, pageSize,
                 this::toNeedEvent,
                 NeedEventRow::getId);
+        NeedEventTimelineDTO result = new NeedEventTimelineDTO();
+        result.setItems(page.getItems());
+        result.setNextCursor(page.getNextCursor());
+        result.setHasMore(page.getHasMore());
+        result.setTotal(validEventCount);
+        result.setHistoryIntegrityWarning(skippedEventCount > 0);
+        if (skippedEventCount > 0) {
+            List<Long> invalidEventIds = mapper.listInvalidVisibleNeedEventIds(
+                    need.getId(), viewerUid, includeManagers, 20);
+            log.error("Collaboration need timeline integrity issues detected: needId={}, skippedEventCount={}, invalidEventIds={}",
+                    need.getId(), skippedEventCount, invalidEventIds == null ? List.of() : invalidEventIds);
+        }
+        return result;
     }
 
     @Transactional
@@ -1043,9 +1069,12 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         Map<Integer, Boolean> moderation = new HashMap<>();
         List<OfficeHourRow> rows = mapper.listOfficeHours(activeDomain, activeStatus, viewerUid,
                 safeCursor(cursor), pageSize + 1);
+        Map<Long, UserBriefDTO> actors = loadPublicActors(
+                rows.stream().map(OfficeHourRow::getHostUid).toList());
         return page(rows, pageSize,
                 row -> toOfficeHour(row,
-                        canManageCached(row.getHostUid(), viewerUid, row.getDomain(), moderation)),
+                        canManageCached(row.getHostUid(), viewerUid, row.getDomain(), moderation),
+                        viewerUid, actors),
                 OfficeHourRow::getId);
     }
 
@@ -1058,7 +1087,8 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
             throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
         }
         return toOfficeHour(row,
-                Objects.equals(row.getHostUid(), viewerUid) || canModerate(viewerUid, row.getDomain()));
+                Objects.equals(row.getHostUid(), viewerUid) || canModerate(viewerUid, row.getDomain()),
+                viewerUid, loadPublicActors(List.of(row.getHostUid())));
     }
 
     @Transactional
@@ -1150,8 +1180,9 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
             mapper.releaseOfficeHourCapacity(row.getId());
             throw e;
         }
-        return toOfficeHourReservation(requireOfficeHourReservation(
-                mapper.lockOfficeHourReservation(id)), uid);
+        OfficeHourReservationRow created = requireOfficeHourReservation(
+                mapper.lockOfficeHourReservation(id));
+        return toOfficeHourReservation(created, uid, loadReservationActors(List.of(created)));
     }
 
     @Transactional
@@ -1167,7 +1198,8 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         int pageSize = pageSize(size);
         List<OfficeHourReservationRow> rows = mapper.listOfficeHourReservations(
                 row.getId(), manager ? null : uid, activeStatus, safeCursor(cursor), pageSize + 1);
-        return page(rows, pageSize, item -> toOfficeHourReservation(item, uid),
+        Map<Long, UserBriefDTO> actors = loadReservationActors(rows);
+        return page(rows, pageSize, item -> toOfficeHourReservation(item, uid, actors),
                 OfficeHourReservationRow::getId);
     }
 
@@ -1179,7 +1211,8 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         int pageSize = pageSize(size);
         List<OfficeHourReservationRow> rows = mapper.listOfficeHourReservations(
                 null, uid, activeStatus, safeCursor(cursor), pageSize + 1);
-        return page(rows, pageSize, item -> toOfficeHourReservation(item, uid),
+        Map<Long, UserBriefDTO> actors = loadReservationActors(rows);
+        return page(rows, pageSize, item -> toOfficeHourReservation(item, uid, actors),
                 OfficeHourReservationRow::getId);
     }
 
@@ -1210,8 +1243,9 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         if ("REJECTED".equals(decision)) {
             mapper.releaseOfficeHourCapacity(officeHour.getId());
         }
-        return toOfficeHourReservation(requireOfficeHourReservation(
-                mapper.lockOfficeHourReservation(reservation.getId())), uid);
+        OfficeHourReservationRow updated = requireOfficeHourReservation(
+                mapper.lockOfficeHourReservation(reservation.getId()));
+        return toOfficeHourReservation(updated, uid, loadReservationActors(List.of(updated)));
     }
 
     @Transactional
@@ -1234,8 +1268,9 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
             throw invalidState();
         }
         mapper.releaseOfficeHourCapacity(officeHour.getId());
-        return toOfficeHourReservation(requireOfficeHourReservation(
-                mapper.lockOfficeHourReservation(reservation.getId())), uid);
+        OfficeHourReservationRow updated = requireOfficeHourReservation(
+                mapper.lockOfficeHourReservation(reservation.getId()));
+        return toOfficeHourReservation(updated, uid, loadReservationActors(List.of(updated)));
     }
 
     @Transactional
@@ -1265,8 +1300,9 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
             throw new BizException(ErrorCode.FORBIDDEN);
         }
         mapper.completeOfficeHourReservationIfConfirmed(reservation.getId());
-        return toOfficeHourReservation(requireOfficeHourReservation(
-                mapper.lockOfficeHourReservation(reservation.getId())), uid);
+        OfficeHourReservationRow updated = requireOfficeHourReservation(
+                mapper.lockOfficeHourReservation(reservation.getId()));
+        return toOfficeHourReservation(updated, uid, loadReservationActors(List.of(updated)));
     }
 
     @Transactional
@@ -1307,10 +1343,13 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         } catch (DuplicateKeyException e) {
             throw new BizException(ErrorCode.DUPLICATE_OPERATION);
         }
-        return mapper.listOfficeHourFeedback(reservation.getId()).stream()
+        List<OfficeHourFeedbackRow> createdFeedback = mapper.listOfficeHourFeedback(reservation.getId());
+        Map<Long, UserBriefDTO> actors = loadPublicActors(
+                createdFeedback.stream().map(OfficeHourFeedbackRow::getAuthorUid).toList());
+        return createdFeedback.stream()
                 .filter(item -> id.equals(item.getId()))
                 .findFirst()
-                .map(this::toOfficeHourFeedback)
+                .map(item -> toOfficeHourFeedback(item, uid, actors))
                 .orElseThrow(() -> new BizException(ErrorCode.RESOURCE_NOT_FOUND));
     }
 
@@ -1332,9 +1371,11 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
         boolean revealMutualFeedback = moderator
                 || mapper.countOfficeHourFeedback(reservation.getId()) >= 2
                 || feedbackRevealDeadlinePassed(reservation);
+        Map<Long, UserBriefDTO> actors = loadPublicActors(
+                feedback.stream().map(OfficeHourFeedbackRow::getAuthorUid).toList());
         return feedback.stream()
                 .filter(item -> revealMutualFeedback || Objects.equals(item.getAuthorUid(), uid))
-                .map(this::toOfficeHourFeedback)
+                .map(item -> toOfficeHourFeedback(item, uid, actors))
                 .toList();
     }
 
@@ -1753,15 +1794,11 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
     private NeedEventDTO toNeedEvent(NeedEventRow row) {
         return NeedEventDTO.builder()
                 .id(row.getId())
-                .needId(row.getNeedId())
                 .eventType(row.getEventType())
-                .actorUid(row.getActorUid())
+                .hasActor(row.getActorUid() != null && row.getActorUid() > 0)
                 .fromStatus(row.getFromStatus())
                 .toStatus(row.getToStatus())
-                .targetType(row.getTargetType())
-                .targetId(row.getTargetId())
                 .note(row.getNote())
-                .visibilityScope(row.getVisibilityScope())
                 .createTime(row.getCreateTime())
                 .build();
     }
@@ -1866,14 +1903,15 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
                 .createTime(row.getCreateTime()).updateTime(row.getUpdateTime()).build();
     }
 
-    private OfficeHourDTO toOfficeHour(OfficeHourRow row, boolean canManage) {
+    private OfficeHourDTO toOfficeHour(OfficeHourRow row, boolean canManage, Long viewerUid,
+                                       Map<Long, UserBriefDTO> actors) {
         int capacity = zero(row.getCapacity());
         int reserved = Math.min(zero(row.getReservedCount()), capacity);
         boolean acceptingReservations = "OPEN".equals(row.getStatus())
                 && row.getEndsAt() != null
                 && row.getEndsAt().isAfter(LocalDateTime.now());
         return OfficeHourDTO.builder()
-                .id(row.getId()).hostUid(row.getHostUid()).domain(row.getDomain())
+                .id(row.getId()).host(toPublicActor(row.getHostUid(), viewerUid, actors)).domain(row.getDomain())
                 .title(row.getTitle()).description(row.getDescription()).topicGuidance(row.getTopicGuidance())
                 .startsAt(row.getStartsAt()).endsAt(row.getEndsAt())
                 .capacity(capacity).reservedCount(reserved)
@@ -1882,25 +1920,75 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
                 .createTime(row.getCreateTime()).updateTime(row.getUpdateTime()).build();
     }
 
-    private OfficeHourReservationDTO toOfficeHourReservation(OfficeHourReservationRow row, Long viewerUid) {
+    private OfficeHourReservationDTO toOfficeHourReservation(OfficeHourReservationRow row, Long viewerUid,
+                                                              Map<Long, UserBriefDTO> actors) {
         boolean canManage = Objects.equals(row.getHostUid(), viewerUid)
                 || Objects.equals(row.getAttendeeUid(), viewerUid);
+        String viewerRole = Objects.equals(row.getHostUid(), viewerUid)
+                ? "HOST"
+                : Objects.equals(row.getAttendeeUid(), viewerUid) ? "ATTENDEE" : "MODERATOR";
         return OfficeHourReservationDTO.builder()
-                .id(row.getId()).officeHourId(row.getOfficeHourId()).hostUid(row.getHostUid())
-                .attendeeUid(row.getAttendeeUid()).topic(row.getTopic()).contextDetail(row.getContextDetail())
+                .id(row.getId()).officeHourId(row.getOfficeHourId())
+                .host(toPublicActor(row.getHostUid(), viewerUid, actors))
+                .attendee(toPublicActor(row.getAttendeeUid(), viewerUid, actors))
+                .viewerRole(viewerRole).topic(row.getTopic()).contextDetail(row.getContextDetail())
                 .status(row.getStatus()).responseNote(row.getResponseNote())
-                .decidedBy(row.getDecidedBy()).decidedAt(row.getDecidedAt())
+                .decidedAt(row.getDecidedAt())
                 .hostConfirmedAt(row.getHostConfirmedAt()).attendeeConfirmedAt(row.getAttendeeConfirmedAt())
-                .completedAt(row.getCompletedAt()).cancelledBy(row.getCancelledBy())
-                .cancelledAt(row.getCancelledAt()).canManage(canManage)
+                .completedAt(row.getCompletedAt()).cancelledAt(row.getCancelledAt()).canManage(canManage)
                 .createTime(row.getCreateTime()).updateTime(row.getUpdateTime()).build();
     }
 
-    private OfficeHourFeedbackDTO toOfficeHourFeedback(OfficeHourFeedbackRow row) {
+    private OfficeHourFeedbackDTO toOfficeHourFeedback(OfficeHourFeedbackRow row, Long viewerUid,
+                                                        Map<Long, UserBriefDTO> actors) {
         return OfficeHourFeedbackDTO.builder()
                 .id(row.getId()).reservationId(row.getReservationId()).officeHourId(row.getOfficeHourId())
-                .authorUid(row.getAuthorUid()).targetUid(row.getTargetUid()).rating(row.getRating())
+                .author(toPublicActor(row.getAuthorUid(), viewerUid, actors)).rating(row.getRating())
                 .feedback(row.getFeedback()).createTime(row.getCreateTime()).updateTime(row.getUpdateTime())
+                .build();
+    }
+
+    private Map<Long, UserBriefDTO> loadReservationActors(Collection<OfficeHourReservationRow> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return Map.of();
+        }
+        return loadPublicActors(rows.stream()
+                .flatMap(row -> java.util.stream.Stream.of(row.getHostUid(), row.getAttendeeUid()))
+                .toList());
+    }
+
+    private Map<Long, UserBriefDTO> loadPublicActors(Collection<Long> uids) {
+        if (userFacade == null || uids == null || uids.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> normalized = uids.stream()
+                .filter(Objects::nonNull)
+                .filter(uid -> uid > 0)
+                .distinct()
+                .toList();
+        if (normalized.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, UserBriefDTO> loaded = userFacade.batchGetUserBriefs(normalized);
+        return loaded == null ? Map.of() : loaded;
+    }
+
+    private PublicActorDTO toPublicActor(Long uid, Long viewerUid, Map<Long, UserBriefDTO> actors) {
+        UserBriefDTO actor = uid == null || actors == null ? null : actors.get(uid);
+        boolean self = Objects.equals(uid, viewerUid);
+        String displayName = self
+                ? "你"
+                : actor != null && StringUtils.hasText(actor.getNickname())
+                        ? actor.getNickname().trim()
+                        : "社区成员";
+        String avatarUrl = actor != null && StringUtils.hasText(actor.getAvatarUrl())
+                ? actor.getAvatarUrl().trim()
+                : "";
+        return PublicActorDTO.builder()
+                .displayName(displayName)
+                .avatarUrl(avatarUrl)
+                .badges(List.of())
+                .self(self)
                 .build();
     }
 
@@ -2407,6 +2495,13 @@ public class CollaborationService implements CollaborationNeedFollowFacade {
 
     private static long safeCursor(long cursor) {
         return Math.max(cursor, 0);
+    }
+
+    private static long requireNonNegativeCursor(long cursor) {
+        if (cursor < 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "cursor must not be negative");
+        }
+        return cursor;
     }
 
     private static Long requireId(Long id) {

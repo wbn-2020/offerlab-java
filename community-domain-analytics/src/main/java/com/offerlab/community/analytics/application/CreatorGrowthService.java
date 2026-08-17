@@ -37,6 +37,10 @@ public class CreatorGrowthService {
     private static final String AUTO_REPRESENTATIVE_SOURCE = "auto_profile_candidate";
     private static final String HIGH_RISK_REPRESENTATIVE_SOURCE = "neutral_profile_candidate";
     private static final String MANUAL_REPRESENTATIVE_SOURCE = "manual_profile_display";
+    private static final String REPRESENTATIVE_BOUNDARY =
+            "仅用于作者主页展示，不代表平台背书或商业推荐。";
+    private static final String HIGH_RISK_REPRESENTATIVE_BOUNDARY =
+            "仅作中性主页展示，并保留风险提示；不代表专业背书或商业推荐。";
     private static final String TRUSTED_CONTENT_QUERY_FAILED = "TRUSTED_CONTENT_QUERY_FAILED";
     private static final String TRUSTED_CONTENT_ROW_MISSING = "TRUSTED_CONTENT_ROW_MISSING";
     private static final String TRUSTED_CONTENT_ROW_INVALID = "TRUSTED_CONTENT_ROW_INVALID";
@@ -309,8 +313,8 @@ public class CreatorGrowthService {
                                 : AUTO_REPRESENTATIVE_SOURCE)
                         .publicVisible(true)
                         .boundaryCopy(item.getDomain() != null && item.getDomain() == INVESTMENT_DOMAIN
-                                ? "Neutral profile display with risk context, not professional endorsement or commercial placement."
-                                : "Profile display only, not platform endorsement or commercial placement.")
+                                ? HIGH_RISK_REPRESENTATIVE_BOUNDARY
+                                : REPRESENTATIVE_BOUNDARY)
                         .build())
                 .toList();
     }
@@ -342,8 +346,8 @@ public class CreatorGrowthService {
                                         : MANUAL_REPRESENTATIVE_SOURCE)
                                 .publicVisible(true)
                                 .boundaryCopy(domain != null && domain == INVESTMENT_DOMAIN
-                                        ? "Neutral profile display with risk context, not professional endorsement or commercial placement."
-                                        : "Profile display only, not platform endorsement or commercial placement.")
+                                        ? HIGH_RISK_REPRESENTATIVE_BOUNDARY
+                                        : REPRESENTATIVE_BOUNDARY)
                                 .build();
                     })
                     .filter(item -> item.getPostId() != null)

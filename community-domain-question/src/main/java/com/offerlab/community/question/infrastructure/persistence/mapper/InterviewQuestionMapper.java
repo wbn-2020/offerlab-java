@@ -24,6 +24,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="keyword != null and keyword != ''">
                 AND (
                     q.question_text LIKE CONCAT('%', #{keyword}, '%')
@@ -206,6 +207,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="admin == false">
                 AND q.status = 1
               </if>
@@ -221,6 +223,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.normalized_hash = #{normalizedHash}
             ORDER BY (q.canonical_id IS NULL) DESC, q.appear_count DESC, q.create_time ASC, q.id ASC
             LIMIT 1
@@ -235,6 +238,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.normalized_hash = #{normalizedHash}
             """)
     int countVisibleSourcesByHash(@Param("normalizedHash") String normalizedHash);
@@ -268,6 +272,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.normalized_hash = #{normalizedHash}
             ORDER BY q.appear_count DESC, q.create_time ASC, q.id ASC
             """)
@@ -280,6 +285,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (q.normalized_hash = #{normalizedHash}
                    OR (#{canonicalId} IS NOT NULL AND (q.canonical_id = #{canonicalId} OR q.id = #{canonicalId})))
             ORDER BY (q.id = #{canonicalId}) DESC, q.status ASC, q.appear_count DESC, q.create_time ASC, q.id ASC
@@ -294,6 +300,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.id <> #{questionId}
               AND q.status IN (0, 1)
               AND q.normalized_hash <> #{normalizedHash}
@@ -342,6 +349,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.id <> #{questionId}
               AND (
                 (#{canonicalId} IS NOT NULL AND (q.canonical_id = #{canonicalId} OR q.id = #{canonicalId}))
@@ -375,6 +383,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company IS NOT NULL
               AND q.company <> ''
             GROUP BY company
@@ -391,6 +400,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company IS NOT NULL
               AND q.company <> ''
             GROUP BY company
@@ -407,6 +417,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
             ORDER BY q.appear_count DESC, q.create_time DESC
             LIMIT #{limit}
@@ -422,6 +433,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
             """)
     Map<String, Object> summarizeCompanyQuestions(@Param("company") String company);
@@ -434,6 +446,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             ORDER BY (q.appear_count * 5 + q.quality_score) DESC, q.create_time DESC
             LIMIT #{limit}
             """)
@@ -448,6 +461,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND q.company LIKE CONCAT('%', #{company}, '%')
               </if>
@@ -477,6 +491,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND t.tag_name = #{tagName}
               <if test="difficulty != null and difficulty != ''">
                 AND q.difficulty = #{difficulty}
@@ -499,6 +514,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND t.tag_name = #{tagName}
             ORDER BY (q.appear_count * 5 + q.quality_score) DESC, q.create_time DESC
             LIMIT #{limit}
@@ -518,6 +534,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND q.company LIKE CONCAT('%', #{company}, '%')
               </if>
@@ -540,6 +557,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             ORDER BY q.update_time DESC, q.id DESC
             LIMIT #{limit}
             """)
@@ -552,6 +570,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (#{cursorId} IS NULL OR q.id > #{cursorId})
             ORDER BY q.id ASC
             LIMIT #{limit}
@@ -566,6 +585,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="status != null">
                 AND q.status = #{status}
               </if>
@@ -625,6 +645,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="status != null">
                 AND q.status = #{status}
               </if>
@@ -679,6 +700,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             GROUP BY q.status
             """)
     List<Map<String, Object>> countAdminByStatus();
@@ -691,6 +713,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
               AND q.position IS NOT NULL
               AND q.position <> ''
@@ -708,6 +731,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
               AND q.position IS NOT NULL
               AND q.position <> ''
@@ -767,6 +791,7 @@ public interface InterviewQuestionMapper extends BaseMapper<InterviewQuestionPO>
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
               AND q.create_time >= #{since}
             GROUP BY DATE(q.create_time)

@@ -88,6 +88,7 @@ public interface CollaborationAnalyticsMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                 WHERE c.contributor_uid = #{uid}
 
                 UNION ALL
@@ -108,6 +109,7 @@ public interface CollaborationAnalyticsMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                 WHERE submission.submitter_uid = #{uid}
                   AND submission.review_status = 'APPROVED'
 
@@ -129,6 +131,7 @@ public interface CollaborationAnalyticsMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                 WHERE suggestion.submitter_uid = #{uid}
                   AND suggestion.review_status = 'APPROVED'
                   AND suggestion.result_status = 'COMPLETED'
@@ -159,6 +162,7 @@ public interface CollaborationAnalyticsMapper {
                           AND delivery_post.is_deleted = 0
                           AND delivery_post.post_status = 1
                           AND delivery_post.visibility = 1
+                          AND delivery_post.content_environment = 'COMMUNITY'
                           AND (
                               task.delivery_type = 'POST'
                               OR (
@@ -180,6 +184,7 @@ public interface CollaborationAnalyticsMapper {
                                  AND series_post.is_deleted = 0
                                  AND series_post.post_status = 1
                                  AND series_post.visibility = 1
+                                 AND series_post.content_environment = 'COMMUNITY'
                               WHERE delivery_submission.series_id = delivery_series.id
                                 AND delivery_submission.review_status = 'APPROVED'
                           )
@@ -201,6 +206,7 @@ public interface CollaborationAnalyticsMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                 LEFT JOIN t_post_extension extension ON extension.post_id = p.id
                 WHERE suggestion.submitter_uid = #{uid}
                   AND suggestion.decision IN ('ACCEPTED', 'PARTIAL_ACCEPTED', 'MERGED')

@@ -126,7 +126,8 @@ public class PostSearchIndexer {
             return deletePostDocument(postId);
         }
         if (!Integer.valueOf(Post.STATUS_PUBLISHED).equals(post.getPostStatus())
-                || !Integer.valueOf(Post.VIS_PUBLIC).equals(post.getVisibility())) {
+                || !Integer.valueOf(Post.VIS_PUBLIC).equals(post.getVisibility())
+                || !Post.isCommunityContent(post.getContentEnvironment())) {
             return deletePostDocument(postId);
         }
         PostExtensionPO extension = extensionMapper.selectById(postId);
@@ -172,7 +173,7 @@ public class PostSearchIndexer {
         boolean indexUsable = ensured && indexReady.get() && exists;
         DbFallbackStatus fallback = dbFallbackStatus();
         boolean publicSearchAvailable = indexUsable || fallback.available();
-        boolean publicSearchDegraded = publicSearchAvailable && !indexUsable;
+        boolean publicSearchDegraded = publicSearchDegraded(indexUsable, fallback);
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("status", indexUsable ? "UP" : fallback.available() ? "DEGRADED" : "DOWN");
         status.put("enabled", enabled);
@@ -211,7 +212,7 @@ public class PostSearchIndexer {
                 && !rebuildGate.blocksElasticsearch();
         DbFallbackStatus fallback = dbFallbackStatus();
         boolean publicSearchAvailable = indexUsable || fallback.available();
-        boolean publicSearchDegraded = publicSearchAvailable && !indexUsable;
+        boolean publicSearchDegraded = publicSearchDegraded(indexUsable, fallback);
         return SearchStatusDTO.builder()
                 .status(indexUsable ? "UP" : fallback.available() ? "DEGRADED" : "DOWN")
                 .enabled(enabled)
@@ -229,8 +230,12 @@ public class PostSearchIndexer {
                 .fallbackSchemaReady(fallback.schemaReady())
                 .message(searchStatusMessage(indexUsable, fallback))
                 .diagnosticMessage(publicSearchDiagnostic(indexUsable, fallback))
-                .action(indexUsable ? null : publicSearchAction(fallback))
+                .action(publicSearchDegraded ? publicSearchAction(fallback) : null)
                 .build();
+    }
+
+    private boolean publicSearchDegraded(boolean indexUsable, DbFallbackStatus fallback) {
+        return !indexUsable && fallback.available() && !fallback.schemaReady();
     }
 
     private DbFallbackStatus dbFallbackStatus() {
@@ -487,7 +492,11 @@ public class PostSearchIndexer {
     }
 
     private boolean isDistributableForIndex(PostPO post, PostExtensionPO extension, List<TagDTO> tags) {
-        if (post == null || post.getId() == null) {
+        if (post == null
+                || post.getId() == null
+                || !Integer.valueOf(Post.STATUS_PUBLISHED).equals(post.getPostStatus())
+                || !Integer.valueOf(Post.VIS_PUBLIC).equals(post.getVisibility())
+                || !Post.isCommunityContent(post.getContentEnvironment())) {
             return false;
         }
         PostBriefDTO brief = PostBriefDTO.builder()
@@ -508,6 +517,7 @@ public class PostSearchIndexer {
         doc.put("postId", post.getId());
         doc.put("authorId", String.valueOf(post.getAuthorId()));
         doc.put("type", post.getPostType());
+        doc.put("contentEnvironment", post.getContentEnvironment());
         doc.put("domain", validDomain(ext.path("domain")));
         doc.put("title", nullToEmpty(post.getTitle()));
         doc.put("content", nullToEmpty(post.getContent()));
@@ -565,6 +575,7 @@ public class PostSearchIndexer {
         props.put("postId", Map.of("type", "long"));
         props.put("authorId", keyword);
         props.put("type", Map.of("type", "integer"));
+        props.put("contentEnvironment", keyword);
         props.put("domain", Map.of("type", "integer"));
         props.put("title", text);
         props.put("content", Map.of("type", "text"));
@@ -619,6 +630,7 @@ public class PostSearchIndexer {
         Map<String, Object> keyword = Map.of("type", "keyword");
         Map<String, Object> text = Map.of("type", "text", "fields", Map.of("keyword", keyword));
         Map<String, Object> props = new LinkedHashMap<>();
+        props.put("contentEnvironment", keyword);
         props.put("domain", Map.of("type", "integer"));
         props.put("difficulty", keyword);
         props.put("scenario", text);
@@ -651,7 +663,18 @@ public class PostSearchIndexer {
                                         Map.of("term", Map.of("status", "published")),
                                         Map.of("term", Map.of("visibility", Post.VIS_PUBLIC))
                                 ),
-                                "must_not", List.of(Map.of("exists", Map.of("field", "domain")))
+                                "should", List.of(
+                                        Map.of("bool", Map.of(
+                                                "must_not", List.of(Map.of("exists", Map.of("field", "domain")))
+                                        )),
+                                        Map.of("bool", Map.of(
+                                                "must_not", List.of(Map.of("term", Map.of(
+                                                        "contentEnvironment",
+                                                        Post.CONTENT_ENVIRONMENT_COMMUNITY
+                                                )))
+                                        ))
+                                ),
+                                "minimum_should_match", 1
                         ))
                 ))
                 .map(result -> {
@@ -673,7 +696,11 @@ public class PostSearchIndexer {
                         "query", Map.of("bool", Map.of(
                                 "filter", List.of(
                                         Map.of("term", Map.of("status", "published")),
-                                        Map.of("term", Map.of("visibility", Post.VIS_PUBLIC))
+                                        Map.of("term", Map.of("visibility", Post.VIS_PUBLIC)),
+                                        Map.of("term", Map.of(
+                                                "contentEnvironment",
+                                                Post.CONTENT_ENVIRONMENT_COMMUNITY
+                                        ))
                                 )
                         ))
                 ))

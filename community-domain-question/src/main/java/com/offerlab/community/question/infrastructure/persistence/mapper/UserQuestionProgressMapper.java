@@ -162,6 +162,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             """)
     java.util.Map<String, Object> countOverview(@Param("uid") Long uid);
 
@@ -184,6 +185,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="company != null and company != ''">
                 AND q.company LIKE CONCAT('%', #{company}, '%')
               </if>
@@ -214,6 +216,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
             """)
     java.util.Map<String, Object> countByCompany(@Param("uid") Long uid,
@@ -229,6 +232,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND up.mistake_reason IS NOT NULL
               AND up.mistake_reason <> ''
             GROUP BY up.mistake_reason
@@ -248,6 +252,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                 (up.next_review_at IS NOT NULL AND up.next_review_at <= NOW(3))
                 OR (up.next_review_at IS NULL AND up.progress_status = 'review')
@@ -273,6 +278,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             ORDER BY up.update_time DESC
             LIMIT #{limit}
             """)
@@ -289,6 +295,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             ORDER BY up.update_time DESC
             LIMIT #{limit}
             """)
@@ -306,6 +313,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                 (up.answer_draft IS NOT NULL AND up.answer_draft <> '')
                 OR (up.star_story IS NOT NULL AND up.star_story <> '')
@@ -326,6 +334,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                 up.progress_status = 'review'
                 OR (up.progress_status = 'learning' AND up.update_time < #{learningBefore})
@@ -356,6 +365,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                 (up.next_review_at IS NOT NULL AND up.next_review_at <= NOW(3))
                 OR (up.next_review_at IS NULL AND up.progress_status = 'review')
@@ -376,6 +386,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND up.update_time >= #{since}
             ORDER BY up.update_time DESC
             LIMIT #{limit}
@@ -394,6 +405,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND up.update_time >= #{since}
             """)
     int countUpdatedSince(@Param("uid") Long uid,
@@ -415,6 +427,7 @@ public interface UserQuestionProgressMapper extends BaseMapper<UserQuestionProgr
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND up.update_time >= #{since}
             """)
     java.util.Map<String, Object> summarizeWeeklyReport(@Param("uid") Long uid,

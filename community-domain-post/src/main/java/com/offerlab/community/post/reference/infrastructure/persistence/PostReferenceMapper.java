@@ -34,6 +34,7 @@ public interface PostReferenceMapper {
               AND is_deleted = 0
               AND post_status = 1
               AND visibility = 1
+              AND content_environment = 'COMMUNITY'
             """)
     int countPublicPost(@Param("postId") Long postId);
 

@@ -38,7 +38,7 @@ class SearchSynonymRecallGuardTest {
         assertTrue(facade.contains(".synonyms(parseSynonyms(tag.getSynonyms()))"), "MySQL fallback tags must retain synonyms");
         assertTrue(facade.contains(".synonyms(textArray(tag.path(\"synonyms\")))"), "ES results must retain nested tag synonyms");
 
-        assertTrue(postMapper.contains("t.synonyms LIKE CONCAT('%', #{keyword}, '%')"), "keyword MySQL fallback must match tag synonyms");
+        assertTrue(postMapper.contains("t.synonyms LIKE CONCAT('%', #{term}, '%')"), "keyword MySQL fallback must match tag synonyms");
         assertTrue(postMapper.contains("t.synonyms LIKE CONCAT('%', #{company}, '%')"), "tech-stack MySQL filter must match tag synonyms");
         assertTrue(postMapper.contains("t.synonyms LIKE CONCAT('%', #{position}, '%')"), "scenario MySQL filter must match tag synonyms");
         assertTrue(postMapper.contains("t.synonyms LIKE CONCAT('%', #{prefix}, '%')"), "MySQL suggestions must match tag synonyms");

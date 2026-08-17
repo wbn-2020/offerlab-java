@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.List;
 
 @Data
@@ -23,6 +24,8 @@ public class CommunityTopicDTO {
     private Boolean featured;
     private Integer status;
     private Long postCount;
+    private Map<String, Long> typeDistribution;
+    private Boolean statisticsAvailable;
     private Long followerCount;
     private Boolean followed;
     private Boolean virtualTopic;

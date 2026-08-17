@@ -101,18 +101,17 @@ class SearchControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.database.publiclyVisible").value(true))
                 .andExpect(jsonPath("$.data.search.visible").value(true))
-                .andExpect(jsonPath("$.data.search.source").value("mysql"))
-                .andExpect(jsonPath("$.data.search.degraded").value(true))
-                .andExpect(jsonPath("$.data.search.fallbackReason").value("elasticsearch_unavailable"))
-                .andExpect(jsonPath("$.data.search.diagnostics.hitExplanation").value("mysql_fallback_no_hit_explanation"))
-                .andExpect(jsonPath("$.data.search.diagnostics.visibleHits").value(1))
+                .andExpect(jsonPath("$.data.search.source").doesNotExist())
+                .andExpect(jsonPath("$.data.search.degraded").doesNotExist())
+                .andExpect(jsonPath("$.data.search.fallbackReason").doesNotExist())
+                .andExpect(jsonPath("$.data.search.diagnostics").doesNotExist())
                 .andExpect(jsonPath("$.data.ready").value(true));
 
         verifyNoInteractions(indexer);
     }
 
     @Test
-    void publicStatusPreservesTheCompleteIndexerContract() throws Exception {
+    void publicStatusExposesOnlyProductSafeAvailability() throws Exception {
         when(indexer.publicStatus()).thenReturn(SearchStatusDTO.builder()
                 .status("DEGRADED")
                 .enabled(true)
@@ -135,21 +134,21 @@ class SearchControllerApiTest {
 
         mvc.perform(get("/api/v1/search/status"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("DEGRADED"))
-                .andExpect(jsonPath("$.data.available").value(false))
-                .andExpect(jsonPath("$.data.indexName").value("public-posts"))
-                .andExpect(jsonPath("$.data.indexExists").value(false))
-                .andExpect(jsonPath("$.data.indexReady").value(false))
-                .andExpect(jsonPath("$.data.publicSearchAvailable").value(true))
-                .andExpect(jsonPath("$.data.publicSearchDegraded").value(true))
-                .andExpect(jsonPath("$.data.publicSearchSource").value("mysql"))
-                .andExpect(jsonPath("$.data.dbFallbackAvailable").value(true))
-                .andExpect(jsonPath("$.data.fallbackSource").value("mysql"))
-                .andExpect(jsonPath("$.data.fallbackMode").value("tag_governance"))
-                .andExpect(jsonPath("$.data.fallbackScanLimit").value(200))
-                .andExpect(jsonPath("$.data.fallbackSchemaReady").value(true))
-                .andExpect(jsonPath("$.data.diagnosticMessage").value("public_search_using_database_fallback"))
-                .andExpect(jsonPath("$.data.action").value("Restore Elasticsearch"));
+                .andExpect(jsonPath("$.data.available").value(true))
+                .andExpect(jsonPath("$.data.degraded").value(true))
+                .andExpect(jsonPath("$.data.message").value("搜索仍可使用，但结果完整度和排序能力可能暂时受限。"))
+                .andExpect(jsonPath("$.data.action").value("继续搜索"))
+                .andExpect(jsonPath("$.data.status").doesNotExist())
+                .andExpect(jsonPath("$.data.indexName").doesNotExist())
+                .andExpect(jsonPath("$.data.indexExists").doesNotExist())
+                .andExpect(jsonPath("$.data.indexReady").doesNotExist())
+                .andExpect(jsonPath("$.data.publicSearchSource").doesNotExist())
+                .andExpect(jsonPath("$.data.dbFallbackAvailable").doesNotExist())
+                .andExpect(jsonPath("$.data.fallbackSource").doesNotExist())
+                .andExpect(jsonPath("$.data.fallbackMode").doesNotExist())
+                .andExpect(jsonPath("$.data.fallbackScanLimit").doesNotExist())
+                .andExpect(jsonPath("$.data.fallbackSchemaReady").doesNotExist())
+                .andExpect(jsonPath("$.data.diagnosticMessage").doesNotExist());
     }
 
     @Test

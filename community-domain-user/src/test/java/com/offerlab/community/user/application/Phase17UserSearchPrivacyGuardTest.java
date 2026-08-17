@@ -27,6 +27,23 @@ class Phase17UserSearchPrivacyGuardTest {
                 "Author search must not query privacy settings per candidate");
         assertTrue(service.contains(".filter(user -> !isSyntheticUser(user))"),
                 "Author search must not expose synthetic fallback users as real discovery results");
+        assertTrue(service.contains("!adminPermissionService.isAdmin(uid)"),
+                "Author discovery must exclude actual administrator accounts");
+        assertTrue(service.contains("publicContentMapper.countPublicPostsByAuthors(authorIds)"),
+                "Author discovery must use the shared public-content boundary for post counts");
+        assertTrue(service.contains("user.setPostCount(publicPostCounts.getOrDefault(user.getUid(), 0L))"),
+                "Author search DTOs must expose the real public post count");
+        String publicContentMapper = read(
+                "src/main/java/com/offerlab/community/user/infrastructure/persistence/mapper/UserPublicContentMapper.java");
+        assertTrue(publicContentMapper.contains("p.content_environment = 'COMMUNITY'")
+                        && publicContentMapper.contains("p.post_status = 1")
+                        && publicContentMapper.contains("p.visibility = 1")
+                        && publicContentMapper.contains("p.is_deleted = 0"),
+                "Public author counts must use the COMMUNITY published/public boundary");
+        assertFalse(publicContentMapper.contains("NOT LIKE")
+                        || publicContentMapper.contains("CONCAT_WS")
+                        || publicContentMapper.contains("t_post_extension"),
+                "Public author counts must not infer author eligibility from legitimate post text or metadata");
         assertTrue(controller.contains("userService.searchUsers(keyword, UserContext.get(), size, userFacade)"),
                 "Author search controller must pass the viewer into privacy-aware search");
         assertTrue(controller.contains("userFacade.isProfileVisible(viewer, uid)")

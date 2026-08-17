@@ -13,6 +13,7 @@ import com.offerlab.community.post.infrastructure.persistence.mapper.TagMapper;
 import com.offerlab.community.post.infrastructure.persistence.po.PostCounterPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostExtensionPO;
 import com.offerlab.community.post.infrastructure.persistence.po.PostPO;
+import com.offerlab.community.search.api.dto.SearchStatusDTO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -102,9 +103,22 @@ class PostSearchIndexerRebuildTest {
         assertEquals("text", ((Map<String, Object>) props.get("techStacks")).get("type"));
         assertEquals("text", ((Map<String, Object>) props.get("tagSynonyms")).get("type"));
         assertEquals("text", ((Map<String, Object>) props.get("tagSearchTerms")).get("type"));
+        assertEquals("keyword", ((Map<String, Object>) props.get("contentEnvironment")).get("type"));
         Map<String, Object> tags = (Map<String, Object>) props.get("tags");
         assertEquals("nested", tags.get("type"));
         assertTrue(((Map<String, Object>) tags.get("properties")).containsKey("synonyms"));
+    }
+
+    @Test
+    void indexPostDeletesNonCommunityDocument() {
+        PostPO testPost = post(42L);
+        testPost.setContentEnvironment(Post.CONTENT_ENVIRONMENT_TEST);
+        when(postMapper.selectById(42L)).thenReturn(testPost);
+        when(elasticsearch.deleteDocument("post_idx", "42")).thenReturn(true);
+
+        assertTrue(indexer.indexPost(42L));
+
+        verify(elasticsearch).deleteDocument("post_idx", "42");
     }
 
     @Test
@@ -168,6 +182,23 @@ class PostSearchIndexerRebuildTest {
     }
 
     @Test
+    void completeMysqlFallbackKeepsPublicSearchHealthyWhileInternalStatusRemainsDegraded() {
+        when(elasticsearch.available()).thenReturn(false);
+        when(migrationCheckService.tagGovernanceReady()).thenReturn(true);
+
+        Map<String, Object> internalStatus = indexer.status();
+        SearchStatusDTO publicStatus = indexer.publicStatus();
+
+        assertEquals("DEGRADED", internalStatus.get("status"));
+        assertEquals(true, internalStatus.get("publicSearchAvailable"));
+        assertEquals(false, internalStatus.get("publicSearchDegraded"));
+        assertEquals("mysql", internalStatus.get("publicSearchSource"));
+        assertEquals(true, publicStatus.getPublicSearchAvailable());
+        assertEquals(false, publicStatus.getPublicSearchDegraded());
+        assertEquals(null, publicStatus.getAction());
+    }
+
+    @Test
     void statusReportsDownWhenBothIndexAndFallbackAreUnavailable() {
         when(elasticsearch.available()).thenReturn(false);
         when(migrationCheckService.tagGovernanceReady()).thenThrow(new IllegalStateException("db down"));
@@ -193,6 +224,7 @@ class PostSearchIndexerRebuildTest {
         po.setContent("content " + id);
         po.setVisibility(Post.VIS_PUBLIC);
         po.setPostStatus(Post.STATUS_PUBLISHED);
+        po.setContentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY);
         po.setCreateTime(LocalDateTime.now());
         po.setUpdateTime(LocalDateTime.now());
         po.setIsDeleted(0);

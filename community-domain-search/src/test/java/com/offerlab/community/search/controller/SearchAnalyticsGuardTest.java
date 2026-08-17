@@ -92,6 +92,8 @@ class SearchAnalyticsGuardTest {
         assertTrue(facadeSource.contains("MYSQL_FALLBACK_MAX_SCAN"), "MySQL fallback must have an explicit scan ceiling");
         assertTrue(facadeSource.contains("fallbackScanLimit(limit)"), "MySQL fallback must clamp per-request scan size");
         assertTrue(facadeSource.contains("postMapper.searchPublicPostsFallback"), "search fallback must use a mapper query");
+        assertTrue(facadeSource.contains("SearchQuerySpec.from(keyword)"), "ES and MySQL fallback must share one query normalization contract");
+        assertTrue(facadeSource.contains("querySpec.minimumTermMatches()"), "fallback must use the same dynamic minimum-match threshold");
         assertTrue(facadeSource.contains("postMapper.suggestPublicPostsFallback"), "suggest fallback must use a mapper query");
         assertTrue(facadeSource.contains("emptyHints"), "empty search results must expose metadata hints instead of fake results");
         assertTrue(facadeSource.contains("mysql_fallback_no_hit_explanation"), "MySQL fallback must clearly downgrade hit explanation support");
@@ -100,9 +102,11 @@ class SearchAnalyticsGuardTest {
         assertTrue(facadeSource.contains("return List.of();"),
                 "empty suggestions must degrade clearly instead of returning fake fallback terms");
         assertTrue(postMapperSource.contains("searchPublicPostsFallback"), "post mapper must expose DB-side filtered fallback search");
-        assertTrue(postMapperSource.contains("e.company LIKE CONCAT('%', #{keyword}, '%')"), "keyword fallback search must include company metadata");
-        assertTrue(postMapperSource.contains("e.position LIKE CONCAT('%', #{keyword}, '%')"), "keyword fallback search must include position metadata");
-        assertTrue(postMapperSource.contains("t.tag_name LIKE CONCAT('%', #{keyword}, '%')"), "keyword fallback search must include post tags");
+        assertTrue(postMapperSource.contains("e.company LIKE CONCAT('%', #{term}, '%')"), "keyword fallback search must include company metadata");
+        assertTrue(postMapperSource.contains("e.position LIKE CONCAT('%', #{term}, '%')"), "keyword fallback search must include position metadata");
+        assertTrue(postMapperSource.contains("t.tag_name LIKE CONCAT('%', #{term}, '%')"), "keyword fallback search must include post tags");
+        assertTrue(postMapperSource.contains("CASE WHEN") && postMapperSource.contains("#{minimumKeywordMatches}"),
+                "fallback must calculate the normalized term-match threshold in SQL");
         assertTrue(postMapperSource.contains("t.tag_status = 1"), "governed fallback search must only recall active tags");
         assertTrue(postMapperSource.contains("t.merge_target_id IS NULL"), "governed fallback search must not recall merged tags");
         assertTrue(postMapperSource.contains("t.tag_name LIKE CONCAT('%', #{prefix}, '%')"), "suggest fallback search must include post tags");

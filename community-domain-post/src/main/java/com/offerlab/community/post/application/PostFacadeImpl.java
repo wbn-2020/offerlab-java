@@ -38,6 +38,7 @@ import com.offerlab.community.user.api.UserFacade;
 import com.offerlab.community.user.api.dto.ContactRequestPolicyCheckDTO;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -57,6 +58,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class PostFacadeImpl implements PostFacade {
 
     private final PostRepository postRepo;
@@ -358,10 +360,41 @@ public class PostFacadeImpl implements PostFacade {
 
     @Override
     public List<TagDTO> listTags() {
-        return activeTags().stream()
-                .map(this::toTagDto)
+        List<TagPO> tags = activeTags();
+        Map<Long, Long> publicPostCounts = publicPostCountsByTagIds(
+                tags.stream().map(TagPO::getId).filter(Objects::nonNull).toList());
+        return tags.stream()
+                .map(tag -> {
+                    TagDTO dto = toTagDto(tag);
+                    dto.setPostCount(publicPostCounts.getOrDefault(tag.getId(), 0L));
+                    dto.setStatisticsAvailable(true);
+                    return dto;
+                })
                 .filter(tag -> !PublicContentFilter.isSyntheticText(tag.getName()))
                 .toList();
+    }
+
+    @Override
+    public TagDTO getTag(Long tagId) {
+        if (tagId == null || tagId <= 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR);
+        }
+        TagPO tag = activeTag(tagId);
+        if (tag == null || PublicContentFilter.isSyntheticText(tag.getTagName())) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        TagDTO detail = toTagDto(tag);
+        try {
+            detail.setPostCount(tagMapper.countPublicPostsByTag(tagId));
+            detail.setTypeDistribution(typeDistribution(tagMapper.countPublicPostTypesByTag(tagId)));
+            detail.setStatisticsAvailable(true);
+        } catch (RuntimeException ex) {
+            log.warn("public tag statistics unavailable, tagId={}", tagId, ex);
+            detail.setPostCount(0L);
+            detail.setTypeDistribution(Map.of());
+            detail.setStatisticsAvailable(false);
+        }
+        return detail;
     }
 
     @Override
@@ -379,13 +412,10 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, List<TagDTO>> tags = tagsByPostIds(list.stream().map(Post::getId).toList());
         List<PostBriefDTO> visible = list.stream().map(p -> toBrief(p, tags.getOrDefault(p.getId(), List.of()))).toList();
         enrichBriefs(visible, null);
-        int syntheticFiltered = 0;
         if (!includeTestData) {
-            int beforeFilter = visible.size();
             visible = visible.stream()
                     .filter(post -> !PublicContentFilter.isSyntheticPost(post))
                     .toList();
-            syntheticFiltered = beforeFilter - visible.size();
         }
         boolean visibleHasMore = visible.size() > size;
         boolean rawHasMore = list.size() > size;
@@ -401,10 +431,8 @@ public class PostFacadeImpl implements PostFacade {
         String next = hasMore && cursorPost != null
                 ? listCursor(cursorPost.getId())
                 : null;
-        return PageResult.of(items, next, hasMore)
-                .withDiagnostic("includeTestData", includeTestData)
-                .withDiagnostic("syntheticFiltered", syntheticFiltered)
-                .withDiagnostic("testDataFilterActive", !includeTestData);
+        // Public post pages expose only the content contract. Filter telemetry stays server-side.
+        return PageResult.of(items, next, hasMore);
     }
 
     private PageResult<PostBriefDTO> pagedPo(List<PostPO> list, int size) {
@@ -608,6 +636,7 @@ public class PostFacadeImpl implements PostFacade {
                 .title(p.getTitle())
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
+                .contentEnvironment(p.getContentEnvironment())
                 .extJson(p.getExtJson())
                 .domain(effectiveDomain(p.getDomain()))
                 .anonymous(isAnonymousPost(p))
@@ -628,12 +657,20 @@ public class PostFacadeImpl implements PostFacade {
         Map<Long, PostCounterDTO> counters = batchGetCounters(postIds);
         Map<Long, UserBriefDTO> authors = userFacade.batchGetUserBriefs(
                 posts.stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet()));
+        Map<Long, Long> publicPostCounts = batchCountPublicPublishedPostsByAuthors(
+                posts.stream().map(PostBriefDTO::getAuthorId).collect(Collectors.toSet()));
         Map<Long, PostTrustSignalsDTO> trustSignals = trustSignalsByPostIds(postIds);
         posts.forEach(p -> {
             p.setCounter(counters.getOrDefault(p.getId(), emptyCounter(p.getId())));
             p.setTrustSignals(trustSignals.getOrDefault(p.getId(), emptyTrustSignals()));
             boolean revealAuthor = !isAnonymousPost(p) || canViewRealAuthor(viewerUid, p.getAuthorId());
-            p.setAuthor(revealAuthor ? sanitizeAuthor(viewerUid, p.getAuthorId(), authors.get(p.getAuthorId())) : anonymousAuthor());
+            UserBriefDTO author = revealAuthor
+                    ? sanitizeAuthor(viewerUid, p.getAuthorId(), authors.get(p.getAuthorId()))
+                    : anonymousAuthor();
+            if (revealAuthor && author != null && Boolean.TRUE.equals(author.getProfileVisible())) {
+                author.setPostCount(publicPostCounts.getOrDefault(p.getAuthorId(), 0L));
+            }
+            p.setAuthor(author);
             if (!revealAuthor) {
                 p.setAuthorId(ANONYMOUS_AUTHOR_ID);
             }
@@ -655,6 +692,7 @@ public class PostFacadeImpl implements PostFacade {
                 .coverUrl(dto.getCoverUrl())
                 .visibility(dto.getVisibility())
                 .postStatus(dto.getPostStatus())
+                .contentEnvironment(dto.getContentEnvironment())
                 .extJson(dto.getExtJson())
                 .domain(effectiveDomain(dto.getDomain()))
                 .anonymous(isAnonymousPost(dto))
@@ -667,7 +705,10 @@ public class PostFacadeImpl implements PostFacade {
     }
 
     private boolean isVisible(PostDTO dto, Long viewerUid) {
-        if (dto == null || dto.getPostStatus() == null || dto.getPostStatus() != Post.STATUS_PUBLISHED) {
+        if (dto == null
+                || !Post.isCommunityContent(dto.getContentEnvironment())
+                || dto.getPostStatus() == null
+                || dto.getPostStatus() != Post.STATUS_PUBLISHED) {
             return false;
         }
         Integer visibility = dto.getVisibility();
@@ -685,6 +726,7 @@ public class PostFacadeImpl implements PostFacade {
 
     private boolean isPubliclyVisible(Post post) {
         return post != null
+                && Post.isCommunityContent(post.getContentEnvironment())
                 && Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
                 && (post.getVisibility() == null || Objects.equals(post.getVisibility(), Post.VIS_PUBLIC));
     }
@@ -705,6 +747,7 @@ public class PostFacadeImpl implements PostFacade {
                 .coverUrl(p.getCoverUrl())
                 .visibility(p.getVisibility())
                 .postStatus(p.getPostStatus())
+                .contentEnvironment(p.getContentEnvironment())
                 .extJson(p.getExtJson())
                 .domain(effectiveDomain(p.getDomain()))
                 .anonymous(isAnonymousPost(p))
@@ -957,6 +1000,43 @@ public class PostFacadeImpl implements PostFacade {
                 : tagMapper.selectActiveTagsCompat();
     }
 
+    private TagPO activeTag(Long tagId) {
+        List<TagPO> tags = migrationCheckService.tagGovernanceReady()
+                ? tagMapper.selectActiveByIds(List.of(tagId))
+                : tagMapper.selectByIdsCompat(List.of(tagId));
+        if (tags == null || tags.isEmpty()) {
+            return null;
+        }
+        TagPO tag = tags.get(0);
+        if (tag.getIsDeleted() != null && tag.getIsDeleted() == 1) {
+            return null;
+        }
+        if (migrationCheckService.tagGovernanceReady()
+                && (!Objects.equals(tag.getTagStatus(), 1) || tag.getMergeTargetId() != null)) {
+            return null;
+        }
+        return tag;
+    }
+
+    private Map<Long, Long> publicPostCountsByTagIds(Collection<Long> tagIds) {
+        if (tagIds == null || tagIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> result = new HashMap<>();
+        List<Map<String, Object>> rows = tagMapper.countPublicPostsByTags(tagIds);
+        if (rows == null || rows.isEmpty()) {
+            return Map.of();
+        }
+        for (Map<String, Object> row : rows) {
+            Long tagId = asLong(firstPresent(row, "tagId", "tag_id", "TAGID", "TAG_ID"));
+            Long postCount = asLong(firstPresent(row, "postCount", "post_count", "POSTCOUNT", "POST_COUNT"));
+            if (tagId != null && tagId > 0) {
+                result.put(tagId, Math.max(postCount == null ? 0L : postCount, 0L));
+            }
+        }
+        return result;
+    }
+
     private List<PostTagView> selectTagsByPostIds(Collection<Long> postIds) {
         return migrationCheckService.tagGovernanceReady()
                 ? tagMapper.selectTagsByPostIds(postIds)
@@ -987,6 +1067,33 @@ public class PostFacadeImpl implements PostFacade {
                 .official(tag.getIsOfficial() != null && tag.getIsOfficial() == 1)
                 .recommended(tag.getRecommended() != null && tag.getRecommended() == 1)
                 .build();
+    }
+
+    private Map<String, Long> typeDistribution(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Long> distribution = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            Long type = asLong(firstPresent(row, "type", "TYPE", "postType", "post_type"));
+            Long count = asLong(firstPresent(row, "count", "COUNT"));
+            if (type != null && count != null && count > 0) {
+                distribution.put(String.valueOf(type), count);
+            }
+        }
+        return Map.copyOf(distribution);
+    }
+
+    private static Object firstPresent(Map<String, Object> row, String... keys) {
+        if (row == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (row.containsKey(key)) {
+                return row.get(key);
+            }
+        }
+        return null;
     }
 
     private static List<String> parseSynonyms(String synonyms) {

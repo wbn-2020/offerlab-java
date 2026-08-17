@@ -49,6 +49,14 @@ public class CommunityTopicController {
         return Result.ok(topicService.listPublic(featured, keyword, limit, UserContext.get()));
     }
 
+    @PublicApi
+    @GetMapping("/resolve")
+    @RateLimit(key = "'public:topics:resolve:' + #slug + ':' + #request.remoteAddr", rate = 180, per = 60, failOpen = false)
+    public Result<CommunityTopicDTO> resolve(@RequestParam @Size(max = 128) String slug,
+                                             HttpServletRequest request) {
+        return Result.ok(topicService.resolvePublic(slug, UserContext.get()));
+    }
+
     @GetMapping("/me/following")
     public Result<PageResult<CommunityTopicDTO>> followingTopics(@RequestParam(defaultValue = "0") long cursor,
                                                                  @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {

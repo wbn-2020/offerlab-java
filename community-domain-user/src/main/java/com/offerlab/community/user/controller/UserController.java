@@ -54,6 +54,7 @@ public class UserController {
                                         HttpServletRequest request) {
         UserBriefDTO dto = copyBrief(userFacade.getUserBrief(uid));
         if (dto != null) {
+            userService.applyPublicPostCount(dto);
             Long viewer = UserContext.get();
             if (viewer != null && !viewer.equals(uid)) {
                 dto.setIsFollowing(userFacade.isFollowing(viewer, uid));
@@ -85,7 +86,9 @@ public class UserController {
     @GetMapping("/me")
     public Result<UserBriefDTO> getMe() {
         Long uid = UserContext.require();
-        return Result.ok(userFacade.getUserBrief(uid));
+        UserBriefDTO dto = copyBrief(userFacade.getUserBrief(uid));
+        userService.applyPublicPostCount(dto);
+        return Result.ok(dto);
     }
 
     @PatchMapping("/me")

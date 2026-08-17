@@ -51,7 +51,7 @@ class SearchPaginationContractTest {
 
         Method search = SearchFacadeImpl.class.getDeclaredMethod(
                 "searchByElasticsearch",
-                String.class,
+                SearchQuerySpec.class,
                 String.class,
                 String.class,
                 Integer.class,
@@ -62,7 +62,7 @@ class SearchPaginationContractTest {
                 boolean.class
         );
         search.setAccessible(true);
-        search.invoke(facade, "java", null, null, null, null,
+        search.invoke(facade, SearchQuerySpec.from("java"), null, null, null, null,
                 "relevance", cursor, 10, false);
 
         long millis = CREATE_TIME.toInstant(ZoneOffset.UTC).toEpochMilli();
@@ -80,7 +80,8 @@ class SearchPaginationContractTest {
     void hotFallbackSqlUsesOneStableDatabaseKeyset() throws Exception {
         Select select = PostMapper.class.getMethod(
                         "searchPublicPostsHotFallback",
-                        String.class,
+                        List.class,
+                        int.class,
                         Long.class,
                         String.class,
                         String.class,

@@ -50,6 +50,7 @@ public interface ContentMaintenanceTaskMapper extends ContentMaintenanceTaskAtte
               AND source_post.is_deleted = 0
               AND source_post.post_status = 1
               AND source_post.visibility = 1
+              AND source_post.content_environment = 'COMMUNITY'
               AND task.task_status IN ('OPEN', 'CLAIMED', 'SUBMITTED')
               AND task.source_post_id IN
               <foreach collection="postIds" item="postId" open="(" separator="," close=")">
@@ -246,6 +247,18 @@ public interface ContentMaintenanceTaskMapper extends ContentMaintenanceTaskAtte
                                              @Param("limit") int limit);
 
     @Select("""
+            <script>
+            SELECT COUNT(*)
+            FROM t_collab_content_maintenance_task
+            WHERE assignee_uid = #{uid}
+              <if test="status != null and status != ''">
+                AND task_status = #{status}
+              </if>
+            </script>
+            """)
+    long countMine(@Param("uid") Long uid, @Param("status") String status);
+
+    @Select("""
             SELECT id,
                    domain,
                    source_type AS sourceType,
@@ -417,6 +430,21 @@ public interface ContentMaintenanceTaskMapper extends ContentMaintenanceTaskAtte
 
     @Select("""
             <script>
+            SELECT COUNT(*)
+            FROM t_collab_content_maintenance_task
+            WHERE 1 = 1
+              <if test="domain != null">
+                AND domain = #{domain}
+              </if>
+              <if test="status != null and status != ''">
+                AND task_status = #{status}
+              </if>
+            </script>
+            """)
+    long countQueue(@Param("domain") Integer domain, @Param("status") String status);
+
+    @Select("""
+            <script>
             SELECT task.id,
                    task.domain,
                    task.source_type AS sourceType,
@@ -440,6 +468,7 @@ public interface ContentMaintenanceTaskMapper extends ContentMaintenanceTaskAtte
                         source_post.is_deleted = 0
                         AND source_post.post_status = 1
                         AND source_post.visibility = 1
+                        AND source_post.content_environment = 'COMMUNITY'
                     )
                   )
               <if test="sourceType != null and sourceType != ''">

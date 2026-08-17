@@ -91,9 +91,9 @@ class SearchPaginationFallbackTest {
         );
         when(postSearchIndexer.ensurePostIndex()).thenReturn(false);
         when(postMapper.searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(),
                 nullable(LocalDateTime.class), nullable(Long.class), eq(4)))
-                .thenAnswer(invocation -> invocation.getArgument(6) == null ? firstWindow : List.of());
+                .thenAnswer(invocation -> invocation.getArgument(7) == null ? firstWindow : List.of());
         when(extensionMapper.selectBatchIds(List.of(104L, 103L, 102L, 101L))).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(104L, 103L, 102L, 101L))).thenReturn(List.of());
         when(postFacade.batchGetPosts(List.of(104L, 103L, 102L, 101L), null, false)).thenReturn(Map.of(
@@ -115,7 +115,7 @@ class SearchPaginationFallbackTest {
         ArgumentCaptor<LocalDateTime> cursorTime = ArgumentCaptor.forClass(LocalDateTime.class);
         ArgumentCaptor<Long> cursorId = ArgumentCaptor.forClass(Long.class);
         verify(postMapper, times(2)).searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(),
                 cursorTime.capture(), cursorId.capture(), eq(4));
         assertNull(cursorTime.getAllValues().get(0));
         assertNull(cursorId.getAllValues().get(0));
@@ -133,7 +133,7 @@ class SearchPaginationFallbackTest {
         );
         when(postSearchIndexer.ensurePostIndex()).thenReturn(false);
         when(postMapper.searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), eq(4)))
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), eq(4)))
                 .thenReturn(candidates);
         when(extensionMapper.selectBatchIds(List.of(202L, 201L))).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(202L, 201L))).thenReturn(List.of());
@@ -160,9 +160,9 @@ class SearchPaginationFallbackTest {
         );
         when(postSearchIndexer.ensurePostIndex()).thenReturn(false);
         when(postMapper.searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(),
                 nullable(LocalDateTime.class), nullable(Long.class), eq(4)))
-                .thenAnswer(invocation -> invocation.getArgument(6) == null ? firstWindow : List.of());
+                .thenAnswer(invocation -> invocation.getArgument(7) == null ? firstWindow : List.of());
         when(extensionMapper.selectBatchIds(List.of(304L, 303L, 302L, 301L))).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(304L, 303L, 302L, 301L))).thenReturn(List.of());
         when(postFacade.batchGetPosts(List.of(304L, 303L, 302L, 301L), null, false)).thenReturn(Map.of(
@@ -179,7 +179,7 @@ class SearchPaginationFallbackTest {
         ArgumentCaptor<LocalDateTime> cursorTime = ArgumentCaptor.forClass(LocalDateTime.class);
         ArgumentCaptor<Long> cursorId = ArgumentCaptor.forClass(Long.class);
         verify(postMapper, times(2)).searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(),
                 cursorTime.capture(), cursorId.capture(), eq(4));
         assertEquals(List.of(304L, 303L), firstPage.getItems().stream().map(PostBriefDTO::getId).toList());
         assertTrue(firstPage.getHasMore());
@@ -192,7 +192,7 @@ class SearchPaginationFallbackTest {
         PostPO candidate = post(301L, BASE_TIME.minusHours(1));
         String cursor = relevanceCursor(null, BASE_TIME, 302L);
         when(postMapper.searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(),
                 eq(BASE_TIME), eq(302L), eq(4)))
                 .thenReturn(List.of(candidate));
         when(extensionMapper.selectBatchIds(List.of(301L))).thenReturn(List.of());
@@ -285,7 +285,7 @@ class SearchPaginationFallbackTest {
         when(elasticsearch.postIndex()).thenReturn("post_idx");
         when(elasticsearch.search(eq("post_idx"), any())).thenReturn(Optional.empty());
         when(postMapper.searchPublicPostsFallback(
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), eq(4)))
+                eq(List.of()), eq(0), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), eq(4)))
                 .thenReturn(List.of(candidate));
         when(extensionMapper.selectBatchIds(List.of(701L))).thenReturn(List.of());
         when(tagMapper.selectTagsByPostIds(List.of(701L))).thenReturn(List.of());
@@ -297,6 +297,81 @@ class SearchPaginationFallbackTest {
         assertEquals(List.of(701L), page.getItems().stream().map(PostBriefDTO::getId).toList());
         assertEquals("mysql", page.getSource());
         assertEquals("elasticsearch_unavailable", page.getFallbackReason());
+    }
+
+    @Test
+    void successfulEmptyElasticsearchPageRemainsARealZeroResult() {
+        when(postSearchIndexer.ensurePostIndex()).thenReturn(true);
+        when(elasticsearch.postIndex()).thenReturn("post_idx");
+        when(elasticsearch.search(eq("post_idx"), any())).thenReturn(Optional.of(esHits()));
+        when(postMapper.searchPublicPostsFallback(
+                eq(List.of("OfferLab不存在关键词xyz20260814")),
+                eq(1),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq(40)))
+                .thenReturn(List.of());
+
+        PageResult<PostBriefDTO> page = facade.searchPosts(
+                "OfferLab不存在关键词xyz20260814", null, null, null, "relevance", null, 20);
+
+        assertTrue(page.getItems().isEmpty());
+        assertEquals("elasticsearch", page.getSource());
+        assertEquals(Boolean.FALSE, page.getDegraded());
+        assertNull(page.getFallbackReason());
+        verify(postMapper).searchPublicPostsFallback(
+                eq(List.of("OfferLab不存在关键词xyz20260814")),
+                eq(1),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq(40));
+    }
+
+    @Test
+    void weakOnlyKeywordReturnsZeroWithoutMysqlFallbackRecall() {
+        when(postSearchIndexer.ensurePostIndex()).thenReturn(false);
+
+        PageResult<PostBriefDTO> page = facade.searchPosts(
+                "的 和 a", null, null, null, "relevance", null, 20);
+
+        assertTrue(page.getItems().isEmpty());
+        verifyNoInteractions(postMapper);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void elasticsearchKeywordQueryUsesNormalizedTermsAndDynamicMinimumMatch() {
+        when(postSearchIndexer.ensurePostIndex()).thenReturn(true);
+        when(elasticsearch.postIndex()).thenReturn("post_idx");
+        when(elasticsearch.search(eq("post_idx"), any())).thenReturn(Optional.of(esHits()));
+
+        facade.searchPosts("OfferLab 不存在 关键词 xyz20260814", null, null, null,
+                "relevance", null, 20);
+
+        ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
+        verify(elasticsearch).search(eq("post_idx"), body.capture());
+        Map<String, Object> query = (Map<String, Object>) body.getValue().get("query");
+        Map<String, Object> bool = (Map<String, Object>) query.get("bool");
+        List<Object> must = (List<Object>) bool.get("must");
+        Map<String, Object> keywordBoolClause = (Map<String, Object>) must.get(0);
+        Map<String, Object> keywordBool = (Map<String, Object>) keywordBoolClause.get("bool");
+        List<Object> should = (List<Object>) keywordBool.get("should");
+        Map<String, Object> multiMatchClause = (Map<String, Object>) should.get(0);
+        Map<String, Object> multiMatch = (Map<String, Object>) multiMatchClause.get("multi_match");
+
+        assertEquals("and", multiMatch.get("operator"));
+        assertEquals(4, should.size());
+        assertEquals(3, keywordBool.get("minimum_should_match"));
     }
 
     private static PostPO post(long id, LocalDateTime createTime) {

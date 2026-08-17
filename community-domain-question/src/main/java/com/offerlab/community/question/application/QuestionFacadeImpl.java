@@ -1101,6 +1101,37 @@ public class QuestionFacadeImpl implements QuestionFacade {
         scheduleCompanyCacheEvictions(List.of(company), "post question cache eviction:" + post.getId());
     }
 
+    @Override
+    public List<String> resolveCompanyPrepCacheKeysForPosts(java.util.Collection<Long> postIds) {
+        if (postIds == null || postIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> normalizedPostIds = postIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> id > 0)
+                .distinct()
+                .limit(100)
+                .toList();
+        LinkedHashSet<String> companies = new LinkedHashSet<>();
+        for (Long postId : normalizedPostIds) {
+            questionMapper.selectByPostId(postId, true).stream()
+                    .map(InterviewQuestionPO::getCompany)
+                    .filter(company -> company != null && !company.isBlank())
+                    .map(this::clean)
+                    .forEach(companies::add);
+            String sourceCompany = extValue(postMapper.selectExtJsonByPostId(postId), "company");
+            if (!sourceCompany.isBlank()) {
+                companies.add(sourceCompany);
+            }
+        }
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        for (String company : companies) {
+            keys.add(CacheKeyBuilder.companyPrep(company));
+            keys.add(CacheKeyBuilder.companyPrep(canonicalCompany(company)));
+        }
+        return List.copyOf(keys);
+    }
+
     private List<ExtractedQuestion> extractQuestions(PostDTO post) {
         return normalizeExtractedQuestions(questionExtractor.extract(post));
     }

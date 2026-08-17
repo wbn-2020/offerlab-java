@@ -167,6 +167,24 @@ class PostPublicRevisionBoundaryPageServiceTest {
     }
 
     @Test
+    void nonCommunityRowsFailClosedEvenIfTheMapperContractIsViolated() {
+        LocalDateTime windowStart = LocalDateTime.of(2026, 8, 4, 0, 0);
+        PostContentRevisionQueryRow internal = row(101L, 9L, 3, "revision-101", windowStart.plusMinutes(1));
+        internal.setContentEnvironment("INTERNAL");
+        when(versionMapper.qualitySignalSchemaColumnCount()).thenReturn(6);
+        when(versionMapper.selectPublicContentRevisionBoundaryRows(3, 100L, 250L, 2))
+                .thenReturn(List.of(internal));
+        PostContentRevisionQueryService service = new PostContentRevisionQueryService(versionMapper);
+
+        var result = service.queryPublicRevisionBoundaryPage(query(windowStart, 100L, 250L, 2));
+
+        assertFalse(result.available());
+        assertTrue(result.items().isEmpty());
+        verify(versionMapper, never()).existsPublicContentRevisionBoundaryAfter(
+                anyInt(), anyLong(), anyLong());
+    }
+
+    @Test
     void unauthorizedChannelIsAnEmptyProjectionAndNeverTouchesPersistence() {
         LocalDateTime windowStart = LocalDateTime.of(2026, 8, 4, 0, 0);
         PostContentRevisionQueryService service = new PostContentRevisionQueryService(versionMapper);
@@ -199,6 +217,7 @@ class PostPublicRevisionBoundaryPageServiceTest {
         row.setIsDeleted(0);
         row.setVisibility(1);
         row.setPostStatus(1);
+        row.setContentEnvironment("COMMUNITY");
         row.setLatestEffectiveContentRevisionToken(revisionToken);
         row.setLatestEffectiveContentRevisionAt(effectiveAt);
         row.setQualitySignalRevisionToken(revisionToken);

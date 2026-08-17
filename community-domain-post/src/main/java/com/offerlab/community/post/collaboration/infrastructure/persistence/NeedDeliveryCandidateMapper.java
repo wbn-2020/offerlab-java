@@ -48,6 +48,7 @@ public interface NeedDeliveryCandidateMapper {
                    AND p.is_deleted = 0
                    AND p.post_status = 1
                    AND p.visibility = 1
+                   AND p.content_environment = 'COMMUNITY'
                    <if test="resolutionType != null and resolutionType != ''">
                      <choose>
                        <when test="resolutionType == 'QUESTION'">

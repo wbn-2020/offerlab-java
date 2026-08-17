@@ -161,6 +161,64 @@ public interface TagMapper extends BaseMapper<TagPO> {
 
     @Select("""
             <script>
+            SELECT COUNT(DISTINCT p.id)
+            FROM t_post_main p
+            JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
+            JOIN t_tag t ON t.id = r.tag_id
+                AND t.is_deleted = 0
+                AND t.tag_status = 1
+                AND t.merge_target_id IS NULL
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
+            </script>
+            """)
+    long countPublicPostsByTag(@Param("tagId") Long tagId);
+
+    @Select("""
+            <script>
+            SELECT r.tag_id AS tagId, COUNT(DISTINCT p.id) AS postCount
+            FROM t_post_main p
+            JOIN t_post_tag_ref r ON r.post_id = p.id
+            JOIN t_tag t ON t.id = r.tag_id
+                AND t.is_deleted = 0
+                AND t.tag_status = 1
+                AND t.merge_target_id IS NULL
+            WHERE r.tag_id IN
+            <foreach collection="tagIds" item="tagId" open="(" separator="," close=")">
+                #{tagId}
+            </foreach>
+              AND p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
+            GROUP BY r.tag_id
+            </script>
+            """)
+    List<java.util.Map<String, Object>> countPublicPostsByTags(@Param("tagIds") Collection<Long> tagIds);
+
+    @Select("""
+            <script>
+            SELECT p.post_type AS type, COUNT(DISTINCT p.id) AS count
+            FROM t_post_main p
+            JOIN t_post_tag_ref r ON r.post_id = p.id AND r.tag_id = #{tagId}
+            JOIN t_tag t ON t.id = r.tag_id
+                AND t.is_deleted = 0
+                AND t.tag_status = 1
+                AND t.merge_target_id IS NULL
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
+            GROUP BY p.post_type
+            ORDER BY count DESC, type ASC
+            </script>
+            """)
+    List<java.util.Map<String, Object>> countPublicPostTypesByTag(@Param("tagId") Long tagId);
+
+    @Select("""
+            <script>
             SELECT id, tag_name, tag_type, use_count, is_official, create_time, update_time, is_deleted
             FROM t_tag
             WHERE is_deleted = 0
@@ -288,6 +346,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               <if test="domain != null">
               AND e.domain = #{domain}
@@ -319,6 +378,7 @@ public interface TagMapper extends BaseMapper<TagPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.create_time >= #{since}
                 GROUP BY e.domain, t.id, t.tag_name, t.use_count
               ) grouped

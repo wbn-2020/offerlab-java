@@ -14,6 +14,7 @@ import com.offerlab.community.infra.tx.AfterCommitExecutor;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
+import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -247,6 +248,7 @@ class PostApplicationServiceDomainTest {
                 .content("content")
                 .visibility(Post.VIS_PUBLIC)
                 .postStatus(Post.STATUS_REVIEWING)
+                .contentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY)
                 .domain(Post.DOMAIN_INVESTMENT)
                 .version(3)
                 .build();
@@ -256,7 +258,9 @@ class PostApplicationServiceDomainTest {
 
         service.resolvePendingPostReview(102L, 99L, true, "approved");
 
-        verify(events).publish(any());
+        var publishedEvent = org.mockito.ArgumentCaptor.forClass(PostPublishedEvent.class);
+        verify(events).publish(publishedEvent.capture());
+        assertEquals(Post.CONTENT_ENVIRONMENT_COMMUNITY, publishedEvent.getValue().getContentEnvironment());
         var task = org.mockito.ArgumentCaptor.forClass(Runnable.class);
         verify(afterCommit).execute(task.capture(), org.mockito.ArgumentMatchers.contains("post review detail eviction"));
         verifyNoInteractions(postDetailCache);

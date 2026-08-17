@@ -73,6 +73,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
                       AND p.is_deleted = 0
                       AND p.post_status = 1
                       AND (p.visibility = 1 OR p.visibility IS NULL)
+                      AND p.content_environment = 'COMMUNITY'
               )
             ORDER BY create_time DESC, id DESC
             LIMIT #{limit}
@@ -136,6 +137,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
               AND is_deleted = 0
               AND post_status = 1
               AND (visibility = 1 OR visibility IS NULL)
+              AND content_environment = 'COMMUNITY'
             """)
     int updateLatestEffectiveContentRevision(@Param("postId") Long postId,
                                              @Param("revisionToken") String revisionToken,
@@ -148,6 +150,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
                    p.visibility AS visibility,
                    p.post_status AS postStatus,
                    p.is_deleted AS isDeleted,
+                   p.content_environment AS contentEnvironment,
                    CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.domain')), '') AS UNSIGNED) AS domain,
                    CASE WHEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false')
                              IN ('true', '1') THEN 1 ELSE 0 END AS anonymous,
@@ -179,6 +182,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND (p.visibility = 1 OR p.visibility IS NULL)
+              AND p.content_environment = 'COMMUNITY'
               AND (e.domain <> 2
                    OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false')
                        NOT IN ('true', '1'))
@@ -192,6 +196,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
                    p.visibility AS visibility,
                    p.post_status AS postStatus,
                    p.is_deleted AS isDeleted,
+                   p.content_environment AS contentEnvironment,
                    e.domain AS domain,
                    CASE WHEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false')
                              IN ('true', '1') THEN 1 ELSE 0 END AS anonymous,
@@ -211,6 +216,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND (p.visibility = 1 OR p.visibility IS NULL)
+              AND p.content_environment = 'COMMUNITY'
               AND (e.domain <> 2
                    OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false')
                        NOT IN ('true', '1'))
@@ -234,6 +240,7 @@ public interface PostVersionHistoryMapper extends BaseMapper<PostVersionHistoryP
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND (p.visibility = 1 OR p.visibility IS NULL)
+                  AND p.content_environment = 'COMMUNITY'
                   AND (e.domain <> 2
                        OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false')
                            NOT IN ('true', '1'))

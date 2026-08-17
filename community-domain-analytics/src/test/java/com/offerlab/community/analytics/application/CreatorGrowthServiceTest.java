@@ -327,7 +327,7 @@ class CreatorGrowthServiceTest {
         assertFalse(allCopy.contains("influence"));
         assertEquals(1, workspace.getRepresentativePosts().size());
         assertEquals("neutral_profile_candidate", workspace.getRepresentativePosts().get(0).getSource());
-        assertTrue(workspace.getRepresentativePosts().get(0).getBoundaryCopy().toLowerCase().contains("risk context"));
+        assertTrue(workspace.getRepresentativePosts().get(0).getBoundaryCopy().contains("风险提示"));
         assertTrue(workspace.getCreatorTopPosts().get(0).getReason().toLowerCase().contains("risk context"));
         assertFalse(workspace.getTrustedContent().isDegraded());
         assertNull(workspace.getTrustedContent().getFallbackReason());
@@ -462,7 +462,7 @@ class CreatorGrowthServiceTest {
                 .toList());
         assertEquals("manual_profile_display", saved.get(0).getSource());
         assertTrue(saved.get(0).isPublicVisible());
-        assertTrue(saved.get(0).getBoundaryCopy().contains("Profile display only"));
+        assertEquals("仅用于作者主页展示，不代表平台背书或商业推荐。", saved.get(0).getBoundaryCopy());
         verify(representativePostMapper).softDeleteByCreatorUid(8L);
         verify(representativePostMapper).upsertActivePost(501L, 8L, 1002L, 0);
         verify(representativePostMapper).upsertActivePost(502L, 8L, 1001L, 1);

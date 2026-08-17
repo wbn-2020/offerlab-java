@@ -17,6 +17,15 @@ import java.util.Map;
 public interface PostMapper extends BaseMapper<PostPO> {
 
     @Select("""
+            SELECT e.ext_json
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e ON e.post_id = p.id
+            WHERE p.id = #{postId}
+              AND p.is_deleted = 0
+            """)
+    String selectExtJsonByPostId(@Param("postId") Long postId);
+
+    @Select("""
             SELECT *
             FROM t_post_main
             WHERE id = #{id}
@@ -33,6 +42,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               <if test="domain != null">
               AND e.domain = #{domain}
@@ -56,6 +66,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.create_time >= #{since}
                   <if test="domain != null">
                   AND e.domain = #{domain}
@@ -82,6 +93,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.post_type = 1
             ) x
             WHERE x.company IS NOT NULL
@@ -104,6 +116,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.create_time >= #{since}
                   <if test="domain != null">
                   AND e.domain = #{domain}
@@ -131,6 +144,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.create_time >= #{since}
                   <if test="domain != null">
                   AND e.domain = #{domain}
@@ -153,6 +167,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.post_type = 1
                   AND e.company = #{company}
                   AND (#{since} IS NULL OR p.create_time >= #{since})
@@ -171,6 +186,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               <if test="domain != null">
               AND e.domain = #{domain}
@@ -193,6 +209,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id = #{authorId}
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
@@ -211,6 +228,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id IN
               <foreach collection="authorIds" item="authorId" open="(" separator="," close=")">
                 #{authorId}
@@ -248,6 +266,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND (#{domain} IS NULL
                        OR e_domain.domain = #{domain})
             )
@@ -293,6 +312,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="authorId != null">
               AND p.author_id = #{authorId}
               </if>
@@ -349,6 +369,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="authorId != null">
               AND p.author_id = #{authorId}
               </if>
@@ -397,6 +418,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="cursorTime != null">
               AND (
                     p.create_time &lt; #{cursorTime}
@@ -423,6 +445,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="domain != null">
               AND e.domain = #{domain}
               </if>
@@ -469,6 +492,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               <if test="postType != null">
               AND p.post_type = #{postType}
               </if>
@@ -535,12 +559,117 @@ public interface PostMapper extends BaseMapper<PostPO> {
                                           @Param("limit") int limit);
 
     @Select("""
+            <script>
+            SELECT COUNT(DISTINCT p.id)
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e_topic ON e_topic.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
+              AND (
+                    <if test="tagIds != null and tagIds.size() > 0">
+                    EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref ptr
+                        WHERE ptr.post_id = p.id
+                          AND ptr.tag_id IN
+                          <foreach collection="tagIds" item="tagId" open="(" separator="," close=")">
+                              #{tagId}
+                          </foreach>
+                    )
+                    OR
+                    </if>
+                    p.title LIKE CONCAT('%', #{keyword}, '%')
+                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.contextTopicId')) = CAST(#{topicId} AS CHAR)
+                    OR JSON_CONTAINS(JSON_EXTRACT(e_topic.ext_json, '$.topicNames'), JSON_QUOTE(#{keyword}))
+                    OR EXISTS (
+                        SELECT 1
+                        FROM JSON_TABLE(
+                            COALESCE(JSON_EXTRACT(e_topic.ext_json, '$.topicNames'), JSON_ARRAY()),
+                            '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                        ) AS topic_item
+                        WHERE LOWER(topic_item.topic_name) = LOWER(#{keyword})
+                    )
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                    )
+                  )
+            </script>
+            """)
+    long countPublicPostsByTopic(@Param("topicId") Long topicId,
+                                 @Param("tagIds") Collection<Long> tagIds,
+                                 @Param("keyword") String keyword);
+
+    @Select("""
+            <script>
+            SELECT p.post_type AS type, COUNT(DISTINCT p.id) AS count
+            FROM t_post_main p
+            LEFT JOIN t_post_extension e_topic ON e_topic.post_id = p.id
+            WHERE p.is_deleted = 0
+              AND p.post_status = 1
+              AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
+              AND (
+                    <if test="tagIds != null and tagIds.size() > 0">
+                    EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref ptr
+                        WHERE ptr.post_id = p.id
+                          AND ptr.tag_id IN
+                          <foreach collection="tagIds" item="tagId" open="(" separator="," close=")">
+                              #{tagId}
+                          </foreach>
+                    )
+                    OR
+                    </if>
+                    p.title LIKE CONCAT('%', #{keyword}, '%')
+                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.contextTopicId')) = CAST(#{topicId} AS CHAR)
+                    OR JSON_CONTAINS(JSON_EXTRACT(e_topic.ext_json, '$.topicNames'), JSON_QUOTE(#{keyword}))
+                    OR EXISTS (
+                        SELECT 1
+                        FROM JSON_TABLE(
+                            COALESCE(JSON_EXTRACT(e_topic.ext_json, '$.topicNames'), JSON_ARRAY()),
+                            '$[*]' COLUMNS(topic_name VARCHAR(128) PATH '$')
+                        ) AS topic_item
+                        WHERE LOWER(topic_item.topic_name) = LOWER(#{keyword})
+                    )
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e_topic.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM t_post_tag_ref r
+                        JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
+                        WHERE r.post_id = p.id
+                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                    )
+                  )
+            GROUP BY p.post_type
+            ORDER BY count DESC, type ASC
+            </script>
+            """)
+    List<Map<String, Object>> countPublicPostTypesByTopic(@Param("topicId") Long topicId,
+                                                          @Param("tagIds") Collection<Long> tagIds,
+                                                          @Param("keyword") String keyword);
+
+    @Select("""
             SELECT p.*
             FROM t_post_main p
             LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
@@ -561,6 +690,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%CODEX%'
@@ -582,18 +712,21 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
-              <if test="keyword != null and keyword != ''">
+              AND p.content_environment = 'COMMUNITY'
+              <if test="keywordPostId != null">
+              AND p.id = #{keywordPostId}
+              </if>
+              <if test="keywordTerms != null and !keywordTerms.isEmpty()">
               AND (
-                    p.title LIKE CONCAT('%', #{keyword}, '%')
-                    <if test="keywordPostId != null">
-                    OR p.id = #{keywordPostId}
-                    </if>
-                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
-                    OR e.company LIKE CONCAT('%', #{keyword}, '%')
-                    OR e.position LIKE CONCAT('%', #{keyword}, '%')
-                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
-                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
-                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+              <foreach collection="keywordTerms" item="term" separator=" + ">
+              CASE WHEN (
+                    p.title LIKE CONCAT('%', #{term}, '%')
+                    OR p.content LIKE CONCAT('%', #{term}, '%')
+                    OR e.company LIKE CONCAT('%', #{term}, '%')
+                    OR e.position LIKE CONCAT('%', #{term}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{term}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{term}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{term}, '%')
                     OR EXISTS (
                         SELECT 1
                         FROM t_post_tag_ref r
@@ -602,11 +735,13 @@ public interface PostMapper extends BaseMapper<PostPO> {
                           AND t.merge_target_id IS NULL
                         WHERE r.post_id = p.id
                           AND (
-                                t.tag_name LIKE CONCAT('%', #{keyword}, '%')
-                                OR t.synonyms LIKE CONCAT('%', #{keyword}, '%')
+                                t.tag_name LIKE CONCAT('%', #{term}, '%')
+                                OR t.synonyms LIKE CONCAT('%', #{term}, '%')
                               )
                     )
-                  )
+                  ) THEN 1 ELSE 0 END
+              </foreach>
+              ) >= #{minimumKeywordMatches}
               </if>
               <if test="company != null and company != ''">
               AND (
@@ -658,7 +793,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             </script>
             """)
-    List<PostPO> searchPublicPostsFallback(@Param("keyword") String keyword,
+    List<PostPO> searchPublicPostsFallback(@Param("keywordTerms") List<String> keywordTerms,
+                                           @Param("minimumKeywordMatches") int minimumKeywordMatches,
                                            @Param("keywordPostId") Long keywordPostId,
                                            @Param("company") String company,
                                            @Param("position") String position,
@@ -676,26 +812,31 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
-              <if test="keyword != null and keyword != ''">
+              AND p.content_environment = 'COMMUNITY'
+              <if test="keywordPostId != null">
+              AND p.id = #{keywordPostId}
+              </if>
+              <if test="keywordTerms != null and !keywordTerms.isEmpty()">
               AND (
-                    p.title LIKE CONCAT('%', #{keyword}, '%')
-                    <if test="keywordPostId != null">
-                    OR p.id = #{keywordPostId}
-                    </if>
-                    OR p.content LIKE CONCAT('%', #{keyword}, '%')
-                    OR e.company LIKE CONCAT('%', #{keyword}, '%')
-                    OR e.position LIKE CONCAT('%', #{keyword}, '%')
-                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
-                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
-                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+              <foreach collection="keywordTerms" item="term" separator=" + ">
+              CASE WHEN (
+                    p.title LIKE CONCAT('%', #{term}, '%')
+                    OR p.content LIKE CONCAT('%', #{term}, '%')
+                    OR e.company LIKE CONCAT('%', #{term}, '%')
+                    OR e.position LIKE CONCAT('%', #{term}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{term}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{term}, '%')
+                    OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{term}, '%')
                     OR EXISTS (
                         SELECT 1
                         FROM t_post_tag_ref r
                         JOIN t_tag t ON t.id = r.tag_id AND t.is_deleted = 0
                         WHERE r.post_id = p.id
-                          AND t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                          AND t.tag_name LIKE CONCAT('%', #{term}, '%')
                     )
-                  )
+                  ) THEN 1 ELSE 0 END
+              </foreach>
+              ) >= #{minimumKeywordMatches}
               </if>
               <if test="company != null and company != ''">
               AND (
@@ -737,7 +878,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             </script>
             """)
-    List<PostPO> searchPublicPostsFallbackCompat(@Param("keyword") String keyword,
+    List<PostPO> searchPublicPostsFallbackCompat(@Param("keywordTerms") List<String> keywordTerms,
+                                                  @Param("minimumKeywordMatches") int minimumKeywordMatches,
                                                   @Param("keywordPostId") Long keywordPostId,
                                                   @Param("company") String company,
                                                  @Param("position") String position,
@@ -769,18 +911,21 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
-                  <if test="keyword != null and keyword != ''">
+                  AND p.content_environment = 'COMMUNITY'
+                  <if test="keywordPostId != null">
+                  AND p.id = #{keywordPostId}
+                  </if>
+                  <if test="keywordTerms != null and !keywordTerms.isEmpty()">
                   AND (
-                        p.title LIKE CONCAT('%', #{keyword}, '%')
-                        <if test="keywordPostId != null">
-                        OR p.id = #{keywordPostId}
-                        </if>
-                        OR p.content LIKE CONCAT('%', #{keyword}, '%')
-                        OR e.company LIKE CONCAT('%', #{keyword}, '%')
-                        OR e.position LIKE CONCAT('%', #{keyword}, '%')
-                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{keyword}, '%')
-                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{keyword}, '%')
-                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{keyword}, '%')
+                  <foreach collection="keywordTerms" item="term" separator=" + ">
+                  CASE WHEN (
+                        p.title LIKE CONCAT('%', #{term}, '%')
+                        OR p.content LIKE CONCAT('%', #{term}, '%')
+                        OR e.company LIKE CONCAT('%', #{term}, '%')
+                        OR e.position LIKE CONCAT('%', #{term}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.scenario')) LIKE CONCAT('%', #{term}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.summary')) LIKE CONCAT('%', #{term}, '%')
+                        OR JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.techStacks')) LIKE CONCAT('%', #{term}, '%')
                         OR EXISTS (
                             SELECT 1
                             FROM t_post_tag_ref r
@@ -791,13 +936,15 @@ public interface PostMapper extends BaseMapper<PostPO> {
                             </if>
                             WHERE r.post_id = p.id
                               AND (
-                                    t.tag_name LIKE CONCAT('%', #{keyword}, '%')
+                                    t.tag_name LIKE CONCAT('%', #{term}, '%')
                                     <if test="tagGovernanceReady">
-                                    OR t.synonyms LIKE CONCAT('%', #{keyword}, '%')
+                                    OR t.synonyms LIKE CONCAT('%', #{term}, '%')
                                     </if>
                                   )
                         )
-                      )
+                  ) THEN 1 ELSE 0 END
+                  </foreach>
+                  ) >= #{minimumKeywordMatches}
                   </if>
                   <if test="company != null and company != ''">
                   AND (
@@ -863,7 +1010,8 @@ public interface PostMapper extends BaseMapper<PostPO> {
             LIMIT #{limit}
             </script>
             """)
-    List<SearchHotRow> searchPublicPostsHotFallback(@Param("keyword") String keyword,
+    List<SearchHotRow> searchPublicPostsHotFallback(@Param("keywordTerms") List<String> keywordTerms,
+                                                     @Param("minimumKeywordMatches") int minimumKeywordMatches,
                                                      @Param("keywordPostId") Long keywordPostId,
                                                      @Param("company") String company,
                                                      @Param("position") String position,
@@ -884,6 +1032,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               <if test="domain != null">
               AND e.domain = #{domain}
@@ -903,6 +1052,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
               <if test="domain != null">
@@ -920,6 +1070,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               <if test="domain != null">
               AND e.domain = #{domain}
@@ -938,6 +1089,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.featured')), 'false') IN ('true', '1')
               <if test="domain != null">
@@ -957,6 +1109,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
             GROUP BY e.domain
             ORDER BY COUNT(*) DESC, name ASC
@@ -973,6 +1126,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
             GROUP BY e.domain
             ORDER BY domain ASC
@@ -994,6 +1148,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time >= #{since}
               <if test="domain != null">
               AND e.domain = #{domain}
@@ -1026,6 +1181,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.create_time >= #{since}
               ) grouped
             ) ranked
@@ -1042,6 +1198,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                     p.title LIKE CONCAT('%', #{prefix}, '%')
                     OR e.company LIKE CONCAT('%', #{prefix}, '%')
@@ -1075,6 +1232,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (
                     p.title LIKE CONCAT('%', #{prefix}, '%')
                     OR e.company LIKE CONCAT('%', #{prefix}, '%')
@@ -1102,6 +1260,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.post_type = 1
               AND e.company = #{company}
             ORDER BY p.create_time DESC, p.id DESC
@@ -1117,6 +1276,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.post_type = 1
               AND e.company = #{company}
             """)
@@ -1128,6 +1288,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
             WHERE is_deleted = 0
               AND post_status = 1
               AND visibility = 1
+              AND content_environment = 'COMMUNITY'
               AND post_type = 1
             ORDER BY create_time DESC, id DESC
             LIMIT #{limit}
@@ -1148,6 +1309,7 @@ public interface PostMapper extends BaseMapper<PostPO> {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND (#{cursor} = 0
                    OR cursor_sp.id IS NULL
                    OR sp.sort_order > cursor_sp.sort_order

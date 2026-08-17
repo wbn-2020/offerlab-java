@@ -1,6 +1,8 @@
 package com.offerlab.community.post.controller;
 
 import com.offerlab.community.common.result.Result;
+import com.offerlab.community.common.exception.BizException;
+import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.common.utils.RiskConfirmation;
 import com.offerlab.community.infra.audit.AdminAuditLog;
 import com.offerlab.community.infra.audit.AdminAuditService;
@@ -40,6 +42,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @RestController
 @RequestMapping("/api/v1/operations")
@@ -263,7 +266,16 @@ public class OperationCurationController {
     @RateLimit(key = "'public:operations:topic:' + #slug + ':' + #request.remoteAddr", rate = 120, per = 60, failOpen = false)
     public Result<OperationTopicDTO> publicTopic(@PathVariable @Size(max = 128) String slug,
                                                   HttpServletRequest request) {
-        return Result.ok(operationCurationService.getPublicTopic(slug, UserContext.get()));
+        try {
+            return Result.ok(operationCurationService.getPublicTopic(slug, UserContext.get()));
+        } catch (BizException ex) {
+            // A missing optional curation record is a normal probe miss for community topics.
+            // Keep malformed input and other business failures visible to the caller.
+            if (Objects.equals(ex.getCode(), ErrorCode.RESOURCE_NOT_FOUND.getCode())) {
+                return Result.ok(null);
+            }
+            throw ex;
+        }
     }
 
     private Long requireOps() {

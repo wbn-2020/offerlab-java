@@ -1,5 +1,6 @@
 package com.offerlab.community.feed.application;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.feed.infrastructure.FeedInboxRedis;
 import com.offerlab.community.post.api.event.PostPublishedEvent;
 import com.offerlab.community.post.domain.model.Post;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -64,6 +66,32 @@ class FeedFanoutRetryTest {
         assertTrue(error.getMessage().contains("cursor did not advance"));
     }
 
+    @Test
+    void nonCommunityAndLegacyEventsAreAcknowledgedWithoutFanout() {
+        RecordingFeedInboxRedis feedRedis = new RecordingFeedInboxRedis(-1L);
+        FeedFanoutService service = new FeedFanoutService(
+                failOnFollowerLookup(),
+                feedRedis
+        );
+
+        PostPublishedEvent testEvent = event();
+        testEvent.setContentEnvironment(Post.CONTENT_ENVIRONMENT_TEST);
+        assertTrue(service.fanoutPostPublished(testEvent, "kafka:test-content"));
+
+        PostPublishedEvent legacyEvent = new ObjectMapper().convertValue(Map.of(
+                "postId", 88L,
+                "authorId", 7L,
+                "visibility", Post.VIS_PUBLIC,
+                "postStatus", Post.STATUS_PUBLISHED,
+                "timestamp", 123456L
+        ), PostPublishedEvent.class);
+        assertTrue(service.fanoutPostPublished(legacyEvent, "kafka:legacy-content"));
+
+        assertEquals(0, feedRedis.authorTimelineWrites);
+        assertEquals(0, feedRedis.globalLatestWrites);
+        assertTrue(feedRedis.inboxAttempts.isEmpty());
+    }
+
     private static FollowCursorDTO follower(Long relationId, Long uid) {
         return FollowCursorDTO.builder().relationId(relationId).uid(uid).build();
     }
@@ -74,8 +102,22 @@ class FeedFanoutRetryTest {
                 .authorId(7L)
                 .visibility(Post.VIS_PUBLIC)
                 .postStatus(Post.STATUS_PUBLISHED)
+                .contentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY)
                 .timestamp(123456L)
                 .build();
+    }
+
+    private static UserFacade failOnFollowerLookup() {
+        return (UserFacade) Proxy.newProxyInstance(
+                UserFacade.class.getClassLoader(),
+                new Class<?>[]{UserFacade.class},
+                (proxy, method, args) -> {
+                    if ("getFollowerPage".equals(method.getName())) {
+                        throw new AssertionError("non-community events must not query followers");
+                    }
+                    return defaultValue(method.getReturnType());
+                }
+        );
     }
 
     private static UserFacade followerFacade(List<FollowCursorDTO> followers) {

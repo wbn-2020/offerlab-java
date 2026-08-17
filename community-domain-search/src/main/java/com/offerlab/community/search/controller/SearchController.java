@@ -11,6 +11,7 @@ import com.offerlab.community.infra.web.ratelimit.RateLimit;
 import com.offerlab.community.post.api.PostFacade;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.search.api.SearchFacade;
+import com.offerlab.community.search.api.dto.PublicSearchStatusDTO;
 import com.offerlab.community.search.api.dto.SearchAnalyticsTrackCmd;
 import com.offerlab.community.search.api.dto.SearchStatusDTO;
 import com.offerlab.community.search.api.dto.SearchTrustFilter;
@@ -112,8 +113,8 @@ public class SearchController {
 
     @GetMapping("/status")
     @RateLimit(key = "'public:search:status:' + #request.remoteAddr", rate = 300, per = 60, failOpen = false)
-    public Result<SearchStatusDTO> status(HttpServletRequest request) {
-        return Result.ok(postSearchIndexer.publicStatus());
+    public Result<PublicSearchStatusDTO> status(HttpServletRequest request) {
+        return Result.ok(toPublicStatus(postSearchIndexer.publicStatus()));
     }
 
     @PostMapping("/analytics/track")
@@ -260,10 +261,6 @@ public class SearchController {
 
         Map<String, Object> search = new LinkedHashMap<>();
         search.put("visible", containsPost(recall, postId));
-        search.put("source", recall.getSource());
-        search.put("degraded", recall.getDegraded());
-        search.put("fallbackReason", recall.getFallbackReason());
-        search.put("diagnostics", recall.getDiagnostics());
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("postId", postId);
@@ -286,6 +283,32 @@ public class SearchController {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(), "频道不存在或已下线");
         }
         return domain;
+    }
+
+    private static PublicSearchStatusDTO toPublicStatus(SearchStatusDTO status) {
+        boolean available = status != null && Boolean.TRUE.equals(status.getPublicSearchAvailable());
+        boolean degraded = available && Boolean.TRUE.equals(status.getPublicSearchDegraded());
+        if (!available) {
+            return PublicSearchStatusDTO.builder()
+                    .available(false)
+                    .degraded(false)
+                    .message("公开搜索暂不可用，请稍后重试或使用发现页。")
+                    .action("查看发现页")
+                    .build();
+        }
+        if (degraded) {
+            return PublicSearchStatusDTO.builder()
+                    .available(true)
+                    .degraded(true)
+                    .message("搜索仍可使用，但结果完整度和排序能力可能暂时受限。")
+                    .action("继续搜索")
+                    .build();
+        }
+        return PublicSearchStatusDTO.builder()
+                .available(true)
+                .degraded(false)
+                .message("搜索状态正常，只返回公开且符合当前条件的内容。")
+                .build();
     }
 
 }

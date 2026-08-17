@@ -99,6 +99,21 @@ class PostContentRevisionQueryServiceTest {
         assertFalse(result.items().get(0).hasEffectiveRevision());
     }
 
+    @Test
+    void nonCommunityRowsFailClosedEvenIfTheMapperContractIsViolated() {
+        when(versionMapper.qualitySignalSchemaColumnCount()).thenReturn(6);
+        LocalDateTime windowStart = LocalDateTime.of(2026, 8, 1, 0, 0);
+        PostContentRevisionQueryRow internal = row(401L, 7L, 1, "token-401", 3,
+                windowStart.plusMinutes(1), 1);
+        internal.setContentEnvironment("INTERNAL");
+        when(versionMapper.selectContentRevisionQueryRows(List.of(401L))).thenReturn(List.of(internal));
+        PostContentRevisionQueryService service = new PostContentRevisionQueryService(versionMapper);
+
+        var result = service.query(PostContentRevisionQuery.authorOwned(7L, List.of(401L), windowStart));
+
+        assertEquals(PostContentRevisionSnapshot.Status.NOT_ELIGIBLE, result.items().get(0).status());
+    }
+
     private static PostContentRevisionQueryRow row(Long postId, Long authorId, Integer domain, String token,
                                                     Integer resultVersion, LocalDateTime effectiveAt,
                                                     Integer postStatus) {
@@ -109,6 +124,7 @@ class PostContentRevisionQueryServiceTest {
         row.setIsDeleted(0);
         row.setVisibility(1);
         row.setPostStatus(postStatus);
+        row.setContentEnvironment("COMMUNITY");
         row.setLatestEffectiveContentRevisionToken(token);
         row.setLatestEffectiveContentRevisionAt(effectiveAt);
         row.setQualitySignalRevisionToken(token);

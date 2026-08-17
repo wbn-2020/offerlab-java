@@ -49,7 +49,8 @@ public class FeedController {
                                                     @RequestParam(defaultValue = "20") int size,
                                                     @RequestParam(required = false) Integer domain,
                                                     HttpServletRequest request) {
-        return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
+        return Result.ok(feedFacade.getRecommendFeed(UserContext.get(), cursor, clamp(size),
+                requireOptionalDomain(domain)).publicView());
     }
 
     @PublicApi
@@ -59,7 +60,8 @@ public class FeedController {
                                                  @RequestParam(defaultValue = "20") int size,
                                                  @RequestParam(required = false) Integer domain,
                                                  HttpServletRequest request) {
-        return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
+        return Result.ok(feedFacade.getLatestFeed(UserContext.get(), cursor, clamp(size),
+                requireOptionalDomain(domain)).publicView());
     }
 
     @PublicApi
@@ -69,7 +71,8 @@ public class FeedController {
                                               @RequestParam(defaultValue = "20") int size,
                                               @RequestParam(required = false) Integer domain,
                                               HttpServletRequest request) {
-        return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size), requireOptionalDomain(domain)));
+        return Result.ok(feedFacade.getHotFeed(UserContext.get(), cursor, clamp(size),
+                requireOptionalDomain(domain)).publicView());
     }
 
     @PublicApi

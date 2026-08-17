@@ -17,6 +17,8 @@ class NeedDetailAndTimelineGuardTest {
         String service = read("src/main/java/com/offerlab/community/post/collaboration/application/CollaborationService.java");
         String mapper = read("src/main/java/com/offerlab/community/post/collaboration/infrastructure/persistence/CollaborationMapper.java");
         String event = read("src/main/java/com/offerlab/community/post/collaboration/api/CollaborationNeedStateChangedEvent.java");
+        String models = read("src/main/java/com/offerlab/community/post/collaboration/api/CollaborationModels.java");
+        String publicTimelineEvent = extractClassBlock(models, "NeedEventDTO");
         String migration = readMigration("20260718_collab_need_lifecycle.sql");
 
         assertContains(controller, "@GetMapping(\"/needs/{needId}/events\")");
@@ -24,7 +26,7 @@ class NeedDetailAndTimelineGuardTest {
         assertContains(controller, "service.listNeedEvents(needId, UserContext.get(), cursor, size)");
 
         assertContains(mapper, "ORDER BY id DESC");
-        assertContains(mapper, "(#{cursor} = 0 OR e.id &lt; #{cursor})");
+        assertContains(mapper, "(#{cursor} = 0 OR e.id < #{cursor})");
         assertContains(mapper, "e.visibility_scope = 'PUBLIC'");
         assertContains(mapper, "e.visibility_scope = 'PARTICIPANTS'");
         assertContains(mapper, "e.visibility_scope = 'MANAGERS'");
@@ -39,10 +41,31 @@ class NeedDetailAndTimelineGuardTest {
                 "Historical claimants must not receive permanent access to later private timeline events.");
         assertFalse(service.contains("mapper.hasNeedParticipation"),
                 "Timeline participant access must be based on the current claimant relationship.");
-        assertContains(service, "need.getId(), viewerUid, canManage ? 1 : 0");
+        assertContains(service, "int includeManagers = canManage ? 1 : 0");
+        assertContains(service, "need.getId(), viewerUid, includeManagers");
+        assertContains(service, "requireNonNegativeCursor(cursor)");
+        assertContains(controller, "Result<NeedEventTimelineDTO> listNeedEvents");
+        assertContains(service, "NeedEventTimelineDTO listNeedEvents");
+        assertContains(service, "result.setHistoryIntegrityWarning(skippedEventCount > 0)");
+        assertFalse(service.contains(".withDiagnostic("),
+                "Public timelines must not expose internal reconciliation metrics through page diagnostics.");
+        assertContains(service, "log.error(\"Collaboration need timeline integrity issues detected:");
+        assertContains(mapper, "long countVisibleNeedEvents(");
+        assertContains(mapper, "long countInvalidVisibleNeedEvents(");
+        assertContains(mapper, "List<Long> listInvalidVisibleNeedEventIds(");
+        assertContains(mapper, "AND NOT (");
+        assertContains(mapper, "e.id > 0");
+        assertContains(mapper, "TRIM(e.target_type) <> ''");
+        assertContains(mapper, "e.create_time IS NOT NULL");
+        assertContains(mapper, "e.event_type IN ('CREATED', 'CLAIMED', 'SUBMITTED', 'WITHDRAWN', 'REJECTED',");
+        assertContains(service, "invalidEventIds");
 
         assertContains(service, ".note(row.getNote())");
-        assertContains(service, ".visibilityScope(row.getVisibilityScope())");
+        assertContains(service, ".hasActor(row.getActorUid() != null && row.getActorUid() > 0)");
+        assertFalse(publicTimelineEvent.contains("private Long actorUid;"),
+                "Public timeline DTOs must not expose actor uid values.");
+        assertFalse(publicTimelineEvent.contains("private Long targetId;"),
+                "Public timeline DTOs must not expose internal target ids.");
         assertContains(service, ".submissionNote(canViewParticipantDetails ? row.getSubmissionNote() : null)");
         assertContains(service, ".rejectReason(canViewParticipantDetails ? row.getRejectReason() : null)");
         assertContains(service, ".closedReason(canViewParticipantDetails ? row.getClosedReason() : null)");
@@ -93,5 +116,13 @@ class NeedDetailAndTimelineGuardTest {
 
     private static void assertContains(String source, String expected) {
         assertTrue(source.contains(expected), () -> "Expected source to contain: " + expected);
+    }
+
+    private static String extractClassBlock(String source, String className) {
+        String marker = "public static class " + className;
+        int start = source.indexOf(marker);
+        assertTrue(start >= 0, () -> "Expected class not found: " + className);
+        int nextClass = source.indexOf("public static class ", start + marker.length());
+        return nextClass < 0 ? source.substring(start) : source.substring(start, nextClass);
     }
 }

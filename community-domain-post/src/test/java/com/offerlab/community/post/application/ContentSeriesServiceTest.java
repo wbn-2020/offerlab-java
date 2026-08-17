@@ -176,6 +176,25 @@ class ContentSeriesServiceTest {
     }
 
     @Test
+    void addPostRejectsUnclassifiedPostsBeforeLinking() {
+        SeriesMapperState seriesState = new SeriesMapperState(1);
+        SeriesPostMapperState relationState = new SeriesPostMapperState();
+        Map<Long, PostPO> posts = new LinkedHashMap<>();
+        ContentSeriesService service = newService(seriesState, relationState, posts);
+
+        ContentSeriesDTO created = service.create(createCmd("environment-safe-series", 1, 1), 7L);
+        PostPO unclassified = post(9104L, 7L, Post.STATUS_PUBLISHED);
+        unclassified.setContentEnvironment(Post.CONTENT_ENVIRONMENT_UNCLASSIFIED);
+        posts.put(unclassified.getId(), unclassified);
+
+        BizException rejected = assertThrows(BizException.class,
+                () -> service.addPost(created.getId(), addPostCmd(unclassified.getId()), 7L));
+
+        assertEquals(ErrorCode.INVALID_STATUS.getCode(), rejected.getCode());
+        assertTrue(relationState.activeLinks(created.getId()).isEmpty());
+    }
+
+    @Test
     void publicDetailAndUserListOnlyExposePublicSeries() {
         SeriesMapperState seriesState = new SeriesMapperState(1);
         ContentSeriesService service = newService(seriesState, new SeriesPostMapperState(), new LinkedHashMap<>());
@@ -297,8 +316,10 @@ class ContentSeriesServiceTest {
                 "src/main/java/com/offerlab/community/post/infrastructure/persistence/mapper/ContentSeriesMapper.java"));
 
         assertTrue(mapperSource.contains("selectPublicProgressBySeriesIds"));
-        assertTrue(mapperSource.contains("p.post_status = 1 AND p.visibility = 1"),
-                "public progress must not count private, draft, reviewing, or taken-down posts as public content");
+        assertTrue(mapperSource.contains("p.post_status = 1"));
+        assertTrue(mapperSource.contains("p.visibility = 1"));
+        assertTrue(mapperSource.contains("p.content_environment = 'COMMUNITY'"),
+                "public progress must only count public published COMMUNITY posts");
     }
 
     private static ContentSeriesService newService(SeriesMapperState seriesState,
@@ -492,12 +513,14 @@ class ContentSeriesServiceTest {
                 PostPO post = posts.get(link.getPostId());
                 if (post != null) {
                     boolean publicPublished = Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
-                            && Objects.equals(post.getVisibility(), Post.VIS_PUBLIC);
+                            && Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)
+                            && Post.isCommunityContent(post.getContentEnvironment());
                     if (!publicOnly || publicPublished) {
                         total++;
                     }
                     if (Objects.equals(post.getPostStatus(), Post.STATUS_PUBLISHED)
-                            && (!publicOnly || Objects.equals(post.getVisibility(), Post.VIS_PUBLIC))) {
+                            && (!publicOnly || (Objects.equals(post.getVisibility(), Post.VIS_PUBLIC)
+                            && Post.isCommunityContent(post.getContentEnvironment())))) {
                         published++;
                     }
                 }
@@ -562,6 +585,7 @@ class ContentSeriesServiceTest {
         po.setContent(content);
         po.setVisibility(visibility);
         po.setPostStatus(status);
+        po.setContentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY);
         po.setCreateTime(LocalDateTime.now());
         po.setUpdateTime(LocalDateTime.now());
         return po;

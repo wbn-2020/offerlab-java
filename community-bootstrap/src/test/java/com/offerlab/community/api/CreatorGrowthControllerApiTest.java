@@ -140,7 +140,7 @@ class CreatorGrowthControllerApiTest {
                         .title("Spring cache fallback review")
                         .source("auto_profile_candidate")
                         .publicVisible(true)
-                        .boundaryCopy("Profile display only, not platform endorsement or commercial placement.")
+                        .boundaryCopy("仅用于作者主页展示，不代表平台背书或商业推荐。")
                         .build()))
                 .creatorTopicIdeas(List.of(CreatorGrowthWorkspaceDTO.CreatorTopicIdeaDTO.builder()
                         .ideaId("domain-1-follow-up")
@@ -254,7 +254,7 @@ class CreatorGrowthControllerApiTest {
                         .title("Second public note")
                         .source("manual_profile_display")
                         .publicVisible(true)
-                        .boundaryCopy("Profile display only, not platform endorsement or commercial placement.")
+                        .boundaryCopy("仅用于作者主页展示，不代表平台背书或商业推荐。")
                         .build()));
 
         mvc.perform(put("/api/v1/creator-growth/representative-posts")

@@ -34,6 +34,8 @@ class CommunityTopicGuardTest {
 
         String controller = read(ROOT.resolve("community-domain-post/src/main/java/com/offerlab/community/post/controller/CommunityTopicController.java"));
         assertContains(controller, "@RequestMapping(\"/api/v1/topics\")");
+        assertContains(controller, "@GetMapping(\"/resolve\")");
+        assertContains(controller, "topicService.resolvePublic(slug, UserContext.get())");
         assertContains(controller, "@GetMapping(\"/{slug}/posts\")");
         assertContains(controller, "@GetMapping(\"/me/following\")");
         assertContains(controller, "@GetMapping(\"/{slug}/follow-status\")");
@@ -57,8 +59,15 @@ class CommunityTopicGuardTest {
         assertContains(service, "topicFollowMapper.restoreById");
         assertContains(service, "topicFollowMapper.softDeleteById");
         assertContains(service, "resolveTopicForRead");
+        assertContains(service, "resolvePublic");
+        assertContains(service, "findTopicForRead");
         assertContains(service, "virtualTopicDto");
         assertContains(service, "topicDisplayName");
+        assertContains(service, "supportedVirtualTopic");
+        assertContains(service, "isSupportedVirtualTopicSlug");
+        assertContains(service, "throw new BizException(ErrorCode.RESOURCE_NOT_FOUND)");
+        assertContains(service, "case \"java\", \"jvm\", \"spring\"");
+        assertContains(service, "if (topic != null)");
         assertContains(service, "migrationCheckService.communityTopicReady()");
         assertContains(service, "return List.of();");
         assertContains(service, "return PageResult.empty();");

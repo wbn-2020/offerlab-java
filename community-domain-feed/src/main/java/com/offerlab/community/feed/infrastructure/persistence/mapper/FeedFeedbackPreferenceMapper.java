@@ -129,6 +129,7 @@ public interface FeedFeedbackPreferenceMapper {
              WHERE post.is_deleted = 0
                AND post.post_status = 1
                AND post.visibility = 1
+               AND post.content_environment = 'COMMUNITY'
                AND (extension.domain &lt;&gt; 2
                     OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(extension.ext_json, '$.anonymous')), 'false')
                         NOT IN ('true', '1'))

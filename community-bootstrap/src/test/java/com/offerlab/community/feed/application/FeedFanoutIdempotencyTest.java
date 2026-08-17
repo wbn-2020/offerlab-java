@@ -84,6 +84,7 @@ class FeedFanoutIdempotencyTest {
                         .authorId(7L)
                         .visibility(Post.VIS_PUBLIC)
                         .postStatus(Post.STATUS_PUBLISHED)
+                        .contentEnvironment(Post.CONTENT_ENVIRONMENT_COMMUNITY)
                         .timestamp(123456L)
                         .build())
                 .build();

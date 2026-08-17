@@ -32,6 +32,7 @@ import com.offerlab.community.post.infrastructure.persistence.projection.Communi
 import com.offerlab.community.post.infrastructure.persistence.projection.PostTagView;
 import com.offerlab.community.user.api.UserFacade;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,6 +55,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CommunityTopicService {
 
     private static final int MAX_LIMIT = 100;
@@ -96,6 +98,18 @@ public class CommunityTopicService {
 
     public CommunityTopicDTO getPublic(String slug, Long viewerUid) {
         TopicLookup lookup = resolveTopicForRead(slug);
+        return publicTopicDto(lookup, viewerUid);
+    }
+
+    public CommunityTopicDTO resolvePublic(String slug, Long viewerUid) {
+        TopicLookup lookup = findTopicForRead(slug);
+        if (lookup == null || !lookup.virtualTopic() && !Objects.equals(lookup.topic().getTopicStatus(), 1)) {
+            return null;
+        }
+        return publicTopicDto(lookup, viewerUid);
+    }
+
+    private CommunityTopicDTO publicTopicDto(TopicLookup lookup, Long viewerUid) {
         if (lookup.virtualTopic()) {
             return virtualTopicDto(lookup);
         }
@@ -143,10 +157,18 @@ public class CommunityTopicService {
      * broken to first-time community users.
      */
     private TopicLookup resolveTopicForRead(String slug) {
+        TopicLookup lookup = findTopicForRead(slug);
+        if (lookup == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
+        }
+        return lookup;
+    }
+
+    private TopicLookup findTopicForRead(String slug) {
         String cleanSlug = slugOrDefault(slug, "");
         String displayName = topicDisplayName(cleanSlug);
         if (!topicSchemaReady()) {
-            return virtualTopic(cleanSlug, displayName);
+            return supportedVirtualTopic(cleanSlug, displayName);
         }
         CommunityTopicPO topic = topicMapper.selectBySlug(cleanSlug);
         if (topic == null) {
@@ -156,7 +178,21 @@ public class CommunityTopicService {
             List<TagPO> tags = topicTagMapper.selectTagsByTopicId(topic.getId());
             return new TopicLookup(topic, cleanSlug, topicKeyword(topic), tags, false);
         }
-        return virtualTopic(cleanSlug, displayName);
+        return supportedVirtualTopic(cleanSlug, displayName);
+    }
+
+    private TopicLookup supportedVirtualTopic(String slug, String displayName) {
+        return isSupportedVirtualTopicSlug(slug) ? virtualTopic(slug, displayName) : null;
+    }
+
+    private boolean isSupportedVirtualTopicSlug(String slug) {
+        return switch (clean(slug).toLowerCase(Locale.ROOT)) {
+            case "java", "jvm", "spring", "spring-boot", "spring-cloud",
+                    "redis", "mysql", "mybatis", "kafka",
+                    "elasticsearch", "elastic-search", "vue", "vue3",
+                    "react", "docker", "kubernetes", "k8s" -> true;
+            default -> false;
+        };
     }
 
     @Transactional
@@ -374,13 +410,21 @@ public class CommunityTopicService {
     }
 
     private CommunityTopicDTO toDto(CommunityTopicPO topic, List<TagPO> tags, boolean followed) {
-        return toDto(topic, tags, followed,
-                topicMapper.countPublicPosts(topic.getId(), topicKeyword(topic)),
-                topicFollowMapper.countByTopicId(topic.getId()));
+        TopicStatistics statistics = topicStatistics(
+                topic.getId(),
+                tags == null ? List.of() : tags.stream().map(TagPO::getId).filter(Objects::nonNull).toList(),
+                topicKeyword(topic));
+        return toDto(topic, tags, followed, statistics, topicFollowMapper.countByTopicId(topic.getId()));
     }
 
     private CommunityTopicDTO toDto(CommunityTopicPO topic, List<TagPO> tags, boolean followed,
                                     long postCount, long followerCount) {
+        return toDto(topic, tags, followed,
+                new TopicStatistics(postCount, Map.of(), false), followerCount);
+    }
+
+    private CommunityTopicDTO toDto(CommunityTopicPO topic, List<TagPO> tags, boolean followed,
+                                    TopicStatistics statistics, long followerCount) {
         List<TagDTO> tagDtos = tags == null ? List.of() : tags.stream().map(this::toTagDto).toList();
         return CommunityTopicDTO.builder()
                 .id(topic.getId())
@@ -392,7 +436,9 @@ public class CommunityTopicService {
                 .sortOrder(topic.getSortOrder())
                 .featured(topic.getFeatured() != null && topic.getFeatured() == 1)
                 .status(topic.getTopicStatus())
-                .postCount(postCount)
+                .postCount(statistics.postCount())
+                .typeDistribution(statistics.typeDistribution())
+                .statisticsAvailable(statistics.available())
                 .followerCount(followerCount)
                 .followed(followed)
                 .virtualTopic(false)
@@ -414,6 +460,10 @@ public class CommunityTopicService {
     }
 
     private CommunityTopicDTO virtualTopicDto(TopicLookup lookup) {
+        TopicStatistics statistics = topicStatistics(
+                lookup.topicId(),
+                lookup.tags().stream().map(TagPO::getId).filter(Objects::nonNull).toList(),
+                lookup.keyword());
         return CommunityTopicDTO.builder()
                 .id(null)
                 .slug(lookup.slug())
@@ -422,12 +472,35 @@ public class CommunityTopicService {
                 .topicType("tech_stack")
                 .featured(false)
                 .status(1)
-                .postCount(0L)
+                .postCount(statistics.postCount())
+                .typeDistribution(statistics.typeDistribution())
+                .statisticsAvailable(statistics.available())
                 .followerCount(0L)
                 .followed(false)
                 .virtualTopic(true)
                 .tags(lookup.tags().stream().map(this::toTagDto).toList())
                 .build();
+    }
+
+    private TopicStatistics topicStatistics(Long topicId, List<Long> tagIds, String keyword) {
+        try {
+            long postCount = postMapper.countPublicPostsByTopic(topicId, tagIds, keyword);
+            List<Map<String, Object>> rows = postMapper.countPublicPostTypesByTopic(topicId, tagIds, keyword);
+            Map<String, Long> distribution = new java.util.LinkedHashMap<>();
+            if (rows != null) {
+                for (Map<String, Object> row : rows) {
+                    Long type = asLong(row, "type", "TYPE", "postType", "post_type");
+                    Long count = asLong(row, "count", "COUNT");
+                    if (type != null && count != null && count > 0) {
+                        distribution.put(String.valueOf(type), count);
+                    }
+                }
+            }
+            return new TopicStatistics(postCount, Map.copyOf(distribution), true);
+        } catch (RuntimeException ex) {
+            log.warn("public topic statistics unavailable, topicId={}, keyword={}", topicId, keyword, ex);
+            return new TopicStatistics(0L, Map.of(), false);
+        }
     }
 
     private List<String> virtualTopicTagNames(String slug, String displayName) {
@@ -890,6 +963,9 @@ public class CommunityTopicService {
         private Long topicId() {
             return topic == null ? null : topic.getId();
         }
+    }
+
+    private record TopicStatistics(long postCount, Map<String, Long> typeDistribution, boolean available) {
     }
 
     private int safeLimit(int limit) {

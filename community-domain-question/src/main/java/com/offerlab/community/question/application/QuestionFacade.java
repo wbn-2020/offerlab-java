@@ -23,6 +23,7 @@ import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -104,4 +105,8 @@ public interface QuestionFacade {
     Map<String, Object> updateCompanyAliasStatus(Long id, int status);
 
     void evictQuestionCachesForPost(PostDTO post);
+
+    default List<String> resolveCompanyPrepCacheKeysForPosts(Collection<Long> postIds) {
+        return List.of();
+    }
 }

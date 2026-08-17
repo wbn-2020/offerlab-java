@@ -106,7 +106,8 @@ public class PostRepositoryImpl implements PostRepository {
                 .set(PostPO::getContent, po.getContent())
                 .set(PostPO::getCoverUrl, po.getCoverUrl())
                 .set(PostPO::getVisibility, po.getVisibility())
-                .set(PostPO::getPostStatus, po.getPostStatus());
+                .set(PostPO::getPostStatus, po.getPostStatus())
+                .set(PostPO::getContentEnvironment, po.getContentEnvironment());
         if (expectedVersion != null) {
             update.eq(PostPO::getVersion, expectedVersion)
                     .set(PostPO::getVersion, expectedVersion + 1);
@@ -162,6 +163,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .eq(PostPO::getAuthorId, authorId)
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
+                .eq(PostPO::getContentEnvironment, Post.CONTENT_ENVIRONMENT_COMMUNITY)
                 .orderByDesc(PostPO::getId)
                 .last(SqlLimits.limit(limit, 1, 101));
         if (decoded.id() != null) {
@@ -226,6 +228,7 @@ public class PostRepositoryImpl implements PostRepository {
         LambdaQueryWrapper<PostPO> q = new LambdaQueryWrapper<PostPO>()
                 .eq(PostPO::getPostStatus, Post.STATUS_PUBLISHED)
                 .eq(PostPO::getVisibility, Post.VIS_PUBLIC)
+                .eq(PostPO::getContentEnvironment, Post.CONTENT_ENVIRONMENT_COMMUNITY)
                 .orderByDesc(PostPO::getId)
                 .last(SqlLimits.limit(limit, 1, 101));
         if (decoded.id() != null) {
@@ -286,6 +289,7 @@ public class PostRepositoryImpl implements PostRepository {
         po.setCoverUrl(p.getCoverUrl());
         po.setVisibility(p.getVisibility());
         po.setPostStatus(p.getPostStatus());
+        po.setContentEnvironment(p.getContentEnvironment());
         return po;
     }
 
@@ -311,6 +315,7 @@ public class PostRepositoryImpl implements PostRepository {
                 .coverUrl(po.getCoverUrl())
                 .visibility(po.getVisibility())
                 .postStatus(po.getPostStatus())
+                .contentEnvironment(po.getContentEnvironment())
                 .createTime(po.getCreateTime())
                 .updateTime(po.getUpdateTime())
                 .extJson(ext == null ? null : ext.getExtJson())

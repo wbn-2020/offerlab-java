@@ -7,8 +7,10 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+import com.offerlab.community.common.result.PageResult;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -171,16 +173,18 @@ public final class CollaborationModels {
     @Builder
     public static class NeedEventDTO {
         private Long id;
-        private Long needId;
         private String eventType;
-        private Long actorUid;
+        private Boolean hasActor;
         private String fromStatus;
         private String toStatus;
-        private String targetType;
-        private Long targetId;
         private String note;
-        private String visibilityScope;
         private LocalDateTime createTime;
+    }
+
+    @Data
+    @EqualsAndHashCode(callSuper = true)
+    public static class NeedEventTimelineDTO extends PageResult<NeedEventDTO> {
+        private Boolean historyIntegrityWarning;
     }
 
     @Data
@@ -357,9 +361,18 @@ public final class CollaborationModels {
 
     @Data
     @Builder
+    public static class PublicActorDTO {
+        private String displayName;
+        private String avatarUrl;
+        private List<String> badges;
+        private Boolean self;
+    }
+
+    @Data
+    @Builder
     public static class OfficeHourDTO {
         private Long id;
-        private Long hostUid;
+        private PublicActorDTO host;
         private Integer domain;
         private String title;
         private String description;
@@ -409,18 +422,17 @@ public final class CollaborationModels {
     public static class OfficeHourReservationDTO {
         private Long id;
         private Long officeHourId;
-        private Long hostUid;
-        private Long attendeeUid;
+        private PublicActorDTO host;
+        private PublicActorDTO attendee;
+        private String viewerRole;
         private String topic;
         private String contextDetail;
         private String status;
         private String responseNote;
-        private Long decidedBy;
         private LocalDateTime decidedAt;
         private LocalDateTime hostConfirmedAt;
         private LocalDateTime attendeeConfirmedAt;
         private LocalDateTime completedAt;
-        private Long cancelledBy;
         private LocalDateTime cancelledAt;
         private Boolean canManage;
         private LocalDateTime createTime;
@@ -433,8 +445,7 @@ public final class CollaborationModels {
         private Long id;
         private Long reservationId;
         private Long officeHourId;
-        private Long authorUid;
-        private Long targetUid;
+        private PublicActorDTO author;
         private Integer rating;
         private String feedback;
         private LocalDateTime createTime;

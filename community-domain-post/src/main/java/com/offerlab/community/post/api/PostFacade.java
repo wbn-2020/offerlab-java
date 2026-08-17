@@ -108,6 +108,8 @@ public interface PostFacade {
 
     List<TagDTO> listTags();
 
+    TagDTO getTag(Long tagId);
+
     PageResult<PostBriefDTO> getPostsByTag(Long tagId, Integer postType, Boolean featured, long cursor, int size);
 
     default PageResult<PostBriefDTO> getPostsByTag(Long tagId, long cursor, int size) {

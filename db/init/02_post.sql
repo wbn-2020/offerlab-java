@@ -12,6 +12,7 @@ CREATE TABLE t_post_main (
     cover_url       VARCHAR(512) NULL,
     visibility      TINYINT      NOT NULL DEFAULT 1 COMMENT '1公开 2仅自己 3粉丝可见',
     post_status     TINYINT      NOT NULL DEFAULT 1 COMMENT '1已发布 2草稿 3审核中 4已下架',
+    content_environment VARCHAR(16) NOT NULL DEFAULT 'UNCLASSIFIED' COMMENT 'COMMUNITY/TEST/INTERNAL/UNCLASSIFIED',
     create_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     update_time     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     is_deleted      TINYINT      NOT NULL DEFAULT 0,
@@ -19,8 +20,12 @@ CREATE TABLE t_post_main (
     KEY idx_author_time (author_id, create_time),
     KEY idx_type_time   (post_type, create_time),
     KEY idx_status_time (post_status, create_time),
+    KEY idx_post_environment_public (content_environment, is_deleted, post_status, visibility, create_time, id),
     KEY idx_post_public_time_id (is_deleted, post_status, visibility, create_time, id),
-    KEY idx_post_public_author_time (is_deleted, post_status, visibility, author_id, create_time, id)
+    KEY idx_post_public_author_time (is_deleted, post_status, visibility, author_id, create_time, id),
+    CONSTRAINT chk_post_content_environment CHECK (
+        content_environment IN ('COMMUNITY', 'TEST', 'INTERNAL', 'UNCLASSIFIED')
+    )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子主表';
 
 DROP TABLE IF EXISTS t_post_extension;

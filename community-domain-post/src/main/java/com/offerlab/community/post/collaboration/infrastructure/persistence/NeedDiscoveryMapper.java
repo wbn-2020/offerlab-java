@@ -55,6 +55,7 @@ public interface NeedDiscoveryMapper {
                               AND vp.is_deleted = 0
                               AND vp.post_status = 1
                               AND vp.visibility = 1
+                              AND vp.content_environment = 'COMMUNITY'
                               AND ve.domain = n.domain
                        ) THEN 1 ELSE 0 END AS viewerDomainMatch,
                        CASE WHEN EXISTS (
@@ -65,6 +66,7 @@ public interface NeedDiscoveryMapper {
                               AND vp.is_deleted = 0
                               AND vp.post_status = 1
                               AND vp.visibility = 1
+                              AND vp.content_environment = 'COMMUNITY'
                               AND (
                                   (n.content_format = 'QUESTION' AND vp.post_type IN (4, 13))
                                   OR (n.content_format = 'RESOURCE' AND vp.post_type = 14)

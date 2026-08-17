@@ -94,7 +94,7 @@ public class CollaborationController {
     @GetMapping("/needs/{needId}/events")
     @RateLimit(key = "'public:collaboration:need-events:' + #needId + ':' + #request.remoteAddr",
             rate = 120, per = 60, failOpen = false)
-    public Result<PageResult<NeedEventDTO>> listNeedEvents(
+    public Result<NeedEventTimelineDTO> listNeedEvents(
             @PathVariable @Positive Long needId,
             @RequestParam(defaultValue = "0") @Min(0) long cursor,
             @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size,

@@ -678,6 +678,7 @@ class FeedDomainFilterTest {
         }
         @Override public PageResult<PostBriefDTO> listPosts(Long authorId, Long tagId, Integer postType, Boolean featured, Integer domain, long cursor, int size, boolean includeTestData) { throw unsupported(); }
         @Override public List<TagDTO> listTags() { throw unsupported(); }
+        @Override public TagDTO getTag(Long tagId) { throw unsupported(); }
         @Override public PageResult<PostBriefDTO> getPostsByTag(Long tagId, Integer postType, Boolean featured, long cursor, int size) { throw unsupported(); }
     }
 

@@ -21,6 +21,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             LIMIT 1
             """)
     Map<String, Object> selectPublicPostForEffectiveRead(@Param("postId") Long postId);
@@ -34,6 +35,7 @@ public interface GrowthInsightMapper {
                 WHERE p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
                   AND p.author_id = #{authorId}
                   AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
                   AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
@@ -116,6 +118,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
             ORDER BY s.update_time DESC, s.id DESC
             LIMIT 5
@@ -138,6 +141,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
             ORDER BY s.update_time DESC, s.post_id DESC
             LIMIT 5
@@ -161,6 +165,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
             ORDER BY COALESCE(profile.last_confirmed_at, profile.update_time) ASC, p.id DESC
             LIMIT 5
@@ -184,6 +189,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
             ORDER BY COALESCE(s.update_time, p.update_time) DESC, p.id DESC
             LIMIT 5
@@ -209,6 +215,7 @@ public interface GrowthInsightMapper {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id = #{authorId}
               AND p.create_time &gt;= #{since}
               AND e.domain IS NOT NULL
@@ -233,6 +240,7 @@ public interface GrowthInsightMapper {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id = #{authorId}
               AND p.create_time &gt;= #{since}
               AND p.create_time &lt; #{until}
@@ -263,6 +271,7 @@ public interface GrowthInsightMapper {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id = #{authorId}
               AND p.create_time &gt;= #{since}
               AND e.domain IS NOT NULL
@@ -292,6 +301,7 @@ public interface GrowthInsightMapper {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id = #{authorId}
               AND e.domain IS NOT NULL
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
@@ -327,6 +337,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.author_id = #{authorId}
               AND (c.author_id IS NULL OR c.author_id != #{authorId})
               AND c.create_time &gt;= #{since}
@@ -356,6 +367,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND p.create_time &gt;= #{startsAt}
               AND p.create_time &lt;= #{endsAt}
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
@@ -394,6 +406,7 @@ public interface GrowthInsightMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(e.ext_json, '$.anonymous')), 'false') NOT IN ('true', '1')
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%E2E%'
               AND UPPER(CONCAT_WS(' ', COALESCE(p.title, ''), COALESCE(p.content, ''), COALESCE(e.ext_json, ''))) NOT LIKE '%SMOKE%'
@@ -435,6 +448,7 @@ public interface GrowthInsightMapper {
             WHERE p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND e.domain IS NOT NULL
               <if test="domain != null">
                 AND e.domain = #{domain}

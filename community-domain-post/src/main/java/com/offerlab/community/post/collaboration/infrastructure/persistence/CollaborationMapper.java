@@ -562,7 +562,24 @@ public interface CollaborationMapper {
             FROM t_collab_content_need_event e
             INNER JOIN t_collab_content_need n ON n.id = e.need_id
             WHERE e.need_id = #{needId}
-              AND (#{cursor} = 0 OR e.id &lt; #{cursor})
+              AND (#{cursor} = 0 OR e.id < #{cursor})
+              AND e.id > 0
+              AND e.event_type IS NOT NULL
+              AND e.event_type IN ('CREATED', 'CLAIMED', 'SUBMITTED', 'WITHDRAWN', 'REJECTED',
+                                   'ACCEPTED', 'COMPLETED', 'CLOSED', 'MERGED', 'RELEASED')
+              AND e.actor_uid IS NOT NULL
+               AND e.actor_uid > 0
+              AND e.visibility_scope IN ('PUBLIC', 'PARTICIPANTS', 'MANAGERS')
+              AND e.create_time IS NOT NULL
+              AND (
+                    (e.target_type IS NULL AND e.target_id IS NULL)
+                    OR (
+                        e.target_type IS NOT NULL
+                         AND TRIM(e.target_type) <> ''
+                        AND e.target_id IS NOT NULL
+                         AND e.target_id > 0
+                    )
+              )
               AND (
                     e.visibility_scope = 'PUBLIC'
                     OR (
@@ -586,6 +603,125 @@ public interface CollaborationMapper {
             @Param("viewerUid") Long viewerUid,
             @Param("includeManagers") int includeManagers,
             @Param("cursor") long cursor,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_collab_content_need_event e
+            INNER JOIN t_collab_content_need n ON n.id = e.need_id
+            WHERE e.need_id = #{needId}
+              AND (
+                    e.visibility_scope = 'PUBLIC'
+                    OR (
+                        e.visibility_scope = 'PARTICIPANTS'
+                        AND (
+                            #{includeManagers} = 1
+                            OR (
+                                #{viewerUid} IS NOT NULL
+                                AND n.claimed_by_uid = #{viewerUid}
+                                AND e.claimant_uid = #{viewerUid}
+                            )
+                        )
+                    )
+                    OR (#{includeManagers} = 1 AND e.visibility_scope = 'MANAGERS')
+              )
+            """)
+    long countVisibleNeedEvents(
+            @Param("needId") Long needId,
+            @Param("viewerUid") Long viewerUid,
+            @Param("includeManagers") int includeManagers);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM t_collab_content_need_event e
+            INNER JOIN t_collab_content_need n ON n.id = e.need_id
+            WHERE e.need_id = #{needId}
+              AND (
+                    e.visibility_scope = 'PUBLIC'
+                    OR (
+                        e.visibility_scope = 'PARTICIPANTS'
+                        AND (
+                            #{includeManagers} = 1
+                            OR (
+                                #{viewerUid} IS NOT NULL
+                                AND n.claimed_by_uid = #{viewerUid}
+                                AND e.claimant_uid = #{viewerUid}
+                            )
+                        )
+                    )
+                    OR (#{includeManagers} = 1 AND e.visibility_scope = 'MANAGERS')
+              )
+              AND NOT (
+                    e.id > 0
+                    AND e.event_type IS NOT NULL
+                    AND e.event_type IN ('CREATED', 'CLAIMED', 'SUBMITTED', 'WITHDRAWN', 'REJECTED',
+                                         'ACCEPTED', 'COMPLETED', 'CLOSED', 'MERGED', 'RELEASED')
+                    AND e.actor_uid IS NOT NULL
+                    AND e.actor_uid > 0
+                    AND e.visibility_scope IN ('PUBLIC', 'PARTICIPANTS', 'MANAGERS')
+                    AND e.create_time IS NOT NULL
+                    AND (
+                        (e.target_type IS NULL AND e.target_id IS NULL)
+                        OR (
+                            e.target_type IS NOT NULL
+                            AND TRIM(e.target_type) <> ''
+                            AND e.target_id IS NOT NULL
+                            AND e.target_id > 0
+                        )
+                    )
+              )
+            """)
+    long countInvalidVisibleNeedEvents(
+            @Param("needId") Long needId,
+            @Param("viewerUid") Long viewerUid,
+            @Param("includeManagers") int includeManagers);
+
+    @Select("""
+            SELECT e.id
+            FROM t_collab_content_need_event e
+            INNER JOIN t_collab_content_need n ON n.id = e.need_id
+            WHERE e.need_id = #{needId}
+              AND (
+                    e.visibility_scope = 'PUBLIC'
+                    OR (
+                        e.visibility_scope = 'PARTICIPANTS'
+                        AND (
+                            #{includeManagers} = 1
+                            OR (
+                                #{viewerUid} IS NOT NULL
+                                AND n.claimed_by_uid = #{viewerUid}
+                                AND e.claimant_uid = #{viewerUid}
+                            )
+                        )
+                    )
+                    OR (#{includeManagers} = 1 AND e.visibility_scope = 'MANAGERS')
+              )
+              AND NOT (
+                    e.id > 0
+                    AND e.event_type IS NOT NULL
+                    AND e.event_type IN ('CREATED', 'CLAIMED', 'SUBMITTED', 'WITHDRAWN', 'REJECTED',
+                                         'ACCEPTED', 'COMPLETED', 'CLOSED', 'MERGED', 'RELEASED')
+                    AND e.actor_uid IS NOT NULL
+                    AND e.actor_uid > 0
+                    AND e.visibility_scope IN ('PUBLIC', 'PARTICIPANTS', 'MANAGERS')
+                    AND e.create_time IS NOT NULL
+                    AND (
+                        (e.target_type IS NULL AND e.target_id IS NULL)
+                        OR (
+                            e.target_type IS NOT NULL
+                            AND TRIM(e.target_type) <> ''
+                            AND e.target_id IS NOT NULL
+                            AND e.target_id > 0
+                        )
+                    )
+              )
+            ORDER BY e.id DESC
+            LIMIT #{limit}
+            """)
+    List<Long> listInvalidVisibleNeedEventIds(
+            @Param("needId") Long needId,
+            @Param("viewerUid") Long viewerUid,
+            @Param("includeManagers") int includeManagers,
             @Param("limit") int limit);
 
     @Select("""
@@ -1044,6 +1180,7 @@ public interface CollaborationMapper {
                        AND p.is_deleted = 0
                        AND p.post_status = 1
                        AND p.visibility = 1
+                       AND p.content_environment = 'COMMUNITY'
                    ) AS postCount,
                    s.moderation_hidden AS hidden,
                    (
@@ -1093,6 +1230,7 @@ public interface CollaborationMapper {
                        AND p.is_deleted = 0
                        AND p.post_status = 1
                        AND p.visibility = 1
+                       AND p.content_environment = 'COMMUNITY'
                    ) AS postCount,
                    s.moderation_hidden AS hidden,
                    (
@@ -1304,6 +1442,7 @@ public interface CollaborationMapper {
                     AND p.is_deleted = 0
                     AND p.post_status = 1
                     AND p.visibility = 1
+                    AND p.content_environment = 'COMMUNITY'
               )
               </if>
             ORDER BY x.id DESC
@@ -1360,6 +1499,7 @@ public interface CollaborationMapper {
                   AND p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
             )
             WHERE t_collab_series.id = #{seriesId}
             """)
@@ -1424,6 +1564,7 @@ public interface CollaborationMapper {
                        AND p.is_deleted = 0
                        AND p.post_status = 1
                        AND p.visibility = 1
+                       AND p.content_environment = 'COMMUNITY'
                    ) AS submissionCount,
                    moderation_hidden AS hidden,
                    create_time AS createTime,
@@ -1469,6 +1610,7 @@ public interface CollaborationMapper {
                        AND p.is_deleted = 0
                        AND p.post_status = 1
                        AND p.visibility = 1
+                       AND p.content_environment = 'COMMUNITY'
                    ) AS submissionCount,
                    moderation_hidden AS hidden,
                    create_time AS createTime,
@@ -1601,6 +1743,7 @@ public interface CollaborationMapper {
                     AND p.is_deleted = 0
                     AND p.post_status = 1
                     AND p.visibility = 1
+                    AND p.content_environment = 'COMMUNITY'
               )
               </if>
             ORDER BY x.id DESC
@@ -1657,6 +1800,7 @@ public interface CollaborationMapper {
                   AND p.is_deleted = 0
                   AND p.post_status = 1
                   AND p.visibility = 1
+                  AND p.content_environment = 'COMMUNITY'
             )
             WHERE t_collab_activity.id = #{activityId}
             """)
@@ -1853,6 +1997,7 @@ public interface CollaborationMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             WHERE (#{cursor} = 0 OR d.id &lt; #{cursor})
               AND d.moderation_hidden = 0
               <if test="domain != null">
@@ -1898,6 +2043,7 @@ public interface CollaborationMapper {
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
             WHERE d.id = #{id}
               AND d.moderation_hidden = 0
             LIMIT 1

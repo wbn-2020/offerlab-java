@@ -29,6 +29,7 @@ public interface CommunitySpaceMapper {
              AND p.is_deleted = 0
              AND p.post_status = 1
              AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             LEFT JOIN t_post_extension e ON e.post_id = p.id
             WHERE t.slug = #{topicSlug}
               AND t.topic_status = 1
@@ -155,6 +156,7 @@ public interface CommunitySpaceMapper {
              AND p.is_deleted = 0
              AND p.post_status = 1
              AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             WHERE n.moderation_hidden = 0
               AND n.source_type = 'POST'
               AND n.source_ref_id IN
@@ -194,6 +196,7 @@ public interface CommunitySpaceMapper {
              AND p.is_deleted = 0
              AND p.post_status = 1
              AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             WHERE c.post_id IN
             <foreach collection="postIds" item="postId" open="(" separator="," close=")">
               #{postId}
@@ -224,6 +227,7 @@ public interface CommunitySpaceMapper {
              AND p.is_deleted = 0
              AND p.post_status = 1
              AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             WHERE c.series_id = #{seriesId}
               <if test="cursor != null and cursor &gt; 0">
               AND c.id &lt; #{cursor}
@@ -248,6 +252,7 @@ public interface CommunitySpaceMapper {
              AND p.is_deleted = 0
              AND p.post_status = 1
              AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             WHERE sp.series_id = #{seriesId}
               AND sp.post_id = #{postId}
               AND sp.is_deleted = 0
@@ -267,6 +272,7 @@ public interface CommunitySpaceMapper {
              AND p.is_deleted = 0
              AND p.post_status = 1
              AND p.visibility = 1
+             AND p.content_environment = 'COMMUNITY'
             WHERE c.series_id = #{seriesId}
               AND c.post_id = #{postId}
             """)
@@ -297,6 +303,7 @@ public interface CommunitySpaceMapper {
                           AND source_post.is_deleted = 0
                           AND source_post.post_status = 1
                           AND source_post.visibility = 1
+                          AND source_post.content_environment = 'COMMUNITY'
                     )
                   )
               AND (
@@ -308,6 +315,7 @@ public interface CommunitySpaceMapper {
                           AND delivery_post.is_deleted = 0
                           AND delivery_post.post_status = 1
                           AND delivery_post.visibility = 1
+                          AND delivery_post.content_environment = 'COMMUNITY'
                     )
                   )
             </script>

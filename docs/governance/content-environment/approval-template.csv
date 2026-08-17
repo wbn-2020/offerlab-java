@@ -1,0 +1,2 @@
+governance_batch_id,post_id,expected_old_environment,approved_environment,author_id,created_at,entry_source,source_batch,evidence_reference,decision_reason,reviewer_1,reviewer_1_at,reviewer_2,reviewer_2_at,decision_status
+PENDING-20260814,741177956554252288,UNCLASSIFIED,,,,"unknown","unknown","acceptance-report-P2-07","Known acceptance candidate; classification intentionally left pending",,,,,PENDING_REVIEW

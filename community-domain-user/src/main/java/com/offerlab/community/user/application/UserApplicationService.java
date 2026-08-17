@@ -7,6 +7,7 @@ import com.offerlab.community.common.utils.LogMask;
 import com.offerlab.community.infra.id.SnowflakeIdGenerator;
 import com.offerlab.community.infra.moderation.ContentModerationService;
 import com.offerlab.community.infra.mq.producer.EventPublisher;
+import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.ExternalUrlSafety;
 import com.offerlab.community.infra.security.JwtService;
 import com.offerlab.community.infra.security.PasswordEncoder;
@@ -23,6 +24,7 @@ import com.offerlab.community.user.domain.repository.FollowRepository;
 import com.offerlab.community.user.domain.repository.UserRepository;
 import com.offerlab.community.user.infrastructure.persistence.mapper.UserPrivacySettingMapper;
 import com.offerlab.community.user.infrastructure.persistence.mapper.UserProfileMapper;
+import com.offerlab.community.user.infrastructure.persistence.mapper.UserPublicContentMapper;
 import com.offerlab.community.user.infrastructure.persistence.po.UserPrivacySettingPO;
 import com.offerlab.community.user.infrastructure.persistence.po.UserProfilePO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -54,7 +56,10 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class UserApplicationService {
-    private static final Set<String> SYNTHETIC_MARKERS = Set.of("E2E", "SMOKE", "CODEX", "TESTDATA");
+    private static final Set<String> SYNTHETIC_MARKERS = Set.of(
+            "E2E", "SMOKE", "CODEX", "TESTDATA", "TEST", "DEMO", "ACCEPTANCE",
+            "ADMIN", "验收", "测试", "演示", "管理员"
+    );
     private static final int MAX_LOGIN_FAILURES = 5;
     private static final Duration LOGIN_FAILURE_WINDOW = Duration.ofMinutes(15);
     private static final Duration LOGIN_LOCK_TTL = Duration.ofMinutes(15);
@@ -74,6 +79,8 @@ public class UserApplicationService {
     private final UserCacheService userCacheService;
     private final ContentModerationService contentModerationService;
     private final AfterCommitExecutor afterCommit;
+    private final AdminPermissionService adminPermissionService;
+    private final UserPublicContentMapper publicContentMapper;
 
     @Transactional
     public Long register(String email, String password, String nickname) {
@@ -373,14 +380,70 @@ public class UserApplicationService {
                 : userFacade.batchIsFollowing(viewerUid, candidateIds);
         List<Long> discoverableIds = candidateIds.stream()
                 .filter(uid -> isDiscoverableUser(viewerUid, uid, settings.get(uid), following.get(uid)))
+                .filter(uid -> adminPermissionService == null || !adminPermissionService.isAdmin(uid))
                 .toList();
         Map<Long, UserBriefDTO> users = userFacade.batchGetUserBriefs(discoverableIds);
+        Map<Long, Long> publicPostCounts = publicPostCounts(discoverableIds);
         return discoverableIds.stream()
                 .map(users::get)
                 .filter(java.util.Objects::nonNull)
                 .filter(user -> !isSyntheticUser(user))
+                .peek(user -> user.setPostCount(publicPostCounts.getOrDefault(user.getUid(), 0L)))
                 .limit(limit)
                 .toList();
+    }
+
+    public void applyPublicPostCount(UserBriefDTO user) {
+        if (user == null || user.getUid() == null) {
+            return;
+        }
+        user.setPostCount(publicPostCounts(List.of(user.getUid()))
+                .getOrDefault(user.getUid(), 0L));
+    }
+
+    private Map<Long, Long> publicPostCounts(List<Long> authorIds) {
+        if (publicContentMapper == null || authorIds == null || authorIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Map<String, Object>> rows = publicContentMapper.countPublicPostsByAuthors(authorIds);
+        if (rows == null || rows.isEmpty()) {
+            return Map.of();
+        }
+        return rows.stream()
+                .map(row -> new PublicPostCount(
+                        asLong(firstPresent(row, "authorId", "author_id", "AUTHORID", "AUTHOR_ID")),
+                        asLong(firstPresent(row, "postCount", "post_count", "POSTCOUNT", "POST_COUNT"))))
+                .filter(count -> count.authorId() != null && count.postCount() != null)
+                .collect(Collectors.toMap(PublicPostCount::authorId, PublicPostCount::postCount, Math::max));
+    }
+
+    private static Object firstPresent(Map<String, Object> row, String... keys) {
+        if (row == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            if (row.containsKey(key) && row.get(key) != null) {
+                return row.get(key);
+            }
+        }
+        return null;
+    }
+
+    private static Long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private record PublicPostCount(Long authorId, Long postCount) {
     }
 
     private static boolean isDiscoverableUser(Long viewerUid,

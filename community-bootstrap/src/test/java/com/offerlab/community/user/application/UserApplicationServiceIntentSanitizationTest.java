@@ -80,7 +80,9 @@ class UserApplicationServiceIntentSanitizationTest {
                 profileMapper,
                 userCacheService,
                 contentModerationService,
-                afterCommit);
+                afterCommit,
+                null,
+                null);
     }
 
     @Test

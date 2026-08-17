@@ -64,6 +64,7 @@ public interface InterviewQuestionTagMapper extends BaseMapper<InterviewQuestion
               AND p.is_deleted = 0
               AND p.post_status = 1
               AND p.visibility = 1
+              AND p.content_environment = 'COMMUNITY'
               AND q.company = #{company}
             GROUP BY t.id, t.tag_name
             ORDER BY COUNT(*) DESC, t.use_count DESC, t.id ASC

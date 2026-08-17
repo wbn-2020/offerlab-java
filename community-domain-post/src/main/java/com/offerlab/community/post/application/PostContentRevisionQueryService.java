@@ -220,6 +220,7 @@ public class PostContentRevisionQueryService implements PostContentRevisionQuery
                 && Objects.equals(row.getIsDeleted(), 0)
                 && Objects.equals(row.getPostStatus(), Post.STATUS_PUBLISHED)
                 && (row.getVisibility() == null || Objects.equals(row.getVisibility(), Post.VIS_PUBLIC))
+                && Post.isCommunityContent(row.getContentEnvironment())
                 && row.getDomain() != null
                 && row.getDomain() > 0
                 && !(Objects.equals(row.getDomain(), Post.DOMAIN_CAREER)

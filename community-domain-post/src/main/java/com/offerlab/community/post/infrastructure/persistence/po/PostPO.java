@@ -21,6 +21,7 @@ public class PostPO {
     private String coverUrl;
     private Integer visibility;
     private Integer postStatus;
+    private String contentEnvironment;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
     @TableLogic
