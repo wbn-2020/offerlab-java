@@ -5,6 +5,7 @@ import com.offerlab.community.infra.redis.cache.MultiLevelCache;
 import com.offerlab.community.infra.redis.cache.PostCounterRedis;
 import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.post.api.dto.PostDTO;
+import com.offerlab.community.post.api.dto.PostDetailCacheDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.repository.PostRepository;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -40,7 +41,7 @@ class PostCollectionStatisticsTest {
     @Mock private PostTrustSignalsMapper trustSignalsMapper;
     @Mock private PostCounterRedis postCounterRedis;
     @Mock private PostVersionHistoryService versionHistoryService;
-    @Mock private MultiLevelCache<PostDTO> multiLevelCache;
+    @Mock private MultiLevelCache<PostDetailCacheDTO> multiLevelCache;
     @Mock private PostApplicationService postService;
     @Mock private UserFacade userFacade;
     @Mock private MigrationCheckService migrationCheckService;

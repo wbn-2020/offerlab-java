@@ -164,7 +164,7 @@ class CommunityRoleServiceTest {
         grant.setGrantedBy(8L);
         grant.setGrantReason("approved");
         grant.setGrantedAt(LocalDateTime.of(2026, 7, 18, 8, 0));
-        grant.setExpiresAt(LocalDateTime.of(2026, 8, 18, 8, 0));
+        grant.setExpiresAt(LocalDateTime.of(2099, 1, 1, 8, 0));
         return grant;
     }
 

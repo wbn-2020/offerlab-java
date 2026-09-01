@@ -1,5 +1,6 @@
 package com.offerlab.community.interaction.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.offerlab.community.user.api.dto.UserBriefDTO;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -16,6 +17,7 @@ import java.util.List;
 public class CommentDTO {
     private Long id;
     private Long postId;
+    @JsonIgnore
     private Long authorId;
     private UserBriefDTO author;
     private Long rootId;

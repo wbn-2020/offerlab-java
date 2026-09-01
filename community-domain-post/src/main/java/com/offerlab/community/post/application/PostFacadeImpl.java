@@ -11,9 +11,11 @@ import com.offerlab.community.infra.security.AdminPermissionService;
 import com.offerlab.community.infra.security.UserContext;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.PublicPostExtensionSanitizer;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostCounterDTO;
 import com.offerlab.community.post.api.dto.PostCreateCmd;
+import com.offerlab.community.post.api.dto.PostDetailCacheDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.PostUpdateCmd;
@@ -69,7 +71,7 @@ public class PostFacadeImpl implements PostFacade {
     private final PostTrustSignalsMapper trustSignalsMapper;
     private final PostCounterRedis postCounterRedis;
     private final PostVersionHistoryService versionHistoryService;
-    private final MultiLevelCache<PostDTO> multiLevelCache;
+    private final MultiLevelCache<PostDetailCacheDTO> multiLevelCache;
     private final PostApplicationService postService;
     private final UserFacade userFacade;
     private final MigrationCheckService migrationCheckService;
@@ -90,10 +92,22 @@ public class PostFacadeImpl implements PostFacade {
     @Override
     public PostDTO getPost(Long postId, Long viewerUid) {
         String cacheKey = CacheKeyBuilder.postDetailRaw(postId);
-        PostDTO dto = multiLevelCache.get(cacheKey, key -> {
-            Post post = postRepo.findById(postId).orElse(null);
-            return post == null ? null : toFullDto(post);
-        }, PostDTO.class);
+        PostDetailCacheDTO cached = multiLevelCache.get(cacheKey,
+                key -> PostDetailCacheDTO.from(postRepo.findById(postId)
+                        .map(this::toFullDto)
+                        .orElse(null)),
+                PostDetailCacheDTO.class);
+        // Legacy cache entries were serialized from public PostDTO and lost
+        // fields required by the shared visibility contract.
+        if (cached != null && !cached.hasVisibilityMetadata()) {
+            multiLevelCache.evict(cacheKey);
+            cached = multiLevelCache.get(cacheKey,
+                    key -> PostDetailCacheDTO.from(postRepo.findById(postId)
+                            .map(this::toFullDto)
+                            .orElse(null)),
+                    PostDetailCacheDTO.class);
+        }
+        PostDTO dto = cached == null ? null : cached.toPostDTO();
         if (!isVisible(dto, viewerUid)) {
             return null;
         }
@@ -452,7 +466,7 @@ public class PostFacadeImpl implements PostFacade {
                         .title(p.getTitle())
                         .summary(summary(p.getContent()))
                         .coverUrl(p.getCoverUrl())
-                        .extJson(extJson.get(p.getId()))
+                        .extJson(PublicPostExtensionSanitizer.sanitize(extJson.get(p.getId())))
                         .domain(domainOf(extJson.get(p.getId())))
                         .anonymous(isAnonymousPost(extJson.get(p.getId())))
                         .tags(tags.getOrDefault(p.getId(), List.of()))
@@ -485,7 +499,7 @@ public class PostFacadeImpl implements PostFacade {
                         .title(p.getTitle())
                         .summary(summary(p.getContent()))
                         .coverUrl(p.getCoverUrl())
-                        .extJson(extJson.get(p.getId()))
+                        .extJson(PublicPostExtensionSanitizer.sanitize(extJson.get(p.getId())))
                         .domain(domainOf(extJson.get(p.getId())))
                         .anonymous(isAnonymousPost(extJson.get(p.getId())))
                         .tags(tags.getOrDefault(p.getId(), List.of()))
@@ -637,7 +651,7 @@ public class PostFacadeImpl implements PostFacade {
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
                 .contentEnvironment(p.getContentEnvironment())
-                .extJson(p.getExtJson())
+                .extJson(PublicPostExtensionSanitizer.sanitize(p.getExtJson()))
                 .domain(effectiveDomain(p.getDomain()))
                 .anonymous(isAnonymousPost(p))
                 .tags(tags)
@@ -693,7 +707,7 @@ public class PostFacadeImpl implements PostFacade {
                 .visibility(dto.getVisibility())
                 .postStatus(dto.getPostStatus())
                 .contentEnvironment(dto.getContentEnvironment())
-                .extJson(dto.getExtJson())
+                .extJson(PublicPostExtensionSanitizer.sanitize(dto.getExtJson()))
                 .domain(effectiveDomain(dto.getDomain()))
                 .anonymous(isAnonymousPost(dto))
                 .tags(dto.getTags())

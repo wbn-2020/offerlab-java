@@ -19,6 +19,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -475,8 +479,8 @@ public class EffectiveReadService {
         try {
             removeActiveSession(state.uid(), state.postId(), state.sessionToken());
         } catch (RuntimeException e) {
-            log.warn("effective read active session cleanup failed: token={}",
-                    state.sessionToken(), e);
+            log.warn("effective read active session cleanup failed: tokenFingerprint={}",
+                    tokenFingerprint(state.sessionToken()), e);
         }
         return completedState;
     }
@@ -511,8 +515,8 @@ public class EffectiveReadService {
                 removeActiveSession(state.uid(), state.postId(), state.sessionToken());
                 redis.delete(redisKey(state.sessionToken()));
             } catch (RuntimeException e) {
-                log.warn("effective read expired session cleanup failed: token={}",
-                        state.sessionToken(), e);
+                log.warn("effective read expired session cleanup failed: tokenFingerprint={}",
+                        tokenFingerprint(state.sessionToken()), e);
             }
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
                     "effective read session is expired");
@@ -532,8 +536,8 @@ public class EffectiveReadService {
             removeActiveSession(uid, postId, sessionToken);
             redis.delete(redisKey(sessionToken));
         } catch (RuntimeException cleanupError) {
-            log.warn("effective read partial session cleanup failed: token={}",
-                    sessionToken, cleanupError);
+            log.warn("effective read partial session cleanup failed: tokenFingerprint={}",
+                    tokenFingerprint(sessionToken), cleanupError);
         }
     }
 
@@ -562,8 +566,21 @@ public class EffectiveReadService {
                     List.of(readerLeaseKey(uid)),
                     sessionToken);
         } catch (RuntimeException e) {
-            log.warn("effective read reader lease release failed: uid={} token={}",
-                    uid, sessionToken, e);
+            log.warn("effective read reader lease release failed: uid={} tokenFingerprint={}",
+                    uid, tokenFingerprint(sessionToken), e);
+        }
+    }
+
+    private static String tokenFingerprint(String token) {
+        if (token == null || token.isBlank()) {
+            return "missing";
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(token.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 8);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
     }
 

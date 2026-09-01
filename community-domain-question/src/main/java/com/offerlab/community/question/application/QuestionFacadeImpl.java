@@ -737,7 +737,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         InterviewQuestionPO updatedQuestion = updatedRows.get(0);
         publishPendingQuestionQueueItem(updatedQuestion);
         evictQuestionDetail(questionId);
-        afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index update:" + questionId);
+        afterCommit.execute(() -> questionSearchIndexer.requestIndex(questionId), "question index update:" + questionId);
         return toAdminQuestionDtos(updatedRows, null).get(0);
     }
 
@@ -775,7 +775,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(), "题目内容或状态已更新，请刷新后重新审核");
         }
         evictQuestionDetail(questionId);
-        afterCommit.execute(() -> questionSearchIndexer.indexQuestion(questionId), "question index review:" + questionId);
+        afterCommit.execute(() -> questionSearchIndexer.requestIndex(questionId), "question index review:" + questionId);
     }
 
     @Override
@@ -850,7 +850,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
                 throw new BizException(ErrorCode.RESOURCE_NOT_FOUND);
             }
             evictQuestionDetail(id);
-            afterCommit.execute(() -> questionSearchIndexer.indexQuestion(id), "question duplicate hide index:" + id);
+            afterCommit.execute(() -> questionSearchIndexer.requestIndex(id), "question duplicate hide index:" + id);
             if (Objects.equals(duplicate.getStatus(), QuestionConstants.QUESTION_PENDING)) {
                 closePendingQuestionQueueItem(id, "question hidden as duplicate", "duplicate governance");
             }
@@ -1445,7 +1445,7 @@ public class QuestionFacadeImpl implements QuestionFacade {
         if (ids.isEmpty()) {
             return;
         }
-        afterCommit.execute(() -> ids.forEach(questionSearchIndexer::indexQuestion),
+        afterCommit.execute(() -> ids.forEach(questionSearchIndexer::requestIndex),
                 description + ":" + ids.size());
     }
 

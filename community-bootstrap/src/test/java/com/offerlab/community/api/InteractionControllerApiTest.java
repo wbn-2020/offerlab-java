@@ -21,10 +21,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -51,14 +55,19 @@ class InteractionControllerApiTest {
     private SnowflakeIdGenerator idGenerator;
     @Mock
     private JwtService jwtService;
+    @Mock
+    private StringRedisTemplate redis;
+    @Mock
+    private ValueOperations<String, String> valueOperations;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
+        lenient().when(redis.opsForValue()).thenReturn(valueOperations);
         mvc = ApiTestSupport.mvc(
                 new InteractionController(facade, postFacade, discussionFollowFacade, reportService,
-                        domainModeratorService, contentModerationService, idGenerator),
+                        domainModeratorService, contentModerationService, idGenerator, redis),
                 jwtService);
     }
 
@@ -93,6 +102,7 @@ class InteractionControllerApiTest {
     void commentUsesAuthenticatedUserAndModerationDecision() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(99L);
         when(idGenerator.nextId()).thenReturn(77L);
+        when(valueOperations.setIfAbsent(anyString(), eq("77"), any())).thenReturn(true);
         when(contentModerationService.checkContent(eq(99L), eq(ContentModerationService.SCOPE_COMMENT),
                 eq(ContentModerationService.SOURCE_COMMENT), eq(77L), eq("hello")))
                 .thenReturn(new ContentModerationService.ModerationDecision(false, "ALLOW", null, null));
@@ -113,6 +123,57 @@ class InteractionControllerApiTest {
         assertEquals(99L, captor.getValue().getAuthorUid());
         assertEquals("hello", captor.getValue().getContent());
         assertEquals(false, captor.getValue().getReviewRequired());
+    }
+
+    @Test
+    void repeatedCommentReturnsOriginalIdWithoutSecondWrite() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(99L);
+        when(idGenerator.nextId()).thenReturn(78L);
+        when(valueOperations.get(anyString())).thenReturn("77");
+
+        mvc.perform(post("/api/v1/posts/10/comments")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hello\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.commentId").value(77))
+                .andExpect(jsonPath("$.data.deduplicated").value(true));
+
+        verifyNoInteractions(facade);
+    }
+
+    @Test
+    void concurrentReservationWithoutReadableIdDoesNotInsertDuplicate() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(99L);
+        when(idGenerator.nextId()).thenReturn(78L);
+        when(valueOperations.setIfAbsent(anyString(), eq("78"), any())).thenReturn(false);
+
+        mvc.perform(post("/api/v1/posts/10/comments")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hello\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(ErrorCode.CONCURRENT_MODIFICATION.getCode()))
+                .andExpect(jsonPath("$.message").value("评论正在提交，请稍后查看结果"));
+
+        verifyNoInteractions(facade);
+    }
+
+    @Test
+    void unavailableCommentIdempotencyStoreFailsClosed() throws Exception {
+        when(jwtService.parseUid("token")).thenReturn(99L);
+        when(idGenerator.nextId()).thenReturn(78L);
+        when(valueOperations.get(anyString())).thenThrow(new IllegalStateException("redis unavailable"));
+
+        mvc.perform(post("/api/v1/posts/10/comments")
+                        .header("Authorization", "Bearer token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hello\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value(ErrorCode.CACHE_ERROR.getCode()))
+                .andExpect(jsonPath("$.message").value("服务暂时不可用，请稍后重试。"));
+
+        verifyNoInteractions(facade);
     }
 
     @Test

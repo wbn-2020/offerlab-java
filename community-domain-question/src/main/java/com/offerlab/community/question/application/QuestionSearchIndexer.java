@@ -58,6 +58,17 @@ public class QuestionSearchIndexer {
         return indexQuestion(questionId, true);
     }
 
+    public void requestIndex(Long questionId) {
+        if (questionId == null || questionId <= 0) {
+            return;
+        }
+        events.publishEvent(new QuestionIndexRetryEvent(
+                questionId,
+                QuestionIndexRetryService.OP_INDEX,
+                null
+        ));
+    }
+
     boolean indexQuestionForRetry(Long questionId) {
         return indexQuestion(questionId, false);
     }
@@ -86,6 +97,17 @@ public class QuestionSearchIndexer {
 
     public boolean deleteQuestion(Long questionId) {
         return deleteQuestion(questionId, true);
+    }
+
+    public void requestDelete(Long questionId) {
+        if (questionId == null || questionId <= 0) {
+            return;
+        }
+        events.publishEvent(new QuestionIndexRetryEvent(
+                questionId,
+                QuestionIndexRetryService.OP_DELETE,
+                null
+        ));
     }
 
     boolean deleteQuestionForRetry(Long questionId) {

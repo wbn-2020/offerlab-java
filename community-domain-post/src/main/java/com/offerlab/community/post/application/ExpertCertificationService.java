@@ -64,15 +64,15 @@ public class ExpertCertificationService {
         List<ExpertCertificationEligibilityDTO.CheckItemDTO> checks = List.of(
                 ExpertCertificationEligibilityDTO.CheckItemDTO.builder()
                         .code("published_posts")
-                        .label("Public domain posts")
+                        .label("同领域公开内容")
                         .passed(enoughPosts)
                         .detail(posts.size() + "/" + REQUIRED_PUBLIC_POSTS)
                         .build(),
                 ExpertCertificationEligibilityDTO.CheckItemDTO.builder()
                         .code("recent_activity")
-                        .label("Recent activity")
+                        .label("近期活跃")
                         .passed(recentActivity)
-                        .detail(recentActivity ? "active within 90 days" : "needs one recent public post")
+                        .detail(recentActivity ? "90 天内有公开更新" : "需要至少一篇近期公开内容")
                         .build()
         );
 
@@ -85,8 +85,8 @@ public class ExpertCertificationService {
                 .manualReviewOnly(true)
                 .riskWarning(riskWarning(activeDomain))
                 .explanation(eligible
-                        ? "Pilot application can be submitted for manual review."
-                        : "More public domain contributions are needed before manual review.")
+                        ? "当前已达到申请门槛，可以提交人工审核。"
+                        : "需要继续积累同领域公开内容后再申请人工审核。")
                 .checks(checks)
                 .build();
     }
@@ -124,12 +124,12 @@ public class ExpertCertificationService {
         ExpertCertificationEligibilityDTO eligibility = getEligibility(applicantUid, activeDomain);
         if (!Boolean.TRUE.equals(eligibility.getEligible())) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
-                    "Current account does not meet the pilot application gate yet.");
+                    "当前账号尚未达到认证申请门槛。");
         }
         if (Boolean.TRUE.equals(eligibility.getRiskAcknowledgementRequired())
                 && !Boolean.TRUE.equals(cmd.getRiskAcknowledged())) {
             throw new BizException(ErrorCode.PARAM_ERROR.getCode(),
-                    "Investment pilot applications require explicit risk acknowledgement.");
+                    "申请投资理财领域认证前必须确认风险边界。");
         }
 
         String lockName = submitLockName(applicantUid, activeDomain);
@@ -137,7 +137,7 @@ public class ExpertCertificationService {
         try {
             if (mapper.selectActiveByApplicantAndDomain(applicantUid, activeDomain) != null) {
                 throw new BizException(ErrorCode.DUPLICATE_OPERATION.getCode(),
-                        "An active pilot application already exists for this domain.");
+                        "当前领域已有处理中或已通过的认证申请。");
             }
 
             LocalDateTime now = LocalDateTime.now();
@@ -182,7 +182,7 @@ public class ExpertCertificationService {
         if (mapper.reviewIfStatus(applicationId, STATUS_SUBMITTED, nextStatus, reviewerUid,
                 reviewNote, now, now) != 1) {
             throw new BizException(ErrorCode.INVALID_STATUS.getCode(),
-                    "application was changed by another reviewer");
+                    "申请状态已被其他审核人更新，请刷新后重试。");
         }
         ExpertCertificationApplicationPO updated = requireApplication(applicationId);
         ExpertCertificationApplicationDTO after = toDto(updated);
@@ -388,7 +388,7 @@ public class ExpertCertificationService {
         if (domain != Post.DOMAIN_INVESTMENT) {
             return null;
         }
-        return "Community content is not investment advice. Approval stays manual and does not create an automatic certification.";
+        return "社区内容不构成投资建议；认证申请始终由人工审核，不会自动获得认证。";
     }
 
     private static String limit(String value, int maxLength) {
@@ -404,13 +404,13 @@ public class ExpertCertificationService {
             Integer locked = mapper.acquireNamedLock(lockName, SUBMIT_LOCK_TIMEOUT_SECONDS);
             if (!Integer.valueOf(1).equals(locked)) {
                 throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
-                        "Expert certification submit guard is busy; please retry.");
+                        "认证申请正在处理中，请稍后重试。");
             }
         } catch (BizException ex) {
             throw ex;
         } catch (RuntimeException ex) {
             throw new BizException(ErrorCode.DEPENDENCY_ERROR.getCode(),
-                    "Expert certification submit guard is unavailable.");
+                    "认证申请服务暂时不可用，请稍后重试。");
         }
     }
 

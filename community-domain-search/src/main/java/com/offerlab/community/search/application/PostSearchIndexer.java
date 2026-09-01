@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PublicContentFilter;
+import com.offerlab.community.post.api.PublicPostExtensionSanitizer;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
 import com.offerlab.community.post.domain.model.Post;
@@ -523,7 +524,8 @@ public class PostSearchIndexer {
         doc.put("content", nullToEmpty(post.getContent()));
         doc.put("summary", summary(post.getContent()));
         doc.put("coverUrl", post.getCoverUrl());
-        doc.put("extJson", extension == null ? null : extension.getExtJson());
+        doc.put("extJson", extension == null ? null
+                : PublicPostExtensionSanitizer.sanitize(extension.getExtJson()));
         doc.put("company", ext.path("company").asText(""));
         doc.put("position", ext.path("position").asText(""));
         doc.put("difficulty", ext.path("difficulty").asText(""));
@@ -643,10 +645,22 @@ public class PostSearchIndexer {
     }
 
     private Integer validDomain(JsonNode value) {
-        if (value == null || !value.canConvertToInt()) {
+        if (value == null || value.isNull()) {
             return null;
         }
-        int domain = value.asInt();
+        Integer domain = null;
+        if (value.canConvertToInt()) {
+            domain = value.asInt();
+        } else if (value.isTextual()) {
+            try {
+                domain = Integer.parseInt(value.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        if (domain == null) {
+            return null;
+        }
         return domain >= Post.DOMAIN_TECH && domain <= Post.DOMAIN_INVESTMENT ? domain : null;
     }
 

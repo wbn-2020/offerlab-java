@@ -58,10 +58,10 @@ class ContentEnvironmentCacheInvalidationServiceTest {
         verify(requiredCacheEvictor).evictExact(keys.capture());
         assertEquals(List.of(
                 "post:detail:101",
-                "post:detail:raw:101",
+                "post:detail:raw:v2:101",
                 "post:counter:101",
                 "post:detail:102",
-                "post:detail:raw:102",
+                "post:detail:raw:v2:102",
                 "post:counter:102",
                 "question:company-prep:OfferLab"
         ), List.copyOf(keys.getValue()));

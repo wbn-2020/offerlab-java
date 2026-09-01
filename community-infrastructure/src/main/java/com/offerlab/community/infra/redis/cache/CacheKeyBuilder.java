@@ -38,7 +38,8 @@ public final class CacheKeyBuilder {
     }
 
     public static String postDetailRaw(Long postId) {
-        return "post:detail:raw:" + postId;
+        // v2 separates the complete internal snapshot from legacy public DTO JSON.
+        return "post:detail:raw:v2:" + postId;
     }
 
     /**

@@ -20,6 +20,9 @@ public class UserAccountPO {
     private Integer accountStatus;
     private LocalDateTime lastLoginTime;
     private String lastLoginIp;
+    private LocalDateTime termsAcceptedAt;
+    private String termsVersion;
+    private String privacyVersion;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
     @TableLogic

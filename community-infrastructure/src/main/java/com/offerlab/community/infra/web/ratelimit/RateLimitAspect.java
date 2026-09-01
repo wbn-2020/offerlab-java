@@ -21,6 +21,8 @@ import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 
 /**
@@ -68,7 +70,11 @@ public class RateLimitAspect {
 
         if (pass == null || pass == 0L) {
             log.warn("rate limit exceeded: key={} rate={}/{}s", key, rl.rate(), rl.per());
-            throw new BizException(ErrorCode.RATE_LIMIT_EXCEEDED);
+            long retryAfterSeconds = Math.max(1L, redis.getExpire(key, TimeUnit.SECONDS));
+            throw new BizException(
+                    ErrorCode.RATE_LIMIT_EXCEEDED.getCode(),
+                    ErrorCode.RATE_LIMIT_EXCEEDED.getMessage(),
+                    Map.of("retryAfterSeconds", retryAfterSeconds));
         }
         return pjp.proceed();
     }

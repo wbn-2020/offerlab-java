@@ -37,6 +37,8 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +52,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 @RestController
 @RequiredArgsConstructor
@@ -64,6 +68,7 @@ public class InteractionController {
     private final DomainModeratorService domainModeratorService;
     private final ContentModerationService contentModerationService;
     private final SnowflakeIdGenerator idGen;
+    private final StringRedisTemplate redis;
 
     @PostMapping("/posts/{postId}/like")
     @RateLimit(key = "'like:' + #uid", rate = 60, per = 60)
@@ -257,24 +262,121 @@ public class InteractionController {
 
     @PostMapping("/posts/{postId}/comments")
     @RateLimit(key = "'comment:' + #uid", rate = 30, per = 60)
-    public Result<Map<String, Object>> comment(@PathVariable Long postId, @Valid @RequestBody CommentReq req) {
+    public Result<Map<String, Object>> comment(@PathVariable Long postId,
+                                               @Valid @RequestBody CommentReq req) {
         Long uid = UserContext.require();
         contentModerationService.requireUserCanPublish(uid);
         Long id = idGen.nextId();
+        String idempotencyKey = commentIdempotencyKey(uid, postId, req);
+        ValueOperations<String, String> idempotency = commentIdempotencyOperations();
+        String existingId = readReservedCommentId(idempotency, idempotencyKey);
+        if (existingId != null) {
+            return deduplicatedComment(existingId);
+        }
+        Boolean reserved;
+        try {
+            reserved = idempotency.setIfAbsent(
+                    idempotencyKey, String.valueOf(id), java.time.Duration.ofSeconds(30));
+        } catch (RuntimeException error) {
+            throw commentIdempotencyUnavailable(error);
+        }
+        if (reserved == null) {
+            throw commentIdempotencyUnavailable(null);
+        }
+        if (!Boolean.TRUE.equals(reserved)) {
+            String concurrentId = readReservedCommentId(idempotency, idempotencyKey);
+            if (concurrentId != null) {
+                return deduplicatedComment(concurrentId);
+            }
+            throw new BizException(
+                    ErrorCode.CONCURRENT_MODIFICATION.getCode(),
+                    "评论正在提交，请稍后查看结果");
+        }
         ContentModerationService.ModerationDecision moderationDecision = contentModerationService.checkContent(
                 uid, ContentModerationService.SCOPE_COMMENT, ContentModerationService.SOURCE_COMMENT, id,
                 req.getContent());
-        // parentId/replyToUid 同时传入时表示楼中楼回复，领域层负责归并根评论关系。
-        facade.addComment(CommentCreateCmd.builder()
-                .commentId(id)
-                .postId(postId)
-                .authorUid(uid)
-                .parentId(req.getParentId())
-                .replyToUid(req.getReplyToUid())
-                .content(req.getContent())
-                .reviewRequired(moderationDecision.reviewRequired())
-                .build());
-        return Result.ok(Map.of("commentId", id, "reviewRequired", moderationDecision.reviewRequired()));
+        try {
+            // parentId/replyToUid 同时传入时表示楼中楼回复，领域层负责归并根评论关系。
+            facade.addComment(CommentCreateCmd.builder()
+                    .commentId(id)
+                    .postId(postId)
+                    .authorUid(uid)
+                    .parentId(req.getParentId())
+                    .replyToUid(req.getReplyToUid())
+                    .content(req.getContent())
+                    .reviewRequired(moderationDecision.reviewRequired())
+                    .build());
+            return Result.ok(Map.of("commentId", id, "reviewRequired", moderationDecision.reviewRequired()));
+        } catch (RuntimeException error) {
+            releaseCommentReservation(idempotency, idempotencyKey, id);
+            throw error;
+        }
+    }
+
+    private ValueOperations<String, String> commentIdempotencyOperations() {
+        try {
+            ValueOperations<String, String> operations = redis.opsForValue();
+            if (operations == null) {
+                throw commentIdempotencyUnavailable(null);
+            }
+            return operations;
+        } catch (BizException error) {
+            throw error;
+        } catch (RuntimeException error) {
+            throw commentIdempotencyUnavailable(error);
+        }
+    }
+
+    private String readReservedCommentId(ValueOperations<String, String> operations, String key) {
+        try {
+            return operations.get(key);
+        } catch (RuntimeException error) {
+            throw commentIdempotencyUnavailable(error);
+        }
+    }
+
+    private Result<Map<String, Object>> deduplicatedComment(String commentId) {
+        try {
+            return Result.ok(Map.of("commentId", Long.valueOf(commentId), "deduplicated", true));
+        } catch (NumberFormatException error) {
+            throw commentIdempotencyUnavailable(error);
+        }
+    }
+
+    private BizException commentIdempotencyUnavailable(RuntimeException cause) {
+        BizException error = new BizException(
+                ErrorCode.CACHE_ERROR.getCode(),
+                "评论提交保护暂时不可用，请稍后重试");
+        if (cause != null) {
+            error.initCause(cause);
+        }
+        return error;
+    }
+
+    private void releaseCommentReservation(ValueOperations<String, String> operations, String key, Long commentId) {
+        try {
+            if (String.valueOf(commentId).equals(operations.get(key))) {
+                redis.delete(key);
+            }
+        } catch (RuntimeException ignored) {
+            // 预留键最多保留 30 秒；不要用缓存清理失败覆盖真实的评论写入异常。
+        }
+    }
+
+    private String commentIdempotencyKey(Long uid, Long postId, CommentReq req) {
+        String input = uid + ":" + postId + ":" + String.valueOf(req.getParentId()) + ":"
+                + String.valueOf(req.getReplyToUid()) + ":" + req.getContent().trim();
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder encoded = new StringBuilder(digest.length * 2);
+            for (byte value : digest) {
+                encoded.append(String.format("%02x", value));
+            }
+            return "comment:idempotency:" + encoded;
+        } catch (Exception error) {
+            throw new IllegalStateException("评论请求校验失败", error);
+        }
     }
 
     @PublicApi

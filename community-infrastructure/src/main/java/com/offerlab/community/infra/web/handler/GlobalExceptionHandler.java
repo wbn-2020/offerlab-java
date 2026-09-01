@@ -26,6 +26,8 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.sql.SQLRecoverableException;
 import java.sql.SQLTransientException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Slf4j
 @RestControllerAdvice
@@ -174,8 +176,24 @@ public class GlobalExceptionHandler {
         return "UNKNOWN";
     }
 
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Result<?>> handleValidation(MethodArgumentNotValidException e) {
+        Map<String, String> fieldErrors = new LinkedHashMap<>();
+        e.getBindingResult().getFieldErrors().forEach(error ->
+                fieldErrors.putIfAbsent(error.getField(), error.getDefaultMessage()));
+        e.getBindingResult().getGlobalErrors().forEach(error ->
+                fieldErrors.putIfAbsent("request", error.getDefaultMessage()));
+        log.warn("[validation] fields={}", fieldErrors.keySet());
+        Result<?> r = Result.builder()
+                .code(ErrorCode.PARAM_ERROR.getCode())
+                .message("请检查填写内容")
+                .data(Map.of("fieldErrors", fieldErrors))
+                .build();
+        r.setTraceId(TraceContext.get());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(r);
+    }
+
     @ExceptionHandler({
-            MethodArgumentNotValidException.class,
             MissingServletRequestParameterException.class,
             MethodArgumentTypeMismatchException.class,
             HttpMessageNotReadableException.class,

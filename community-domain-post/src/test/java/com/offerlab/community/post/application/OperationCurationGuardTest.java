@@ -138,8 +138,11 @@ class OperationCurationGuardTest {
                         && discoveryService.contains("modules.put(\"contentForms\""),
                 "DiscoveryMap must expose the five content forms as a first-class public module");
         assertTrue(discoveryService.contains("catch (BizException e)")
-                        && count(discoveryService, "return List.of();") >= 2,
-                "DiscoveryMap module failures must degrade to empty modules instead of failing the whole public map");
+                        && discoveryService.contains("ModuleLoadResult.ready")
+                        && discoveryService.contains("ModuleLoadResult.unavailable")
+                        && discoveryService.contains("status(unavailable ? STATUS_UNAVAILABLE : (empty ? STATUS_EMPTY : STATUS_READY))")
+                        && discoveryService.contains("degraded(unavailable)"),
+                "DiscoveryMap must distinguish healthy empty modules from unavailable modules without failing the whole public map");
         assertTrue(v3SlotMigration.contains("'DISCOVERY_FEATURED_TOPICS'")
                         && v3SlotMigration.contains("'DRAFT'")
                         && v3SlotMigration.contains("no demo, fixture, fallback, or published content is seeded")

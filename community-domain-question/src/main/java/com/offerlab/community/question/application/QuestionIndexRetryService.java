@@ -108,10 +108,14 @@ public class QuestionIndexRetryService {
         task.setOperation(operation);
         task.setTaskStatus(QuestionIndexRetryTaskMapper.STATUS_PENDING);
         task.setRetryCount(0);
-        task.setNextRetryTime(LocalDateTime.now().plusSeconds(30));
+        task.setNextRetryTime(cause == null ? LocalDateTime.now() : LocalDateTime.now().plusSeconds(30));
         task.setLastError(shortMessage(cause));
         taskMapper.upsertPending(task);
-        log.warn("question index retry task enqueued: operation={} questionId={}", operation, questionId, cause);
+        if (cause == null) {
+            log.debug("question index task enqueued: operation={} questionId={}", operation, questionId);
+        } else {
+            log.warn("question index retry task enqueued: operation={} questionId={}", operation, questionId, cause);
+        }
     }
 
     private void handleRetryFailure(QuestionIndexRetryTaskPO task, Exception e) {

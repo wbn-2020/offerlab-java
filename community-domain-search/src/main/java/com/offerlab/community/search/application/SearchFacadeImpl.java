@@ -10,6 +10,7 @@ import com.offerlab.community.infra.db.MigrationCheckService;
 import com.offerlab.community.infra.es.client.ElasticsearchHttpClient;
 import com.offerlab.community.post.api.PublicContentFilter;
 import com.offerlab.community.post.api.PostFacade;
+import com.offerlab.community.post.api.PublicPostExtensionSanitizer;
 import com.offerlab.community.post.api.dto.PostBriefDTO;
 import com.offerlab.community.post.api.dto.PostTrustSignalsDTO;
 import com.offerlab.community.post.api.dto.TagDTO;
@@ -438,7 +439,7 @@ public class SearchFacadeImpl implements SearchFacade {
                     .highlightTitle(firstHighlight(hit, "title").orElse(null))
                     .highlightSummary(firstHighlight(hit, "content").orElse(null))
                     .coverUrl(source.path("coverUrl").asText(null))
-                    .extJson(source.path("extJson").asText(null))
+                    .extJson(PublicPostExtensionSanitizer.sanitize(source.path("extJson").asText(null)))
                     .tags(toTags(source.path("tags")))
                     .createTime(toLocalDateTime(source.path("createTime").asLong(0L)))
                     .build();
@@ -797,7 +798,7 @@ public class SearchFacadeImpl implements SearchFacade {
                 .title(p.getTitle())
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
-                .extJson(extByPostId.get(p.getId()))
+                .extJson(PublicPostExtensionSanitizer.sanitize(extByPostId.get(p.getId())))
                 .tags(tags.getOrDefault(p.getId(), List.of()))
                 .createTime(p.getCreateTime())
                 .build()).toList();
@@ -925,7 +926,7 @@ public class SearchFacadeImpl implements SearchFacade {
                 .title(p.getTitle())
                 .summary(summary(p.getContent()))
                 .coverUrl(p.getCoverUrl())
-                .extJson(extByPostId.get(p.getId()))
+                .extJson(PublicPostExtensionSanitizer.sanitize(extByPostId.get(p.getId())))
                 .tags(tags.getOrDefault(p.getId(), List.of()))
                 .createTime(p.getCreateTime())
                 .build()).toList();

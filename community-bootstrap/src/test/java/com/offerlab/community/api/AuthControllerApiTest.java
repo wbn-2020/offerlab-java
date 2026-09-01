@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -85,6 +86,59 @@ class AuthControllerApiTest {
         mvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"not-email\",\"password\":\"123\",\"nickname\":\"x\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
+    void registerRequiresAgreementAndReturnsAuthenticatedSession() throws Exception {
+        when(userService.register(
+                eq("u@example.com"),
+                eq("secret123"),
+                eq("newbie"),
+                eq(true),
+                eq(true),
+                eq(UserApplicationService.CURRENT_TERMS_VERSION),
+                eq(UserApplicationService.CURRENT_PRIVACY_VERSION))).thenReturn(42L);
+        when(userService.login(eq("u@example.com"), eq("secret123"), anyString())).thenReturn("register-token");
+
+        mvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "u@example.com",
+                                  "password": "secret123",
+                                  "nickname": "newbie",
+                                  "termsAccepted": true,
+                                  "privacyAccepted": true,
+                                  "termsVersion": "2026-09-01",
+                                  "privacyVersion": "2026-09-01"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uid").value(42))
+                .andExpect(jsonPath("$.data.token").value("register-token"));
+
+        verify(userService).login(eq("u@example.com"), eq("secret123"), anyString());
+    }
+
+    @Test
+    void registerRejectsMissingAgreementBeforeCallingService() throws Exception {
+        mvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "u@example.com",
+                                  "password": "secret123",
+                                  "nickname": "newbie",
+                                  "termsAccepted": false,
+                                  "privacyAccepted": true,
+                                  "termsVersion": "2026-09-01",
+                                  "privacyVersion": "2026-09-01"
+                                }
+                                """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(ErrorCode.PARAM_ERROR.getCode()));
 

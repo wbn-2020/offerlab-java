@@ -25,6 +25,9 @@ public class User {
     private String passwordHash;
     private Integer accountStatus;
     private LocalDateTime lastLoginTime;
+    private LocalDateTime termsAcceptedAt;
+    private String termsVersion;
+    private String privacyVersion;
 
     private String nickname;
     private String avatarUrl;

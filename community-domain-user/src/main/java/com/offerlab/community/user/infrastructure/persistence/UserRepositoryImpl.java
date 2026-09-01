@@ -37,6 +37,9 @@ public class UserRepositoryImpl implements UserRepository {
         acc.setPasswordHash(user.getPasswordHash());
         acc.setPasswordSalt("");
         acc.setAccountStatus(User.STATUS_NORMAL);
+        acc.setTermsAcceptedAt(user.getTermsAcceptedAt());
+        acc.setTermsVersion(user.getTermsVersion());
+        acc.setPrivacyVersion(user.getPrivacyVersion());
         accountMapper.insert(acc);
 
         UserProfilePO prof = new UserProfilePO();
@@ -129,6 +132,9 @@ public class UserRepositoryImpl implements UserRepository {
                 .passwordHash(acc.getPasswordHash())
                 .accountStatus(acc.getAccountStatus())
                 .lastLoginTime(acc.getLastLoginTime())
+                .termsAcceptedAt(acc.getTermsAcceptedAt())
+                .termsVersion(acc.getTermsVersion())
+                .privacyVersion(acc.getPrivacyVersion())
                 .createTime(acc.getCreateTime())
                 .build();
         if (prof != null) {

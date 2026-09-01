@@ -42,6 +42,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
@@ -65,6 +66,8 @@ public class UserApplicationService {
     private static final Duration LOGIN_LOCK_TTL = Duration.ofMinutes(15);
     private static final String LOGIN_FAILURE_PREFIX = "auth:login:fail:";
     private static final String LOGIN_LOCK_PREFIX = "auth:login:lock:";
+    public static final String CURRENT_TERMS_VERSION = "2026-09-01";
+    public static final String CURRENT_PRIVACY_VERSION = "2026-09-01";
 
     private final UserRepository userRepo;
     private final FollowRepository followRepo;
@@ -84,11 +87,45 @@ public class UserApplicationService {
 
     @Transactional
     public Long register(String email, String password, String nickname) {
+        return register(
+                email,
+                password,
+                nickname,
+                true,
+                true,
+                CURRENT_TERMS_VERSION,
+                CURRENT_PRIVACY_VERSION);
+    }
+
+    @Transactional
+    public Long register(String email,
+                         String password,
+                         String nickname,
+                         boolean termsAccepted,
+                         boolean privacyAccepted,
+                         String termsVersion,
+                         String privacyVersion) {
         if (!StringUtils.hasText(email) || !StringUtils.hasText(password) || !StringUtils.hasText(nickname)) {
             throw new BizException(ErrorCode.PARAM_ERROR);
         }
-        if (password.length() < 6 || password.length() > 64) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
+        if (!termsAccepted || !privacyAccepted) {
+            throw new BizException(
+                    ErrorCode.PARAM_ERROR.getCode(),
+                    "请阅读并同意服务条款与隐私政策",
+                    Map.of("fieldErrors", Map.of("agreements", "请阅读并同意服务条款与隐私政策")));
+        }
+        if (!CURRENT_TERMS_VERSION.equals(termsVersion)
+                || !CURRENT_PRIVACY_VERSION.equals(privacyVersion)) {
+            throw new BizException(
+                    ErrorCode.PARAM_ERROR.getCode(),
+                    "协议版本已更新，请重新确认",
+                    Map.of("fieldErrors", Map.of("agreements", "协议版本已更新，请重新确认")));
+        }
+        if (!isValidPassword(password)) {
+            throw new BizException(
+                    ErrorCode.PARAM_ERROR.getCode(),
+                    "密码至少 8 位，且需同时包含字母和数字",
+                    Map.of("fieldErrors", Map.of("password", "密码至少 8 位，且需同时包含字母和数字")));
         }
         String normalizedEmail = normalizeEmail(email);
         String normalizedNickname = normalizeNickname(nickname);
@@ -104,6 +141,9 @@ public class UserApplicationService {
                 .passwordHash(passwordEncoder.encode(password))
                 .nickname(normalizedNickname)
                 .accountStatus(User.STATUS_NORMAL)
+                .termsAcceptedAt(LocalDateTime.now())
+                .termsVersion(CURRENT_TERMS_VERSION)
+                .privacyVersion(CURRENT_PRIVACY_VERSION)
                 .build();
         userRepo.register(user);
         eventPublisher.publish(UserRegisteredEvent.builder()
@@ -146,9 +186,12 @@ public class UserApplicationService {
         if (!StringUtils.hasText(oldPassword) || !passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
             throw new BizException(ErrorCode.PASSWORD_ERROR);
         }
-        if (!StringUtils.hasText(newPassword) || newPassword.length() < 6 || newPassword.length() > 64
+        if (!isValidPassword(newPassword)
                 || oldPassword.equals(newPassword)) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
+            throw new BizException(
+                    ErrorCode.PARAM_ERROR.getCode(),
+                    "密码至少 8 位，且需同时包含字母和数字",
+                    Map.of("fieldErrors", Map.of("newPassword", "密码至少 8 位，且需同时包含字母和数字")));
         }
         userRepo.updatePassword(uid, passwordEncoder.encode(newPassword));
         jwtService.invalidateAll(uid);
@@ -220,6 +263,14 @@ public class UserApplicationService {
                 u.getNickname(), u.getBio());
         userRepo.updateProfile(u);
         afterCommit.execute(() -> userCacheService.evictBrief(uid), "user profile cache eviction:" + uid);
+    }
+
+    private static boolean isValidPassword(String password) {
+        return StringUtils.hasText(password)
+                && password.length() >= 8
+                && password.length() <= 64
+                && password.chars().anyMatch(Character::isLetter)
+                && password.chars().anyMatch(Character::isDigit);
     }
 
     private String normalizeEmail(String email) {

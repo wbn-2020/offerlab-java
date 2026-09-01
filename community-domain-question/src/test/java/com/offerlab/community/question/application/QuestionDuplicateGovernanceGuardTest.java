@@ -61,6 +61,6 @@ class QuestionDuplicateGovernanceGuardTest {
         assertTrue(facadeSource.contains("sanitizeDuplicateHideIds(questionId, duplicateQuestionIds)"),
                 "duplicate hide facade must retain defensive sanitization");
         assertTrue(facadeSource.contains("refreshCanonicalGroup(question.getNormalizedHash())"), "hiding duplicates must refresh canonical counts");
-        assertTrue(facadeSource.contains("questionSearchIndexer.indexQuestion"), "duplicate governance must sync search index");
+        assertTrue(facadeSource.contains("questionSearchIndexer.requestIndex"), "duplicate governance must queue search index refresh");
     }
 }

@@ -63,23 +63,25 @@ public class DiscoveryMapService {
     private final CommunityTopicService communityTopicService;
 
     public DiscoveryMapDTO getPublicMap(int featuredLimit, int topicLimit) {
-        List<DiscoveryMapDTO.DiscoveryItemDTO> featuredTopics = loadFeaturedTopics(featuredLimit);
+        ModuleLoadResult featuredResult = loadFeaturedTopics(featuredLimit);
+        List<DiscoveryMapDTO.DiscoveryItemDTO> featuredTopics = featuredResult.items();
         List<DiscoveryMapDTO.DiscoveryItemDTO> channels = channelEntrypoints();
         List<DiscoveryMapDTO.DiscoveryItemDTO> contentForms = contentFormEntrypoints();
-        List<DiscoveryMapDTO.DiscoveryItemDTO> activeTopics = loadActiveTopics(topicLimit);
+        ModuleLoadResult activeTopicsResult = loadActiveTopics(topicLimit);
+        List<DiscoveryMapDTO.DiscoveryItemDTO> activeTopics = activeTopicsResult.items();
         List<DiscoveryMapDTO.DiscoveryItemDTO> searchEntrypoints = searchEntrypoints();
 
         Map<String, DiscoveryMapDTO.DiscoveryModuleDTO> modules = new LinkedHashMap<>();
         modules.put("featuredTopics", module("featuredTopics", "精选专题", SOURCE_OPERATION_CURATION,
-                featuredTopics, "discovery_featured_topics_empty"));
+                featuredResult));
         modules.put("channels", module("channels", "频道入口", SOURCE_PUBLIC_CONTENT_QUERY,
-                channels, null));
+                ModuleLoadResult.ready(channels)));
         modules.put("contentForms", module("contentForms", "内容形式", SOURCE_PUBLIC_CONTENT_QUERY,
-                contentForms, null));
+                ModuleLoadResult.ready(contentForms)));
         modules.put("activeTopics", module("activeTopics", "活跃话题", SOURCE_COMMUNITY_TOPIC,
-                activeTopics, "community_topics_empty"));
+                activeTopicsResult));
         modules.put("searchEntrypoints", module("searchEntrypoints", "搜索延展", SOURCE_SEARCH_ANALYTICS,
-                searchEntrypoints, null));
+                ModuleLoadResult.ready(searchEntrypoints)));
 
         boolean degraded = modules.values().stream().anyMatch(item -> Boolean.TRUE.equals(item.getDegraded()));
         String fallbackReason = modules.values().stream()
@@ -101,33 +103,36 @@ public class DiscoveryMapService {
                 .build();
     }
 
-    private List<DiscoveryMapDTO.DiscoveryItemDTO> loadFeaturedTopics(int limit) {
+    private ModuleLoadResult loadFeaturedTopics(int limit) {
         try {
             OperationSlotDTO slot = operationCurationService.getPublicSlot(
                     OperationCurationService.DISCOVERY_FEATURED_TOPICS_SLOT_CODE,
                     safeLimit(limit, DEFAULT_FEATURED_LIMIT, DEFAULT_FEATURED_LIMIT)
             );
-            return slot.getItems() == null ? List.of() : slot.getItems().stream()
+            List<DiscoveryMapDTO.DiscoveryItemDTO> items = slot.getItems() == null ? List.of() : slot.getItems().stream()
                     .map(this::slotItem)
                     .filter(Objects::nonNull)
                     .filter(DiscoveryMapService::isDisplayableItem)
                     .limit(DEFAULT_FEATURED_LIMIT)
                     .toList();
+            return ModuleLoadResult.ready(items);
         } catch (BizException e) {
-            return List.of();
+            return ModuleLoadResult.unavailable("discovery_featured_topics_unavailable");
         }
     }
 
-    private List<DiscoveryMapDTO.DiscoveryItemDTO> loadActiveTopics(int limit) {
+    private ModuleLoadResult loadActiveTopics(int limit) {
         try {
-            return communityTopicService.listPublic(null, safeLimit(limit, DEFAULT_TOPIC_LIMIT, DEFAULT_TOPIC_LIMIT)).stream()
+            List<DiscoveryMapDTO.DiscoveryItemDTO> items = communityTopicService
+                    .listPublic(null, safeLimit(limit, DEFAULT_TOPIC_LIMIT, DEFAULT_TOPIC_LIMIT)).stream()
                     .filter(topic -> StringUtils.hasText(topic.getSlug()))
                     .map(this::communityTopic)
                     .filter(DiscoveryMapService::isDisplayableItem)
                     .limit(DEFAULT_TOPIC_LIMIT)
                     .toList();
+            return ModuleLoadResult.ready(items);
         } catch (BizException e) {
-            return List.of();
+            return ModuleLoadResult.unavailable("community_topics_unavailable");
         }
     }
 
@@ -291,20 +296,35 @@ public class DiscoveryMapService {
             String key,
             String title,
             String source,
-            List<DiscoveryMapDTO.DiscoveryItemDTO> items,
-            String emptyReason
+            ModuleLoadResult result
     ) {
+        List<DiscoveryMapDTO.DiscoveryItemDTO> items = result.items();
         int count = items == null ? 0 : items.size();
         boolean empty = count == 0;
+        boolean unavailable = result.unavailable();
         return DiscoveryMapDTO.DiscoveryModuleDTO.builder()
                 .key(key)
                 .title(title)
-                .status(empty ? STATUS_EMPTY : STATUS_READY)
-                .source(empty ? SOURCE_UNAVAILABLE : source)
-                .degraded(empty)
-                .fallbackReason(empty ? emptyReason : null)
+                .status(unavailable ? STATUS_UNAVAILABLE : (empty ? STATUS_EMPTY : STATUS_READY))
+                .source(unavailable ? SOURCE_UNAVAILABLE : source)
+                .degraded(unavailable)
+                .fallbackReason(unavailable ? result.fallbackReason() : null)
                 .itemCount(count)
                 .build();
+    }
+
+    private record ModuleLoadResult(
+            List<DiscoveryMapDTO.DiscoveryItemDTO> items,
+            boolean unavailable,
+            String fallbackReason
+    ) {
+        private static ModuleLoadResult ready(List<DiscoveryMapDTO.DiscoveryItemDTO> items) {
+            return new ModuleLoadResult(items == null ? List.of() : items, false, null);
+        }
+
+        private static ModuleLoadResult unavailable(String fallbackReason) {
+            return new ModuleLoadResult(List.of(), true, fallbackReason);
+        }
     }
 
     private static int safeLimit(int limit, int fallback, int max) {

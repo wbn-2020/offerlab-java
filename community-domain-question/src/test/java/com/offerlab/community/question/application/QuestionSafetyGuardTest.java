@@ -171,8 +171,8 @@ class QuestionSafetyGuardTest {
                 "company prep caches must be evicted after transaction commit");
         assertTrue(facadeSource.contains("questionMapper.updateCanonicalGroup(hash, canonicalId, appearCount)"), "canonical refresh must write grouped appear counts");
         assertTrue(facadeSource.contains("scheduleQuestionIndexes(")
-                        && facadeSource.contains("questionSearchIndexer::indexQuestion"),
-                "updated frequency values must be reflected in the search index after the transaction commits");
+                        && facadeSource.contains("questionSearchIndexer::requestIndex"),
+                "updated frequency values must be reflected in the async search index queue after the transaction commits");
         assertTrue(migrationSql.contains("idx_normalized_status"), "existing databases must receive the normalized hash index non-destructively");
         assertFalse(migrationSql.contains("drop table"), "canonical migration must not drop data");
     }

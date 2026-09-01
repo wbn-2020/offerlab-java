@@ -144,6 +144,26 @@ class PostSearchIndexerRebuildTest {
     }
 
     @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void rebuildAllIndexesTextualDomainFromExistingExtensionJson() {
+        PostPO first = post(1L);
+        PostExtensionPO extension = extension(1L);
+        extension.setExtJson("{\"domain\":\"1\",\"contentType\":\"TECH_ARTICLE\"}");
+        when(postMapper.selectPublicPostsForIndexAfterId(0L, 500)).thenReturn(List.of(first));
+        when(extensionMapper.selectBatchIds(any())).thenReturn(List.of(extension));
+        when(counterMapper.selectBatchIds(any())).thenReturn(List.of(counter(1L)));
+        when(tagMapper.selectTagsByPostIds(any())).thenReturn(List.of());
+        when(elasticsearch.indexDocument(eq("post_idx"), eq("1"), any())).thenReturn(true);
+        ArgumentCaptor<Map> document = ArgumentCaptor.forClass(Map.class);
+
+        Map<String, Object> result = indexer.rebuildAll();
+
+        assertTrue((Boolean) result.get("accepted"));
+        verify(elasticsearch).indexDocument(eq("post_idx"), eq("1"), document.capture());
+        assertEquals(1, document.getValue().get("domain"));
+    }
+
+    @Test
     void rebuildAllReportsFailedWhenAnyDocumentCannotBeIndexed() {
         PostPO first = post(1L);
         when(postMapper.selectPublicPostsForIndexAfterId(0L, 500)).thenReturn(List.of(first));

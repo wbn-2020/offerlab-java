@@ -30,9 +30,18 @@ public class AuthController {
 
     @PostMapping("/register")
     @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600, failOpen = false)
-    public Result<Map<String, Long>> register(@Valid @RequestBody RegisterReq req, HttpServletRequest http) {
-        Long uid = userService.register(req.getEmail(), req.getPassword(), req.getNickname());
-        return Result.ok(Map.of("uid", uid));
+    public Result<Map<String, Object>> register(@Valid @RequestBody RegisterReq req, HttpServletRequest http) {
+        Long uid = userService.register(
+                req.getEmail(),
+                req.getPassword(),
+                req.getNickname(),
+                req.isTermsAccepted(),
+                req.isPrivacyAccepted(),
+                req.getTermsVersion(),
+                req.getPrivacyVersion());
+        // 注册成功后直接签发会话，避免前端再发起一次登录并与新用户资料投影产生竞态。
+        String token = userService.login(req.getEmail(), req.getPassword(), http.getRemoteAddr());
+        return Result.ok(Map.of("uid", uid, "token", token));
     }
 
     @PostMapping("/login")
@@ -54,25 +63,35 @@ public class AuthController {
 
     @Data
     public static class RegisterReq {
-        @Email
-        @NotBlank
+        @Email(message = "请输入有效的邮箱地址")
+        @NotBlank(message = "请输入邮箱")
         private String email;
-        @NotBlank
-        @Size(min = 6, max = 64)
+        @NotBlank(message = "请输入密码")
+        @Size(min = 8, max = 64, message = "密码长度需为 8-64 位")
         private String password;
-        @NotBlank
-        @Size(min = 2, max = 32)
+        @NotBlank(message = "请输入昵称")
+        @Size(min = 2, max = 32, message = "昵称长度需为 2-32 个字符")
         private String nickname;
+        @AssertTrue(message = "请阅读并同意服务条款")
+        private boolean termsAccepted;
+        @AssertTrue(message = "请阅读并同意隐私政策")
+        private boolean privacyAccepted;
+        @NotBlank(message = "服务条款版本不能为空")
+        @Size(max = 32, message = "服务条款版本格式不正确")
+        private String termsVersion;
+        @NotBlank(message = "隐私政策版本不能为空")
+        @Size(max = 32, message = "隐私政策版本格式不正确")
+        private String privacyVersion;
     }
 
     @Data
     public static class LoginReq {
-        @Size(max = 128)
+        @Size(max = 128, message = "账号长度不能超过 128 个字符")
         private String account;
-        @Size(max = 128)
+        @Size(max = 128, message = "邮箱长度不能超过 128 个字符")
         private String email;
-        @NotBlank
-        @Size(max = 64)
+        @NotBlank(message = "请输入密码")
+        @Size(max = 64, message = "密码长度不能超过 64 位")
         private String password;
 
         public String accountValue() {
@@ -82,7 +101,7 @@ public class AuthController {
             return email == null ? "" : email.trim();
         }
 
-        @AssertTrue(message = "account must not be blank")
+        @AssertTrue(message = "请输入账号或邮箱")
         public boolean isAccountPresent() {
             return (account != null && !account.isBlank()) || (email != null && !email.isBlank());
         }

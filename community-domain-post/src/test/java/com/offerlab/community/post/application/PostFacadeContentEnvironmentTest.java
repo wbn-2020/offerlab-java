@@ -1,6 +1,7 @@
 package com.offerlab.community.post.application;
 
 import com.offerlab.community.infra.redis.cache.MultiLevelCache;
+import com.offerlab.community.post.api.dto.PostDetailCacheDTO;
 import com.offerlab.community.post.api.dto.PostDTO;
 import com.offerlab.community.post.domain.model.Post;
 import com.offerlab.community.post.infrastructure.persistence.mapper.PostCounterMapper;
@@ -51,7 +52,7 @@ class PostFacadeContentEnvironmentTest {
     @Mock
     private PostVersionHistoryService versionHistoryService;
     @Mock
-    private MultiLevelCache<PostDTO> multiLevelCache;
+    private MultiLevelCache<PostDetailCacheDTO> multiLevelCache;
     @Mock
     private PostApplicationService postService;
     @Mock
@@ -66,17 +67,19 @@ class PostFacadeContentEnvironmentTest {
 
     @Test
     void cachedDetailWithoutContentEnvironmentFailsClosed() {
-        PostDTO staleCachedDetail = PostDTO.builder()
+        PostDetailCacheDTO staleCachedDetail = PostDetailCacheDTO.builder()
                 .id(741177956554252288L)
                 .postStatus(Post.STATUS_PUBLISHED)
                 .visibility(Post.VIS_PUBLIC)
                 .build();
-        when(multiLevelCache.get(anyString(), any(Function.class), eq(PostDTO.class)))
+        when(multiLevelCache.get(anyString(), any(Function.class), eq(PostDetailCacheDTO.class)))
                 .thenReturn(staleCachedDetail);
 
         assertNull(facade.getPost(741177956554252288L, null));
 
-        verify(multiLevelCache).get(anyString(), any(Function.class), eq(PostDTO.class));
+        verify(multiLevelCache, org.mockito.Mockito.times(2))
+                .get(anyString(), any(Function.class), eq(PostDetailCacheDTO.class));
+        verify(multiLevelCache).evict(anyString());
         verifyNoInteractions(postRepo, postMapper, extensionMapper, counterMapper, tagMapper,
                 postCounterRedis, userFacade);
     }
