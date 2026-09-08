@@ -33,6 +33,10 @@ class Phase17UserSearchPrivacyGuardTest {
                 "Author discovery must use the shared public-content boundary for post counts");
         assertTrue(service.contains("user.setPostCount(publicPostCounts.getOrDefault(user.getUid(), 0L))"),
                 "Author search DTOs must expose the real public post count");
+        assertTrue(service.contains("boolean discoveryMode = !StringUtils.hasText(keyword)"),
+                "Blank-keyword author discovery must be handled as a dedicated recommendation mode");
+        assertTrue(service.contains("publicPostCounts.getOrDefault(user.getUid(), 0L) > 0"),
+                "Blank-keyword author discovery must only recommend authors with real public content");
         String publicContentMapper = read(
                 "src/main/java/com/offerlab/community/user/infrastructure/persistence/mapper/UserPublicContentMapper.java");
         assertTrue(publicContentMapper.contains("p.content_environment = 'COMMUNITY'")

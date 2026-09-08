@@ -3,6 +3,8 @@ package com.offerlab.community.user.controller;
 import com.offerlab.community.common.result.Result;
 import com.offerlab.community.infra.web.interceptor.PublicApi;
 import com.offerlab.community.infra.web.ratelimit.RateLimit;
+import com.offerlab.community.user.application.PasswordResetDeliveryPort;
+import com.offerlab.community.user.application.PasswordResetService;
 import com.offerlab.community.user.application.UserApplicationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -27,6 +29,7 @@ import java.util.Map;
 public class AuthController {
 
     private final UserApplicationService userService;
+    private final PasswordResetService passwordResetService;
 
     @PostMapping("/register")
     @RateLimit(key = "'auth:register:' + #http.remoteAddr", rate = 5, per = 3600, failOpen = false)
@@ -49,6 +52,26 @@ public class AuthController {
     public Result<Map<String, Object>> login(@Valid @RequestBody LoginReq req, HttpServletRequest http) {
         String token = userService.login(req.accountValue(), req.getPassword(), http.getRemoteAddr());
         return Result.ok(Map.of("token", token));
+    }
+
+    /** 找回密码第一步：请求邮箱验证码。防枚举：邮箱不存在时也返回成功语义。 */
+    @PostMapping("/password/reset-request")
+    @RateLimit(key = "'auth:pwd-reset:' + #http.remoteAddr", rate = 5, per = 3600, failOpen = false)
+    public Result<Map<String, Object>> requestPasswordReset(@Valid @RequestBody PasswordResetRequestReq req,
+                                                            HttpServletRequest http) {
+        String channel = passwordResetService.requestReset(req.getEmail());
+        return Result.ok(Map.of(
+                "delivered", !PasswordResetDeliveryPort.CHANNEL_SILENT.equals(channel),
+                "channel", channel));
+    }
+
+    /** 找回密码第二步：验证码 + 新密码完成重置；成功后旧会话全部失效。 */
+    @PostMapping("/password/reset-confirm")
+    @RateLimit(key = "'auth:pwd-confirm:' + #http.remoteAddr", rate = 10, per = 3600, failOpen = false)
+    public Result<Map<String, Object>> confirmPasswordReset(@Valid @RequestBody PasswordResetConfirmReq req,
+                                                            HttpServletRequest http) {
+        passwordResetService.confirmReset(req.getEmail(), req.getCode(), req.getNewPassword());
+        return Result.ok(Map.of("reset", true));
     }
 
     @PostMapping("/logout")
@@ -105,5 +128,27 @@ public class AuthController {
         public boolean isAccountPresent() {
             return (account != null && !account.isBlank()) || (email != null && !email.isBlank());
         }
+    }
+
+    @Data
+    public static class PasswordResetRequestReq {
+        @Email(message = "请输入有效的邮箱地址")
+        @NotBlank(message = "请输入注册时使用的邮箱")
+        @Size(max = 128, message = "邮箱长度不能超过 128 个字符")
+        private String email;
+    }
+
+    @Data
+    public static class PasswordResetConfirmReq {
+        @Email(message = "请输入有效的邮箱地址")
+        @NotBlank(message = "请输入注册时使用的邮箱")
+        @Size(max = 128, message = "邮箱长度不能超过 128 个字符")
+        private String email;
+        @NotBlank(message = "请输入邮箱验证码")
+        @Size(min = 6, max = 6, message = "验证码为 6 位数字")
+        private String code;
+        @NotBlank(message = "请输入新密码")
+        @Size(min = 8, max = 64, message = "密码长度需为 8-64 位")
+        private String newPassword;
     }
 }

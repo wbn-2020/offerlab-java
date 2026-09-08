@@ -57,10 +57,19 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class UserApplicationService {
+    // 合成/探针账号标记。ASCII 标记按整词匹配(前后必须是字母数字以外字符),
+    // 避免昵称里的 latest/contest/administrator 等普通英文单词被子串误伤;
+    // 中文标记无词边界,仍按子串匹配。
     private static final Set<String> SYNTHETIC_MARKERS = Set.of(
             "E2E", "SMOKE", "CODEX", "TESTDATA", "TEST", "DEMO", "ACCEPTANCE",
             "ADMIN", "验收", "测试", "演示", "管理员"
     );
+    private static final java.util.regex.Pattern SYNTHETIC_ASCII_MARKER = java.util.regex.Pattern.compile(
+            SYNTHETIC_MARKERS.stream()
+                    .filter(marker -> marker.matches("[A-Z0-9]+"))
+                    .map(java.util.regex.Pattern::quote)
+                    .collect(java.util.stream.Collectors.joining("|", "(?<![A-Z0-9])(?:", ")(?![A-Z0-9])")));
+
     private static final int MAX_LOGIN_FAILURES = 5;
     private static final Duration LOGIN_FAILURE_WINDOW = Duration.ofMinutes(15);
     private static final Duration LOGIN_LOCK_TTL = Duration.ofMinutes(15);
@@ -195,6 +204,28 @@ public class UserApplicationService {
         }
         userRepo.updatePassword(uid, passwordEncoder.encode(newPassword));
         jwtService.invalidateAll(uid);
+    }
+
+    /** 找回密码流程使用的邮箱归一化；与注册/登录保持同一口径。 */
+    String normalizeEmailForAuth(String email) {
+        return normalizeEmail(email);
+    }
+
+    /**
+     * 找回密码的第二步：跳过旧密码校验直接重置（验证码已作为身份凭据），
+     * 并吊销该用户全部既有会话，让丢失的会话立即失效。
+     */
+    void resetPasswordByUid(Long uid, String newPassword) {
+        if (!isValidPassword(newPassword)) {
+            throw new BizException(
+                    ErrorCode.PARAM_ERROR.getCode(),
+                    "密码至少 8 位，且需同时包含字母和数字",
+                    Map.of("fieldErrors", Map.of("newPassword", "密码至少 8 位，且需同时包含字母和数字")));
+        }
+        getUser(uid);
+        userRepo.updatePassword(uid, passwordEncoder.encode(newPassword));
+        jwtService.invalidateAll(uid);
+        log.info("password reset completed via email code: uid={}", LogMask.id(uid));
     }
 
     public void logoutAll(Long uid) {
@@ -410,17 +441,12 @@ public class UserApplicationService {
 
     public List<UserBriefDTO> searchUsers(String keyword, Long viewerUid, int size, UserFacade userFacade) {
         int limit = Math.max(1, Math.min(size, 20));
-        // 先放宽查询数量，再按隐私过滤并截断，避免少量受限用户占满结果页。
-        LambdaQueryWrapper<UserProfilePO> query = new LambdaQueryWrapper<UserProfilePO>()
-                .eq(UserProfilePO::getIsDeleted, 0)
-                .orderByDesc(UserProfilePO::getUpdateTime)
-                .last(SqlLimits.limit(limit * 3, 1, 60));
-        if (StringUtils.hasText(keyword)) {
-            query.like(UserProfilePO::getNickname, keyword.trim());
-        }
-        List<Long> candidateIds = profileMapper.selectList(query).stream()
-                .map(UserProfilePO::getId)
-                .toList();
+        boolean discoveryMode = !StringUtils.hasText(keyword);
+        // 空关键词是"推荐作者"发现入口:直接按公开内容数取 Top 作者候选,
+        // 再走与搜索一致的隐私/管理员/合成账号过滤,避免从最近活跃账号里碰运气。
+        List<Long> candidateIds = discoveryMode
+                ? topPublicAuthorCandidates(limit)
+                : keywordCandidates(keyword, limit);
         if (candidateIds.isEmpty()) {
             return List.of();
         }
@@ -440,8 +466,48 @@ public class UserApplicationService {
                 .filter(java.util.Objects::nonNull)
                 .filter(user -> !isSyntheticUser(user))
                 .peek(user -> user.setPostCount(publicPostCounts.getOrDefault(user.getUid(), 0L)))
+                // 发现模式只推荐确有公开内容的作者,避免无内容账号(演示/探针/刚注册)占据推荐位。
+                .filter(user -> !discoveryMode || publicPostCounts.getOrDefault(user.getUid(), 0L) > 0)
                 .limit(limit)
                 .toList();
+    }
+
+    /** 关键词搜索:按昵称模糊匹配最近更新的账号,LIKE 通配符转义防全表放大扫描。 */
+    private List<Long> keywordCandidates(String keyword, int limit) {
+        // 先放宽查询数量，再按隐私过滤并截断，避免少量受限用户占满结果页。
+        LambdaQueryWrapper<UserProfilePO> query = new LambdaQueryWrapper<UserProfilePO>()
+                .eq(UserProfilePO::getIsDeleted, 0)
+                .orderByDesc(UserProfilePO::getUpdateTime)
+                .last(SqlLimits.limit(limit * 3, 1, 60));
+        query.like(UserProfilePO::getNickname, escapeLike(keyword.trim()));
+        return profileMapper.selectList(query).stream()
+                .map(UserProfilePO::getId)
+                .toList();
+    }
+
+    /** 推荐作者:直接从公开内容聚合取 Top 作者 ID(已按 postCount DESC, authorId DESC 排序)。 */
+    private List<Long> topPublicAuthorCandidates(int limit) {
+        if (publicContentMapper == null) {
+            return List.of();
+        }
+        // 候选放宽到 limit*4,给隐私/管理员/合成账号过滤留余量;上限 80 与关键词模式同量级。
+        int candidateLimit = SqlLimits.clamp(limit * 4, 1, 80);
+        List<Map<String, Object>> rows = publicContentMapper.topPublicAuthors(candidateLimit);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        return rows.stream()
+                .map(row -> asLong(firstPresent(row, "authorId", "author_id", "AUTHORID", "AUTHOR_ID")))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    /** LIKE 通配符转义:防止用户输入 %/_ 造成全表模糊匹配放大扫描量。 */
+    private static String escapeLike(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public void applyPublicPostCount(UserBriefDTO user) {
@@ -525,7 +591,11 @@ public class UserApplicationService {
             return false;
         }
         String upper = value.toUpperCase(Locale.ROOT);
-        return SYNTHETIC_MARKERS.stream().anyMatch(upper::contains);
+        if (SYNTHETIC_ASCII_MARKER.matcher(upper).find()) {
+            return true;
+        }
+        // 中文标记没有词边界概念,保持子串匹配。
+        return SYNTHETIC_MARKERS.stream().anyMatch(marker -> !marker.matches("[A-Z0-9]+") && upper.contains(marker));
     }
 
     private static UserPrivacySettingPO defaultPrivacySetting(Long uid) {

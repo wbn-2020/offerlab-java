@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,12 +20,12 @@ class UserPublicPostCountMappingTest {
         Map<String, Object> nullCount = new HashMap<>();
         nullCount.put("author_id", 3L);
         nullCount.put("post_count", null);
-        UserPublicContentMapper mapper = authorIds -> List.of(
+        UserPublicContentMapper mapper = stub(List.of(
                 Map.of("authorId", 1L, "postCount", 2L),
                 Map.of("AUTHOR_ID", "2", "POST_COUNT", "3"),
                 Map.of("AUTHORID", 1L, "POSTCOUNT", 4L),
                 Map.of("author_id", "invalid", "post_count", 9L),
-                nullCount);
+                nullCount));
 
         Map<Long, Long> counts = invokePublicPostCounts(mapper, List.of(1L, 2L, 3L));
 
@@ -33,11 +34,37 @@ class UserPublicPostCountMappingTest {
 
     @Test
     void nullAndEmptyMapperResultsBecomeEmptyCounts() throws Exception {
-        assertTrue(invokePublicPostCounts(authorIds -> null, List.of(1L)).isEmpty());
-        assertTrue(invokePublicPostCounts(authorIds -> List.of(), List.of(1L)).isEmpty());
-        assertTrue(invokePublicPostCounts(authorIds -> {
-            throw new AssertionError("empty author list must not query the mapper");
-        }, List.of()).isEmpty());
+        assertTrue(invokePublicPostCounts(stub(null), List.of(1L)).isEmpty());
+        assertTrue(invokePublicPostCounts(stub(List.of()), List.of(1L)).isEmpty());
+        assertTrue(invokePublicPostCounts(stubThatMustNotBeCalled(), List.of()).isEmpty());
+    }
+
+    private static UserPublicContentMapper stub(List<Map<String, Object>> countRows) {
+        return new UserPublicContentMapper() {
+            @Override
+            public List<Map<String, Object>> countPublicPostsByAuthors(Collection<Long> authorIds) {
+                return countRows;
+            }
+
+            @Override
+            public List<Map<String, Object>> topPublicAuthors(int limit) {
+                throw new AssertionError("publicPostCounts must not call topPublicAuthors");
+            }
+        };
+    }
+
+    private static UserPublicContentMapper stubThatMustNotBeCalled() {
+        return new UserPublicContentMapper() {
+            @Override
+            public List<Map<String, Object>> countPublicPostsByAuthors(Collection<Long> authorIds) {
+                throw new AssertionError("empty author list must not query the mapper");
+            }
+
+            @Override
+            public List<Map<String, Object>> topPublicAuthors(int limit) {
+                throw new AssertionError("empty author list must not query the mapper");
+            }
+        };
     }
 
     @SuppressWarnings("unchecked")
