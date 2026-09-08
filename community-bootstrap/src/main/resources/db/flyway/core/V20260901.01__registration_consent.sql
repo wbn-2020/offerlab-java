@@ -1,6 +1,6 @@
 -- Registration consent audit fields.
--- Existing accounts are intentionally left null; only new registrations are
--- required to persist the accepted versions.
+-- Non-destructive: existing accounts remain unchanged and new registrations
+-- must record the accepted policy versions.
 
 ALTER TABLE t_user_account
     ADD COLUMN terms_accepted_at DATETIME(3) NULL COMMENT '服务条款与隐私政策确认时间' AFTER last_login_ip,

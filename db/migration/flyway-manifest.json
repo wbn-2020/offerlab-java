@@ -8,7 +8,7 @@
     "core": {
       "location": "classpath:db/flyway/core",
       "autoMigrate": true,
-      "expectedMigrations": 89
+      "expectedMigrations": 90
     },
     "demo": {
       "location": "classpath:db/flyway/demo",
@@ -881,6 +881,15 @@
       "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260814.01__post_content_environment.sql",
       "sha256": "f9c711f83a12f61c3cef0944d37882b4c6f49eb7cab9cf1fb896d85304518e16",
       "flywayChecksum": 1103489237
+    },
+    {
+      "version": "20260901.01",
+      "description": "registration_consent",
+      "stream": "core",
+      "source": "db/migration/20260901_registration_consent.sql",
+      "resource": "community-bootstrap/src/main/resources/db/flyway/core/V20260901.01__registration_consent.sql",
+      "sha256": "87c784f581e7bcc2e998ebdabdebc0f23645d5278f7b340bd2a9097b8eb502b1",
+      "flywayChecksum": -1410797294
     }
   ]
 }
