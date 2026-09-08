@@ -71,6 +71,9 @@ mybatis-plus:
 server:
   port: 8080
   servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
     context-path: /
 
 springdoc:
@@ -82,6 +85,8 @@ springdoc:
     enabled: false
 
 offerlab:
+  media:
+    upload-dir: ${OFFERLAB_MEDIA_UPLOAD_DIR:./data/media}
   id:
     snowflake:
       worker-id: ${OFFERLAB_SNOWFLAKE_WORKER_ID}

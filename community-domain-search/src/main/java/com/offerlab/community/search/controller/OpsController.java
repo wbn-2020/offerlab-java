@@ -162,16 +162,24 @@ public class OpsController {
         String bootstrapServers = environment.getProperty("spring.kafka.bootstrap-servers", "localhost:9092");
         String topic = environment.getProperty("offerlab.kafka.topic.post-published", "post.published");
         String consumerGroup = environment.getProperty("offerlab.kafka.consumer.feed-group", "offerlab-feed-fanout");
-        Path logDir = Path.of("C:/codeware/kafka-data/offerlab-kraft-combined-logs");
-        Path metadataDir = Path.of("C:/codeware/kafka-data/offerlab-metadata");
-        Path projectConfig = Path.of("C:/project/offerlab-java/scripts/kafka/offerlab-server-local.properties");
+        // 本地只读探针路径因部署机而异,允许通过配置覆盖;默认值仅为原 Windows 开发机布局。
+        Path logDir = Path.of(configuredOrDefault(
+                "offerlab.ops.kafka-local.log-dir", "C:/codeware/kafka-data/offerlab-kraft-combined-logs"));
+        Path metadataDir = Path.of(configuredOrDefault(
+                "offerlab.ops.kafka-local.metadata-dir", "C:/codeware/kafka-data/offerlab-metadata"));
+        Path projectConfig = Path.of(configuredOrDefault(
+                "offerlab.ops.kafka-local.config-path", "C:/project/offerlab-java/scripts/kafka/offerlab-server-local.properties"));
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("mode", "read-only");
         data.put("bootstrapServers", bootstrapServers);
         data.put("topic", topic);
         data.put("consumerGroup", consumerGroup);
-        data.put("configPath", projectConfig.toString());
+        // 响应只暴露文件名与配置来源,不回显服务器绝对路径,避免向后台会话泄露主机目录布局。
+        data.put("configPath", sanitizedPathName(projectConfig));
+        data.put("configPathSource", configuredOrDefault("offerlab.ops.kafka-local.config-path", null) == null
+                ? "default"
+                : "configured");
         data.put("configExists", Files.isRegularFile(projectConfig));
         data.put("storage", Map.of(
                 "logDir", pathStatus(logDir),
@@ -198,15 +206,25 @@ public class OpsController {
         return data;
     }
 
+    private String configuredOrDefault(String key, String fallback) {
+        String configured = environment.getProperty(key);
+        return StringUtils.hasText(configured) ? configured : fallback;
+    }
+
+    /**
+     * 返回当前登录用户自己的后台能力与机制状态。
+     * 机制信息(adminMode/localOpen)仅对拥有后台能力的管理者展示;
+     * 普通用户只拿到自己的角色布尔值,避免暴露后台鉴权模式、本地开放开关等提权侦察信息。
+     */
     @GetMapping("/me/permissions")
     public Result<Map<String, Object>> myPermissions() {
         Long uid = UserContext.require();
         boolean localOpen = adminPermissionService.isLocalOpenMode();
         boolean admin = adminPermissionService.isAdmin(uid) || localOpen;
         boolean opsRole = localOpen || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS);
+        boolean privileged = admin || opsRole;
         Map<String, Object> permissions = new LinkedHashMap<>();
         permissions.put("uid", uid);
-        permissions.put("adminMode", adminPermissionService.mode());
         permissions.put("admin", admin);
         permissions.put("ops", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_OPS));
         permissions.put("opsRole", opsRole);
@@ -223,7 +241,11 @@ public class OpsController {
         permissions.put("domainModerator", !moderatedDomains.isEmpty());
         permissions.put("moderatedDomains", moderatedDomains);
         permissions.put("questionOperator", admin || adminPermissionService.hasRole(uid, AdminPermissionService.ROLE_QUESTION_OPERATOR));
-        permissions.put("localOpen", localOpen);
+        if (privileged) {
+            // 机制状态只提供给后台管理者;运维中心状态接口本身也有独立权限门禁。
+            permissions.put("adminMode", adminPermissionService.mode());
+            permissions.put("localOpen", localOpen);
+        }
         return Result.ok(permissions);
     }
 
@@ -269,7 +291,7 @@ public class OpsController {
 
     @PostMapping("/outbox/{id}/retry")
     public Result<Map<String, Object>> retryOutbox(@PathVariable Long id,
-                                                   @Valid @RequestBody(required = false) ActionRemarkRequest request) {
+                                                   @Valid @RequestBody ActionRemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
         OutboxMessage message = outboxMessageMapper.findById(id);
@@ -281,10 +303,9 @@ public class OpsController {
         }
         ensureOutboxReplayReady();
         List<Long> ids = List.of(id);
-        String remark = RiskConfirmation.requireCritical(actionRemark(request, null),
-                request == null ? null : request.confirmationPhrase());
-        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
-        idempotencyService.requirePreview(uid, "OUTBOX_RETRY_BATCH", ids, request == null ? null : request.previewNonce());
+        String remark = RiskConfirmation.requireCritical(actionRemark(request, null), request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request.idempotencyKey());
+        idempotencyService.requirePreview(uid, "OUTBOX_RETRY_BATCH", ids, request.previewNonce());
         adminAuditService.requireWritable("OUTBOX_RETRY", "OUTBOX", id);
         idempotencyService.requireFresh(uid, "OUTBOX_RETRY_BATCH", ids, idempotencyKey);
         int updated = outboxMessageMapper.markFailedForRetry(id);
@@ -498,7 +519,7 @@ public class OpsController {
 
     @PostMapping("/search-index-retry-tasks/{id}/replay")
     public Result<Map<String, Object>> replaySearchIndexRetryTask(@PathVariable Long id,
-                                                                  @Valid @RequestBody(required = false) ActionRemarkRequest request) {
+                                                                  @Valid @RequestBody ActionRemarkRequest request) {
         Long uid = UserContext.require();
         adminPermissionService.requireScope(uid, AdminPermissionService.ROLE_OPS);
         SearchIndexRetryTaskPO task = searchIndexRetryService.findById(id);
@@ -509,11 +530,9 @@ public class OpsController {
             throw new BizException(ErrorCode.INVALID_STATUS);
         }
         List<Long> ids = List.of(id);
-        String remark = RiskConfirmation.requireCritical(actionRemark(request, null),
-                request == null ? null : request.confirmationPhrase());
-        String idempotencyKey = idempotencyService.requireKey(request == null ? null : request.idempotencyKey());
-        idempotencyService.requirePreview(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", ids,
-                request == null ? null : request.previewNonce());
+        String remark = RiskConfirmation.requireCritical(actionRemark(request, null), request.confirmationPhrase());
+        String idempotencyKey = idempotencyService.requireKey(request.idempotencyKey());
+        idempotencyService.requirePreview(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", ids, request.previewNonce());
         adminAuditService.requireWritable("SEARCH_INDEX_RETRY_REPLAY", "SEARCH_INDEX_RETRY_TASK", id);
         idempotencyService.requireFresh(uid, "SEARCH_INDEX_RETRY_REPLAY_BATCH", ids, idempotencyKey);
         boolean replayed = searchIndexRetryService.replayFailed(id);
@@ -1001,14 +1020,21 @@ public class OpsController {
         return "OK";
     }
 
+    /** 探针响应只回显末段目录名,保留 exists/directory/readable/writable 判定,不泄露服务器绝对路径。 */
     private static Map<String, Object> pathStatus(Path path) {
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("path", path.toString());
+        status.put("path", sanitizedPathName(path));
         status.put("exists", Files.exists(path));
         status.put("directory", Files.isDirectory(path));
         status.put("readable", Files.isReadable(path));
         status.put("writable", Files.isWritable(path));
         return status;
+    }
+
+    /** 取路径末段作为对外标识;无法解析时返回固定占位,绝不回显盘符/父目录。 */
+    private static String sanitizedPathName(Path path) {
+        Path fileName = path == null ? null : path.getFileName();
+        return fileName == null ? "unspecified" : fileName.toString();
     }
 
     private static HostPort firstEndpoint(String bootstrapServers) {

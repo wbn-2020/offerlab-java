@@ -202,6 +202,8 @@ class OpsControllerStatusApiTest {
                 .andExpect(jsonPath("$.data.bootstrapServers").value("127.0.0.1:1"))
                 .andExpect(jsonPath("$.data.topic").value("post.published"))
                 .andExpect(jsonPath("$.data.consumerGroup").value("offerlab-feed-fanout"))
+                .andExpect(jsonPath("$.data.configPath").value("offerlab-server-local.properties"))
+                .andExpect(jsonPath("$.data.configPathSource").value("default"))
                 .andExpect(jsonPath("$.data.tcpReachable").value(false))
                 .andExpect(jsonPath("$.data.adminProbe.attempted").value(false))
                 .andExpect(jsonPath("$.data.readyForOutboxReplay").value(false))
@@ -215,7 +217,6 @@ class OpsControllerStatusApiTest {
     @Test
     void permissionsExposeDomainModeratorAndModeratedDomains() throws Exception {
         when(jwtService.parseUid("token")).thenReturn(88L);
-        when(adminPermissionService.mode()).thenReturn("RBAC");
         when(domainModeratorService.listModeratedDomains(88L)).thenReturn(List.of(2, 5));
 
         mvc.perform(get("/api/v1/ops/me/permissions")
@@ -223,7 +224,6 @@ class OpsControllerStatusApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.uid").value(88))
-                .andExpect(jsonPath("$.data.adminMode").value("RBAC"))
                 .andExpect(jsonPath("$.data.admin").value(false))
                 .andExpect(jsonPath("$.data.ops").value(false))
                 .andExpect(jsonPath("$.data.contentModerator").value(false))
@@ -231,7 +231,8 @@ class OpsControllerStatusApiTest {
                 .andExpect(jsonPath("$.data.moderatedDomains[0]").value(2))
                 .andExpect(jsonPath("$.data.moderatedDomains[1]").value(5))
                 .andExpect(jsonPath("$.data.questionOperator").value(false))
-                .andExpect(jsonPath("$.data.localOpen").value(false));
+                .andExpect(jsonPath("$.data.adminMode").doesNotExist())
+                .andExpect(jsonPath("$.data.localOpen").doesNotExist());
 
         verify(domainModeratorService).listModeratedDomains(88L);
         verify(adminPermissionService, org.mockito.Mockito.times(2)).hasRole(88L, AdminPermissionService.ROLE_OPS);

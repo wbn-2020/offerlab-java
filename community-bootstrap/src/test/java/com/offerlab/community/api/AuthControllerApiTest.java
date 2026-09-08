@@ -3,6 +3,7 @@ package com.offerlab.community.api;
 import com.offerlab.community.common.exception.BizException;
 import com.offerlab.community.common.result.ErrorCode;
 import com.offerlab.community.infra.security.JwtService;
+import com.offerlab.community.user.application.PasswordResetService;
 import com.offerlab.community.user.application.UserApplicationService;
 import com.offerlab.community.user.controller.AuthController;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,13 +28,15 @@ class AuthControllerApiTest {
     @Mock
     private UserApplicationService userService;
     @Mock
+    private PasswordResetService passwordResetService;
+    @Mock
     private JwtService jwtService;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = ApiTestSupport.mvc(new AuthController(userService), jwtService);
+        mvc = ApiTestSupport.mvc(new AuthController(userService, passwordResetService), jwtService);
     }
 
     @Test
