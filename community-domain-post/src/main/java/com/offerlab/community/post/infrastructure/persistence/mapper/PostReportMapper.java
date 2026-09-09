@@ -15,17 +15,17 @@ public interface PostReportMapper extends BaseMapper<PostReportPO> {
 
     @Select("""
             <script>
-            SELECT id,
-                   post_id AS postId,
-                   reporter_uid AS reporterUid,
-                   reason,
-                   detail,
-                   report_status AS reportStatus,
-                   reviewer_uid AS reviewerUid,
-                   review_note AS reviewNote,
-                   review_time AS reviewTime,
-                   create_time AS createTime,
-                   update_time AS updateTime
+            SELECT r.id,
+                   r.post_id AS postId,
+                   r.reporter_uid AS reporterUid,
+                   r.reason,
+                   r.detail,
+                   r.report_status AS reportStatus,
+                   r.reviewer_uid AS reviewerUid,
+                   r.review_note AS reviewNote,
+                   r.review_time AS reviewTime,
+                   r.create_time AS createTime,
+                   r.update_time AS updateTime
             FROM t_post_report r
             LEFT JOIN t_post_extension e ON e.post_id = r.post_id
             WHERE 1 = 1

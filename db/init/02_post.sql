@@ -43,7 +43,7 @@ CREATE TABLE t_post_extension (
     KEY idx_position (position),
     KEY idx_company_result (company, interview_result),
     KEY idx_post_extension_domain_post (domain, post_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='甯栧瓙鎵╁睍';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子扩展';
 
 DROP TABLE IF EXISTS t_tag;
 CREATE TABLE t_tag (
